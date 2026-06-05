@@ -1,0 +1,16 @@
+name = "fbchatauto-webhook"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ──────────────────────────────────────────────
+# Environment Variables (set via `wrangler secret put`)
+# ──────────────────────────────────────────────
+# FB_VERIFY_TOKEN        - Your custom webhook verification token
+# FB_APP_SECRET          - Facebook App Secret (for signature verification)
+# SUPABASE_URL           - Supabase project URL
+# SUPABASE_SERVICE_KEY   - Supabase service_role key (bypasses RLS)
+# OPENAI_API_KEY         - OpenAI API key (Phase 2)
+
+[vars]
+ENVIRONMENT = "development"

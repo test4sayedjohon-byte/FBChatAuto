@@ -1,0 +1,25 @@
+{
+  "name": "fbchatauto-webhook",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Facebook Messenger AI Chatbot Webhook (Cloudflare Worker)",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "tail": "wrangler tail"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.107.0",
+    "hono": "^4.12.23"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260604.1",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.98.0"
+  }
+}

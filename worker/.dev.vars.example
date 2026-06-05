@@ -1,0 +1,8 @@
+# Local development secrets for wrangler dev
+# Copy this to .dev.vars and fill in your values
+# NEVER commit .dev.vars to git!
+
+FB_VERIFY_TOKEN=your_custom_verification_token_here
+FB_APP_SECRET=your_facebook_app_secret_here
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your_supabase_service_role_key_here

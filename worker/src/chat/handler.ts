@@ -19,7 +19,7 @@
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getActiveChatProvider, getActiveEmbeddingProvider } from '../ai/provider';
+import { getAllChatProviders, getActiveEmbeddingProvider } from '../ai/provider';
 import { callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage } from '../ai/types';
 import { searchDocuments } from '../rag/pipeline';
@@ -51,13 +51,11 @@ export async function handleChatMessage(
 ): Promise<ChatHandlerResult> {
   const userId = pageConnection.user_id;
 
-  // 1. Load the active chat provider
-  // Prioritize the page-specific AI model if set, otherwise fallback to tenant active provider
-  const chatProvider = await getActiveChatProvider(supabase, userId);
-  // (In the future, we could override chatProvider.modelChat with pageConnection.ai_model here)
+  // 1. Load all available chat providers for fallback
+  const chatProviders = await getAllChatProviders(supabase, userId);
 
-  if (!chatProvider) {
-    console.warn(`[Chat] No AI provider configured for user ${userId}`);
+  if (!chatProviders || chatProviders.length === 0) {
+    console.warn(`[Chat] No AI providers configured for user ${userId}`);
     return {
       reply: "I'm sorry, but I'm not fully set up yet. Please contact the business directly for assistance.",
       sessionId,
@@ -67,12 +65,10 @@ export async function handleChatMessage(
     };
   }
 
-  console.log(`[Chat] Using provider: ${chatProvider.providerName} (${chatProvider.modelChat})`);
-
   // 2. Retrieve conversation history (context window)
   const { data: historyRows } = await supabase.rpc('get_session_context', {
     p_session_id: sessionId,
-    p_limit: chatProvider.contextWindow,
+    p_limit: chatProviders[0].contextWindow,
   });
 
   // Convert DB rows to ChatMessage format (reverse to chronological order)
@@ -134,54 +130,61 @@ export async function handleChatMessage(
     ...history,
   ];
 
-  // 6. Call the AI model
-  try {
-    const response = await callChatCompletion(chatProvider, messages);
+  // 6. Iterate through providers until one succeeds
+  for (const chatProvider of chatProviders) {
+    try {
+      console.log(`[Chat] Trying provider: ${chatProvider.providerName} (${chatProvider.modelChat})`);
 
-    const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't generate a response. Please try again.";
-    const tokensUsed = response.usage?.total_tokens;
+      const response = await callChatCompletion(chatProvider, messages);
 
-    // 7. Store the assistant's reply in the database
-    await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      user_id: userId,
-      role: 'assistant',
-      content: reply,
-      token_count: response.usage?.completion_tokens,
-      metadata: {
+      const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't generate a response. Please try again.";
+      const tokensUsed = response.usage?.total_tokens;
+
+      // 7. Store the assistant's reply in the database
+      await supabase.from('chat_messages').insert({
+        session_id: sessionId,
+        user_id: userId,
+        role: 'assistant',
+        content: reply,
+        token_count: response.usage?.completion_tokens,
+        metadata: {
+          provider: chatProvider.providerName,
+          model: response.model,
+          tokens: response.usage,
+          rag_used: ragUsed,
+        },
+      });
+
+      console.log(`[Chat] ✅ AI response generated (${tokensUsed ?? '?'} tokens, RAG: ${ragUsed}) via ${chatProvider.providerName}`);
+
+      return {
+        reply,
+        sessionId,
+        tokensUsed,
+        ragUsed,
         provider: chatProvider.providerName,
-        model: response.model,
-        tokens: response.usage,
-        rag_used: ragUsed,
-      },
-    });
-
-    console.log(`[Chat] ✅ AI response generated (${tokensUsed ?? '?'} tokens, RAG: ${ragUsed})`);
-
-    return {
-      reply,
-      sessionId,
-      tokensUsed,
-      ragUsed,
-      provider: chatProvider.providerName,
-      model: chatProvider.modelChat,
-    };
-  } catch (error) {
-    if (error instanceof AIProviderError) {
-      console.error(`[Chat] ❌ AI provider error (${error.provider}, ${error.status}):`, error.message);
-    } else {
-      console.error('[Chat] ❌ Unexpected error:', error);
+        model: chatProvider.modelChat,
+      };
+    } catch (error) {
+      if (error instanceof AIProviderError) {
+        console.error(`[Chat] ❌ AI provider error (${error.provider}, ${error.status}):`, error.message);
+      } else {
+        console.error(`[Chat] ❌ Unexpected error with provider ${chatProvider.providerName}:`, error);
+      }
+      console.log(`[Chat] Falling back to next provider...`);
+      // Continue to the next provider in the loop
     }
-
-    // Return a graceful fallback
-    return {
-      reply: "I'm experiencing some technical difficulties right now. Please try again in a moment, or contact the business directly.",
-      sessionId,
-      ragUsed: false,
-      provider: chatProvider.providerName,
-      model: chatProvider.modelChat,
-    };
   }
+
+  // If all providers fail
+  console.error('[Chat] ❌ All available AI providers failed.');
+  return {
+    reply: "I'm experiencing some technical difficulties right now. Please try again in a moment, or contact the business directly.",
+    sessionId,
+    ragUsed: false,
+    provider: 'failed',
+    model: 'failed',
+  };
 }
 
 // ============================================================================

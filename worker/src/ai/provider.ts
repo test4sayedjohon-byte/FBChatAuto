@@ -89,6 +89,40 @@ export async function getActiveChatProvider(
 }
 
 /**
+ * Load all available chat completion providers for a tenant, ordered by priority.
+ * Used for fallback mechanisms if the primary provider fails.
+ */
+export async function getAllChatProviders(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<AIProviderConfig[]> {
+  const providers: AIProviderConfig[] = [];
+  const addProvider = (row: AIProviderRow) => {
+    if (!providers.find(p => p.baseUrl === row.base_url)) {
+      providers.push(rowToConfig(row));
+    }
+  };
+
+  // 1. Tenant's active provider
+  const { data: tenantActive } = await supabase.from('ai_providers').select('*').eq('user_id', userId).eq('is_active_chat', true).maybeSingle();
+  if (tenantActive) addProvider(tenantActive as AIProviderRow);
+
+  // 2. Tenant's other providers
+  const { data: tenantOthers } = await supabase.from('ai_providers').select('*').eq('user_id', userId).eq('is_active_chat', false);
+  if (tenantOthers) tenantOthers.forEach(row => addProvider(row as AIProviderRow));
+
+  // 3. Global active provider
+  const { data: globalActive } = await supabase.from('ai_providers').select('*').eq('is_global', true).eq('is_active_chat', true).maybeSingle();
+  if (globalActive) addProvider(globalActive as AIProviderRow);
+
+  // 4. Global other providers
+  const { data: globalOthers } = await supabase.from('ai_providers').select('*').eq('is_global', true).eq('is_active_chat', false);
+  if (globalOthers) globalOthers.forEach(row => addProvider(row as AIProviderRow));
+
+  return providers;
+}
+
+/**
  * Load the active embedding provider for a tenant.
  * Falls back to the chat provider if no dedicated embedding provider is set.
  */

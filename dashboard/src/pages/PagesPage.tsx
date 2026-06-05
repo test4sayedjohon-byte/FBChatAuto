@@ -124,20 +124,23 @@ export default function PagesPage() {
     if (!selectedPage) return;
     setSaving(true);
     
-    // If they reset to default, we can save null to use the worker's hardcoded default, 
-    // or just save the exact text. Let's save the exact text if they edited it, 
-    // or null if it exactly matches the default (to save DB space and rely on worker default).
-    const promptToSave = systemPrompt.trim() === DEFAULT_PROMPT.trim() ? null : systemPrompt.trim();
+    // Always save the exact text the user typed.
+    // Only save null if the field is completely empty (user wants to use platform default).
+    const trimmedPrompt = systemPrompt.trim();
+    const promptToSave = trimmedPrompt.length > 0 ? trimmedPrompt : null;
 
     const { error } = await supabase.from('page_connections').update({
       bot_name: botName.trim() || null,
-      custom_system_prompt: promptToSave || null
+      custom_system_prompt: promptToSave
     }).eq('id', selectedPage.id);
 
-    if (error) alert('Error: ' + error.message);
+    if (error) {
+      alert('Error saving settings: ' + error.message);
+    } else {
+      setShowSettingsModal(false);
+      load();
+    }
     setSaving(false);
-    setShowSettingsModal(false);
-    load();
   }
 
   function resetToDefault() {

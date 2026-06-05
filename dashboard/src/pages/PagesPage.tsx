@@ -107,7 +107,8 @@ export default function PagesPage() {
   }
 
   async function toggle(p: PageConn) {
-    await supabase.from('page_connections').update({ is_active: !p.is_active }).eq('id', p.id);
+    const { error } = await supabase.from('page_connections').update({ is_active: !p.is_active }).eq('id', p.id);
+    if (error) alert('Error toggling page: ' + error.message);
     load();
   }
 

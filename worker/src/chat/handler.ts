@@ -75,7 +75,9 @@ export async function handleChatMessage(
   const history: ChatMessage[] = (historyRows ?? [])
     .reverse()
     .map((row: any) => ({
-      role: row.role as 'user' | 'assistant',
+      // The AI API only accepts 'user', 'assistant', or 'system'. 
+      // If a human agent sent a message, we tell the AI that the 'assistant' sent it
+      role: (row.role === 'human_agent' ? 'assistant' : row.role) as 'user' | 'assistant',
       content: row.content,
     }));
 

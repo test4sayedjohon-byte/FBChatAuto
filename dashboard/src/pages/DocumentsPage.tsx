@@ -81,7 +81,8 @@ export default function DocumentsPage() {
     
     // Trigger the Cloudflare Worker to chunk and embed the document
     try {
-      const response = await fetch('http://localhost:8787/api/documents/process', {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const response = await fetch(`${WORKER_URL}/api/documents/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

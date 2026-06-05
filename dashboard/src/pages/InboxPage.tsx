@@ -140,7 +140,8 @@ export default function InboxPage() {
     setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, bot_paused: newPausedState } : s));
 
     try {
-      const response = await fetch('http://localhost:8787/api/chat/toggle-bot', {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const response = await fetch(`${WORKER_URL}/api/chat/toggle-bot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -169,7 +170,8 @@ export default function InboxPage() {
     setReplyText('');
     
     try {
-      const response = await fetch('http://localhost:8787/api/chat/send', {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const response = await fetch(`${WORKER_URL}/api/chat/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

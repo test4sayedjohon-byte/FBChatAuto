@@ -100,7 +100,8 @@ export default function SandboxPage() {
 
     try {
       // Send to our Cloudflare Worker test endpoint
-      const response = await fetch('http://localhost:8787/test-chat', {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const response = await fetch(`${WORKER_URL}/test-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

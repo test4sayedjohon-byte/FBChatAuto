@@ -15,7 +15,7 @@ import { logger } from 'hono/logger';
 import type { Env, FacebookWebhookEvent, FacebookMessagingEvent } from './types';
 import { verifyFacebookSignature } from './verify';
 import { createSupabaseAdmin, getPageConnection, storeIncomingMessage } from './supabase';
-import { handleChatMessage } from './chat';
+import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
 import { processDocument } from './rag';
 
 // ─── App Setup ──────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ app.use('*', cors());
 app.get('/', (c) => {
   return c.json({
     status: 'ok',
-    service: 'fbchatauto-webhook',
+    service: 'autometabot-webhook',
     version: '2.0.0',
     phase: 2,
     timestamp: new Date().toISOString(),
@@ -95,7 +95,18 @@ app.get('/', (c) => {
       supabase,
       actualSessionId,
       pageConnection,
-      message
+      message,
+      'sandbox_user'
+    );
+    
+    // Trigger background summarization for sandbox testing as well
+    c.executionCtx.waitUntil(
+      triggerSlidingWindowSummarization(
+        supabase,
+        actualSessionId,
+        pageConnection,
+        'sandbox_user'
+      )
     );
     
     return c.json({
@@ -147,8 +158,19 @@ app.post('/api/chat/send', async (c) => {
       fb_message_id: `manual_${Date.now()}`
     });
 
-    // 4. Update session
-    await supabase.from('chat_sessions').update({ last_message_at: new Date().toISOString() }).eq('id', sessionId);
+    // 4. Fetch existing session metadata to clear trigger flag
+    const { data: session } = await supabase.from('chat_sessions').select('metadata').eq('id', sessionId).single();
+    const existingMetadata = session?.metadata || {};
+    if (existingMetadata.has_trigger) {
+      delete existingMetadata.has_trigger;
+    }
+
+    // 5. Update session: auto pause bot when human replies
+    await supabase.from('chat_sessions').update({ 
+      last_message_at: new Date().toISOString(),
+      bot_paused: true,
+      metadata: existingMetadata
+    }).eq('id', sessionId);
 
     return c.json({ success: true });
   } catch (error: any) {
@@ -241,9 +263,9 @@ app.post('/webhook/:userId', async (c) => {
     return c.text('Bad Request', 400);
   }
 
-  // 3. Ensure this is a Page subscription event
-  if (event.object !== 'page') {
-    console.log(`[Webhook] Ignoring non-page event: ${event.object}`);
+  // 3. Ensure this is a Page or Instagram subscription event
+  if (event.object !== 'page' && event.object !== 'instagram') {
+    console.log(`[Webhook] Ignoring unsupported event object: ${event.object}`);
     return c.json({ status: 'ignored' }, 200);
   }
 
@@ -276,16 +298,44 @@ async function processWebhookEntries(event: FacebookWebhookEvent, env: Env): Pro
       continue;
     }
     
-    // Check global kill switch
     const { data: userRecord } = await supabase
       .from('users')
-      .select('settings')
+      .select('settings, is_suspended, monthly_message_limit, allowed_channels')
       .eq('id', pageConnection.user_id)
       .single();
+      
+    if (userRecord?.is_suspended) {
+      console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} is suspended. Ignoring messages.`);
+      continue;
+    }
       
     if (userRecord?.settings?.is_bot_active === false) {
       console.log(`[Webhook] ⏸️ Service is paused for tenant: ${pageConnection.user_id}. Ignoring messages.`);
       continue;
+    }
+
+    if (userRecord?.allowed_channels === undefined || userRecord?.allowed_channels <= 0) {
+      console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} has 0 allowed channels. Ignoring messages.`);
+      continue;
+    }
+
+    if (userRecord?.monthly_message_limit !== undefined && userRecord?.monthly_message_limit !== -1) {
+      if (userRecord.monthly_message_limit <= 0) {
+         console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} has 0 monthly message limit.`);
+         continue;
+      }
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const { count: messagesCount, error: countError } = await supabase
+        .from('chat_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', pageConnection.user_id)
+        .gte('created_at', firstDay);
+
+      if (!countError && messagesCount !== null && messagesCount >= userRecord.monthly_message_limit) {
+        console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} exceeded monthly message limit (${messagesCount}/${userRecord.monthly_message_limit}).`);
+        continue;
+      }
     }
 
     console.log(`[Webhook] Routed to tenant: ${pageConnection.user_id} (Page: ${pageConnection.page_name})`);
@@ -343,12 +393,56 @@ async function handleMessagingEvent(
         return;
       }
 
+      // ── Phase 1.5: Trigger Word Detection ──────────────────────────
+      const triggerWords = Array.isArray(pageConnection.trigger_words) ? pageConnection.trigger_words : [];
+      let isTriggerHit = false;
+      
+      if (pageConnection.is_trigger_enabled && triggerWords.length > 0) {
+        const lowerText = messageText.toLowerCase();
+        isTriggerHit = triggerWords.some((word: string) => lowerText.includes(word.toLowerCase()));
+      }
+
+      if (isTriggerHit) {
+        console.log(`[Webhook] 🚨 Trigger word detected for session ${result.sessionId}`);
+        
+        const responses = Array.isArray(pageConnection.trigger_responses) && pageConnection.trigger_responses.length > 0
+          ? pageConnection.trigger_responses 
+          : ["I need to transfer you to a human agent. Please hold on."];
+          
+        const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+
+        // Send Facebook reply
+        await sendFacebookReply(pageConnection.access_token, senderId, randomResponse);
+
+        // Store assistant message
+        await supabase.from('chat_messages').insert({
+          session_id: result.sessionId,
+          user_id: pageConnection.user_id,
+          role: 'assistant',
+          content: randomResponse,
+          metadata: { is_trigger_response: true }
+        });
+
+        // Fetch existing metadata to append has_trigger flag
+        const { data: sessionData } = await supabase.from('chat_sessions').select('metadata').eq('id', result.sessionId).single();
+        const existingMetadata = sessionData?.metadata || {};
+        
+        // Update session: pause bot, flag trigger in metadata
+        await supabase.from('chat_sessions').update({ 
+          bot_paused: true,
+          metadata: { ...existingMetadata, has_trigger: true }
+        }).eq('id', result.sessionId);
+
+        return; // Stop AI generation
+      }
+
       // ── Phase 2: Full AI Response Pipeline ──────────────────────
       const chatResult = await handleChatMessage(
         supabase,
         result.sessionId,
         pageConnection,
-        messageText
+        messageText,
+        senderId
       );
 
       console.log(
@@ -362,6 +456,15 @@ async function handleMessagingEvent(
         pageConnection.access_token,
         senderId,
         chatResult.reply
+      );
+
+      // ── Phase 3: Sliding Window Summarization ──────────────────────
+      // Triggered in the background (within the waitUntil execution context)
+      await triggerSlidingWindowSummarization(
+        supabase,
+        result.sessionId,
+        pageConnection,
+        senderId
       );
     }
   }

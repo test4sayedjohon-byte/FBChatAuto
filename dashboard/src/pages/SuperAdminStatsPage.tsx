@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
-import { Users, MessageSquare, Activity, ShieldAlert, Database } from 'lucide-react';
+import { Users, MessageSquare, Activity, ShieldAlert, Database, AlertTriangle } from 'lucide-react';
 
 interface SuperAdminStats {
   totalUsers: number;
@@ -13,6 +14,7 @@ interface SuperAdminStats {
 
 export default function SuperAdminStatsPage() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const [stats, setStats] = useState<SuperAdminStats>({
     totalUsers: 0,
     totalProviders: 0,
@@ -20,6 +22,7 @@ export default function SuperAdminStatsPage() {
     totalMessages: 0,
     activeSessions: 0,
   });
+  const [pendingPurchases, setPendingPurchases] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,15 +33,18 @@ export default function SuperAdminStatsPage() {
 
   async function loadGlobalStats() {
     try {
-      const [users, provs, pgs, sessions] = await Promise.all([
+      const [users, provs, pgs, sessions, purchases] = await Promise.all([
         supabase.from('users').select('id', { count: 'exact', head: true }),
         supabase.from('ai_providers').select('id', { count: 'exact', head: true }),
         supabase.from('page_connections').select('id', { count: 'exact', head: true }),
         supabase.from('chat_sessions').select('id, message_count'),
+        supabase.from('purchases').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       ]);
 
       const totalMessages = (sessions.data ?? []).reduce((sum: number, s: any) => sum + (s.message_count || 0), 0);
       const activeSessions = (sessions.data ?? []).length;
+
+      setPendingPurchases(purchases.count ?? 0);
 
       setStats({
         totalUsers: users.count ?? 0,
@@ -66,12 +72,25 @@ export default function SuperAdminStatsPage() {
 
   return (
     <div className="animate-slideUp">
-      <div className="page-header flex justify-between items-center">
+      <div className="page-header flex justify-between items-center" style={{ marginBottom: pendingPurchases > 0 ? '16px' : '32px' }}>
         <div>
           <h1>Global Statistics 🌍</h1>
-          <p>Super Admin overview of the entire FBChatAuto platform.</p>
+          <p>Super Admin overview of the entire AutometaBot platform.</p>
         </div>
       </div>
+
+      {pendingPurchases > 0 && (
+        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--error)', padding: '16px 24px', borderRadius: 'var(--radius-md)', marginBottom: '32px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <AlertTriangle style={{ color: 'var(--error)', flexShrink: 0 }} size={24} />
+          <div style={{ flex: 1 }}>
+            <h4 style={{ margin: 0, color: 'var(--error)', fontSize: '1rem', fontWeight: 'bold' }}>Action Required</h4>
+            <p style={{ margin: '4px 0 0', color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+              You have <strong>{pendingPurchases} pending purchase{pendingPurchases !== 1 ? 's' : ''}</strong> that require your approval.
+            </p>
+          </div>
+          <button className="btn btn-danger" onClick={() => navigate('/super-purchases')}>Review Now</button>
+        </div>
+      )}
 
       <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
         <div className="card stat-card">

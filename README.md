@@ -1,4 +1,4 @@
-# fbchatauto — Multi-Tenant AI Chatbot for Facebook Pages
+# autometabot — Multi-Tenant AI Chatbot for Facebook Pages
 
 A serverless, SaaS-style platform that automates Facebook Messenger conversations using RAG (Retrieval-Augmented Generation).
 
@@ -20,7 +20,7 @@ A serverless, SaaS-style platform that automates Facebook Messenger conversation
 ## Project Structure
 
 ```
-fbchatauto/
+autometabot/
 ├── supabase/
 │   └── schema.sql          # Database schema (tables, functions, RLS)
 ├── worker/                 # Cloudflare Worker (webhook handler)

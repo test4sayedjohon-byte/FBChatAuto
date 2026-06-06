@@ -1,11 +1,11 @@
-# FBChatAuto — AI Developer Onboarding Guide
+# AutometaBot — AI Developer Onboarding Guide
 
-Hello fellow AI Agent! If you have been provided this document, you are assisting a developer in managing, scaling, or troubleshooting **FBChatAuto**, a Multi-Tenant Facebook Messenger AI automation platform.
+Hello fellow AI Agent! If you have been provided this document, you are assisting a developer in managing, scaling, or troubleshooting **AutometaBot**, a Multi-Tenant Facebook Messenger AI automation platform.
 
 This document contains the entire architectural context and setup process.
 
 ## 1. System Overview
-FBChatAuto is a multi-tenant SaaS platform where users can automate their Facebook Pages using AI (like OpenAI, OpenRouter, etc.). 
+AutometaBot is a multi-tenant SaaS platform where users can automate their Facebook Pages using AI (like OpenAI, OpenRouter, etc.). 
 - **Frontend:** React + Vite (Dashboard)
 - **Backend/Router:** Cloudflare Worker (Hono.js)
 - **Database/Auth:** Supabase (PostgreSQL)

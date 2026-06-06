@@ -1,5 +1,5 @@
 {
-  "name": "fbchatauto-webhook",
+  "name": "autometabot-webhook",
   "version": "1.0.0",
   "private": true,
   "description": "Facebook Messenger AI Chatbot Webhook (Cloudflare Worker)",

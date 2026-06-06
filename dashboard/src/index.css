@@ -650,12 +650,14 @@ a:hover {
   width: 100%;
   max-width: 520px;
   max-height: 85vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   box-shadow: var(--shadow-lg);
   animation: slideUp var(--transition-normal) ease-out;
 }
 
 .modal-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -669,10 +671,20 @@ a:hover {
 }
 
 .modal-body {
+  flex: 1;
   padding: 24px;
+  overflow-y: auto;
+}
+
+.modal form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .modal-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -783,6 +795,16 @@ a:hover {
 
 .auth-toggle button:hover {
   color: var(--accent-primary-hover);
+}
+
+.auth-hero {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .auth-hero {
+    display: block !important;
+  }
 }
 
 /* ─── Stats Grid ────────────────────────────────────────────────────────── */

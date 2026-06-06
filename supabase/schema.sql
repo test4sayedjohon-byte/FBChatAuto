@@ -107,6 +107,9 @@ CREATE TABLE public.knowledge_fields (
     category        TEXT DEFAULT 'general',  -- Optional grouping: 'pricing', 'products', 'policies', etc.
     sort_order      INTEGER NOT NULL DEFAULT 0,
     is_active       BOOLEAN NOT NULL DEFAULT true,
+    value_type      TEXT NOT NULL DEFAULT 'string' CHECK (value_type IN ('string', 'list', 'boolean', 'number')),
+    display_label   TEXT,
+    description     TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 

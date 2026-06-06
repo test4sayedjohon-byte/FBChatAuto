@@ -19,7 +19,7 @@
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getAllChatProviders, getActiveEmbeddingProvider } from '../ai/provider';
+import { getAllChatProviders, getActiveEmbeddingProvider, getProviderById } from '../ai/provider';
 import { callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage } from '../ai/types';
 import { searchDocuments } from '../rag/pipeline';
@@ -47,12 +47,28 @@ export async function handleChatMessage(
   supabase: SupabaseClient,
   sessionId: string,
   pageConnection: PageConnection,
-  userMessage: string
+  userMessage: string,
+  senderId: string
 ): Promise<ChatHandlerResult> {
   const userId = pageConnection.user_id;
 
   // 1. Load all available chat providers for fallback
-  const chatProviders = await getAllChatProviders(supabase, userId);
+  let chatProviders = await getAllChatProviders(supabase, userId);
+
+  // If this specific page has a dedicated AI provider assigned, fetch it and prepend it
+  if (pageConnection.ai_provider_id) {
+    try {
+      const pageProvider = await getProviderById(supabase, pageConnection.ai_provider_id);
+      if (pageProvider) {
+        chatProviders = [
+          pageProvider,
+          ...chatProviders.filter(p => p.id !== pageProvider.id)
+        ];
+      }
+    } catch (err) {
+      console.error('[Chat] Failed to fetch page-specific provider:', err);
+    }
+  }
 
   if (!chatProviders || chatProviders.length === 0) {
     console.warn(`[Chat] No AI providers configured for user ${userId}`);
@@ -63,6 +79,47 @@ export async function handleChatMessage(
       provider: 'none',
       model: 'none',
     };
+  }
+
+  // 1b. Check user monthly token limits
+  try {
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const { data: userData } = await supabase
+      .from('users')
+      .select('monthly_token_limit, strict_token_enforcement')
+      .eq('id', userId)
+      .maybeSingle();
+
+    const monthlyLimit = userData?.monthly_token_limit ?? 500000;
+    const strictEnforcement = userData?.strict_token_enforcement ?? true;
+
+    // Fetch token counts for messages from this user in the current month
+    const { data: usageData } = await supabase
+      .from('chat_messages')
+      .select('token_count')
+      .eq('user_id', userId)
+      .gte('created_at', startOfMonth.toISOString());
+
+    const currentUsage = (usageData ?? []).reduce((acc: number, row: any) => acc + (row.token_count || 0), 0);
+
+    if (currentUsage >= monthlyLimit) {
+      console.warn(`[Chat] Tenant ${userId} has exceeded monthly token limit: ${currentUsage} >= ${monthlyLimit}`);
+      if (strictEnforcement) {
+        return {
+          reply: "System notice: monthly AI response quota exceeded. Please contact support.",
+          sessionId,
+          ragUsed: false,
+          provider: 'limit-enforced',
+          model: 'none',
+          tokensUsed: 0,
+        };
+      }
+    }
+  } catch (quotaErr) {
+    console.error('[Chat] Failed checking token quota limits, continuing execution:', quotaErr);
   }
 
   // 2. Retrieve conversation history (context window)
@@ -100,7 +157,7 @@ export async function handleChatMessage(
           userId,
           userMessage,
           pageConnection.page_id,
-          0.65, // Slightly lower threshold for better recall
+          0.4, // Low threshold to ensure short/simple docs are still retrieved
           3     // Top 3 results
         );
 
@@ -124,7 +181,7 @@ export async function handleChatMessage(
   }
 
   // 4. Build the system prompt
-  const systemPrompt = await buildSystemPrompt(supabase, pageConnection, ragContext);
+  const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, ragContext);
 
   // 5. Construct the final messages array
   const messages: ChatMessage[] = [
@@ -135,9 +192,22 @@ export async function handleChatMessage(
   // 6. Iterate through providers until one succeeds
   for (const chatProvider of chatProviders) {
     try {
-      console.log(`[Chat] Trying provider: ${chatProvider.providerName} (${chatProvider.modelChat})`);
+      const isPrimary = (pageConnection.ai_provider_id === chatProvider.id) || 
+                        (!pageConnection.ai_provider_id && chatProvider.id === chatProviders[0]?.id);
 
-      const response = await callChatCompletion(chatProvider, messages);
+      const executionProvider = { ...chatProvider };
+      if (isPrimary) {
+        if (pageConnection.ai_model) {
+          executionProvider.modelChat = pageConnection.ai_model;
+        }
+        if (pageConnection.temperature !== undefined && pageConnection.temperature !== null) {
+          executionProvider.temperature = pageConnection.temperature;
+        }
+      }
+
+      console.log(`[Chat] Trying provider: ${executionProvider.providerName} (${executionProvider.modelChat}) at t=${executionProvider.temperature}`);
+
+      const response = await callChatCompletion(executionProvider, messages);
 
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't generate a response. Please try again.";
       const tokensUsed = response.usage?.total_tokens;
@@ -148,7 +218,7 @@ export async function handleChatMessage(
         user_id: userId,
         role: 'assistant',
         content: reply,
-        token_count: response.usage?.completion_tokens,
+        token_count: response.usage?.total_tokens ?? response.usage?.completion_tokens,
         metadata: {
           provider: chatProvider.providerName,
           model: response.model,
@@ -210,8 +280,8 @@ export async function handleChatMessage(
 function shouldTriggerRAG(message: string, history: ChatMessage[]): boolean {
   const normalizedMessage = message.toLowerCase().trim();
 
-  // Skip very short messages (likely greetings)
-  if (normalizedMessage.length < 15) {
+  // Skip very short messages (likely greetings like "hi", "ok")
+  if (normalizedMessage.length < 5) {
     return false;
   }
 

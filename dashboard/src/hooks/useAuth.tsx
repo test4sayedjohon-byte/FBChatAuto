@@ -5,7 +5,15 @@ import { supabase } from '../lib/supabase';
 interface AuthContextType {
   user: User | null;
   session: Session | null;
-  profile: { is_super_admin?: boolean, plan?: string } | null;
+  profile: { 
+    is_super_admin?: boolean, 
+    plan?: string, 
+    is_suspended?: boolean,
+    monthly_token_limit?: number,
+    strict_token_enforcement?: boolean,
+    allowed_channels?: number,
+    monthly_message_limit?: number
+  } | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, name?: string) => Promise<{ error: Error | null }>;
@@ -17,7 +25,15 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<{ is_super_admin?: boolean, plan?: string } | null>(null);
+  const [profile, setProfile] = useState<{ 
+    is_super_admin?: boolean, 
+    plan?: string, 
+    is_suspended?: boolean,
+    monthly_token_limit?: number,
+    strict_token_enforcement?: boolean,
+    allowed_channels?: number,
+    monthly_message_limit?: number
+  } | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (userId: string | undefined) => {
@@ -25,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
-    const { data } = await supabase.from('users').select('is_super_admin, plan').eq('id', userId).single();
+    const { data } = await supabase.from('users').select('is_super_admin, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_message_limit').eq('id', userId).single();
     if (data) setProfile(data);
   };
 

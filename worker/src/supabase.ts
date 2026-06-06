@@ -34,12 +34,12 @@ export async function getPageConnection(
   const { data, error } = await supabase
     .from('page_connections')
     .select('*')
-    .eq('page_id', pageId)
+    .or(`page_id.eq.${pageId},instagram_account_id.eq.${pageId}`)
     .eq('is_active', true)
-    .single();
+    .maybeSingle();
 
-  if (error) {
-    console.error(`[Supabase] Error fetching page connection for ${pageId}:`, error.message);
+  if (error || !data) {
+    if (error) console.error(`[Supabase] Error fetching page connection for ${pageId}:`, error.message);
     return null;
   }
 
@@ -87,7 +87,7 @@ export async function storeIncomingMessage(
 
   if (existing) {
     console.log(`[Webhook] Duplicate message ${fbMessageId}, skipping`);
-    return { sessionId, botPaused };
+    return null; // Return null so the worker doesn't process it again
   }
 
   // 3. Insert the user's message

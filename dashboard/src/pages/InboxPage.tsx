@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
-import { Bot, User, Send, PauseCircle, PlayCircle, Loader2 } from 'lucide-react';
+import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle } from 'lucide-react';
 
 function timeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -27,6 +28,7 @@ type ChatSession = {
   bot_paused: boolean;
   unread_count: number;
   last_message_at: string;
+  metadata?: any;
 };
 
 type ChatMessage = {
@@ -35,18 +37,26 @@ type ChatMessage = {
   role: string;
   content: string;
   created_at: string;
+  metadata?: any;
 };
 
 export default function InboxPage() {
   const { user } = useAuth();
+  const location = useLocation();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>((location.state as any)?.sessionId || null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
+  const [scrollToTrigger, setScrollToTrigger] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Profiling Summary State
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [customerSummary, setCustomerSummary] = useState<string | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
 
   const [pages, setPages] = useState<Record<string, string>>({});
 
@@ -93,14 +103,34 @@ export default function InboxPage() {
   }, [activeSessionId]);
 
   useEffect(() => {
+    if (scrollToTrigger) {
+      // Find the most recent trigger message
+      const revIndex = messages.slice().reverse().findIndex(m => m.metadata?.is_trigger_response);
+      if (revIndex !== -1) {
+        const triggerMsgIndex = messages.length - 1 - revIndex;
+        const el = document.getElementById(`msg-${messages[triggerMsgIndex].id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Highlight it briefly
+          el.style.transition = 'background-color 0.5s';
+          el.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
+          setTimeout(() => {
+            el.style.backgroundColor = 'transparent';
+          }, 2000);
+          setScrollToTrigger(false);
+          return;
+        }
+      }
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, scrollToTrigger]);
 
   const fetchSessions = async () => {
+    if (!user) return;
     setLoadingSessions(true);
     
     // Fetch pages mapping
-    const { data: pagesData } = await supabase.from('page_connections').select('page_id, page_name');
+    const { data: pagesData } = await supabase.from('page_connections').select('page_id, page_name').eq('user_id', user.id);
     if (pagesData) {
       const pMap: Record<string, string> = {};
       pagesData.forEach(p => pMap[p.page_id] = p.page_name || p.page_id);
@@ -110,6 +140,7 @@ export default function InboxPage() {
     const { data, error } = await supabase
       .from('chat_sessions')
       .select('*')
+      .eq('user_id', user.id)
       .order('last_message_at', { ascending: false });
 
     if (!error && data) {
@@ -132,6 +163,26 @@ export default function InboxPage() {
     setLoadingMessages(false);
   };
 
+  const fetchCustomerSummary = async () => {
+    if (!activeSession) return;
+    setLoadingSummary(true);
+    setShowSummaryModal(true);
+    
+    const { data } = await supabase
+      .from('customer_profiles')
+      .select('summary')
+      .eq('page_id', activeSession.page_id)
+      .eq('sender_id', activeSession.sender_id)
+      .maybeSingle();
+      
+    if (data?.summary) {
+      setCustomerSummary(data.summary);
+    } else {
+      setCustomerSummary('No summary available for this customer yet. Ensure Profiling is enabled in Channel settings, and the customer has interacted recently.');
+    }
+    setLoadingSummary(false);
+  };
+
   const toggleBot = async () => {
     if (!activeSession) return;
     const newPausedState = !activeSession.bot_paused;
@@ -140,7 +191,7 @@ export default function InboxPage() {
     setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, bot_paused: newPausedState } : s));
 
     try {
-      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://metachat.junoverseai.com';
       const response = await fetch(`${WORKER_URL}/api/chat/toggle-bot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -170,7 +221,7 @@ export default function InboxPage() {
     setReplyText('');
     
     try {
-      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://metachat.junoverseai.com';
       const response = await fetch(`${WORKER_URL}/api/chat/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -255,6 +306,19 @@ export default function InboxPage() {
                         {session.unread_count} new
                       </span>
                     )}
+                    {session.metadata?.has_trigger && (
+                      <span 
+                        title="Trigger Word Detected - Click to View" 
+                        style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', marginLeft: '4px', cursor: 'pointer' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveSessionId(session.id);
+                          setScrollToTrigger(true);
+                        }}
+                      >
+                        <AlertCircle size={14} />
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -284,7 +348,15 @@ export default function InboxPage() {
                   </div>
                 </div>
               </div>
-              <div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  className="btn btn-secondary"
+                  onClick={fetchCustomerSummary}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                  <User size={16} />
+                  Profile Summary
+                </button>
                 <button 
                   className={`btn ${activeSession.bot_paused ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={toggleBot}
@@ -308,7 +380,7 @@ export default function InboxPage() {
                   const isNote = msg.role === 'internal_note';
                   
                   return (
-                    <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-start' : 'flex-end' }}>
+                    <div id={`msg-${msg.id}`} key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-start' : 'flex-end', padding: '4px' }}>
                       <div style={{ 
                         maxWidth: '70%', 
                         padding: '12px 16px', 
@@ -373,6 +445,29 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+
+      {showSummaryModal && (
+        <div className="modal-overlay" onClick={() => setShowSummaryModal(false)} style={{ zIndex: 100 }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h2>Customer Profile Summary</h2>
+              <button className="btn-ghost btn-icon" onClick={() => setShowSummaryModal(false)}><X size={18}/></button>
+            </div>
+            <div className="modal-body">
+              {loadingSummary ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  <Loader2 className="spin" size={24} style={{ margin: '0 auto 12px' }} />
+                  <p>Fetching AI Profile...</p>
+                </div>
+              ) : (
+                <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '8px', lineHeight: '1.6' }}>
+                  {customerSummary}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

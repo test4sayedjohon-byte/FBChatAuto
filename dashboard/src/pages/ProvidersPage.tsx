@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { PROVIDER_PRESETS } from '../lib/providers';
-import { Plus, Trash2, Cpu, X, Save, Loader2, Check } from 'lucide-react';
+import { Plus, Trash2, Cpu, X, Save, Loader2, Check, Edit2, Copy } from 'lucide-react';
 
 interface Provider {
   id: string;
@@ -13,6 +13,8 @@ interface Provider {
   model_embedding: string | null;
   is_active_chat: boolean;
   is_active_embedding: boolean;
+  is_active_summarization: boolean;
+  fallback_order?: number;
   max_tokens: number;
   temperature: number;
   context_window: number;
@@ -33,6 +35,7 @@ export default function ProvidersPage() {
   const [saving, setSaving] = useState(false);
   const [testingStatus, setTestingStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
 
   const [providerName, setProviderName] = useState('openai');
   const [displayName, setDisplayName] = useState('');
@@ -49,12 +52,18 @@ export default function ProvidersPage() {
   }, []);
 
   async function load() {
-    const { data } = await supabase.from('ai_providers').select('*').order('created_at');
+    const { data } = await supabase
+      .from('ai_providers')
+      .select('*')
+      .order('is_active_chat', { ascending: false })
+      .order('fallback_order', { ascending: true })
+      .order('created_at', { ascending: true });
     if (data) setProviders(data);
     setLoading(false);
   }
 
   function openAdd() {
+    setEditingProvider(null);
     const preset = PROVIDER_PRESETS['openai'];
     setProviderName('openai');
     setDisplayName('');
@@ -65,6 +74,22 @@ export default function ProvidersPage() {
     setMaxTokens(1024);
     setTemperature(0.7);
     setContextWindow(10);
+    setTestingStatus('idle');
+    setTestMessage('');
+    setShowModal(true);
+  }
+
+  function openEdit(p: Provider) {
+    setEditingProvider(p);
+    setProviderName(p.provider_name);
+    setDisplayName(p.display_name);
+    setBaseUrl(p.base_url);
+    setApiKey(p.api_key);
+    setModelChat(p.model_chat || '');
+    setModelEmbed(p.model_embedding || '');
+    setMaxTokens(p.max_tokens);
+    setTemperature(p.temperature);
+    setContextWindow(p.context_window);
     setTestingStatus('idle');
     setTestMessage('');
     setShowModal(true);
@@ -83,24 +108,38 @@ export default function ProvidersPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const isFirst = providers.length === 0;
-    await supabase.from('ai_providers').insert({
-      user_id: null,
-      is_global: true,
+    
+    const providerData = {
       provider_name: providerName,
       display_name: displayName || PROVIDER_PRESETS[providerName]?.label || providerName,
       base_url: baseUrl,
       api_key: apiKey,
       model_chat: modelChat || null,
       model_embedding: modelEmbed || null,
-      is_active_chat: isFirst,
-      is_active_embedding: isFirst,
       max_tokens: maxTokens,
       temperature,
       context_window: contextWindow,
-    });
+    };
+
+    if (editingProvider) {
+      await supabase.from('ai_providers')
+        .update(providerData)
+        .eq('id', editingProvider.id);
+    } else {
+      const isFirst = providers.length === 0;
+      await supabase.from('ai_providers').insert({
+        ...providerData,
+        user_id: null,
+        is_global: true,
+        is_active_chat: isFirst,
+        is_active_embedding: isFirst,
+        is_active_summarization: isFirst,
+      });
+    }
+
     setSaving(false);
     setShowModal(false);
+    setEditingProvider(null);
     load();
   }
 
@@ -119,7 +158,7 @@ export default function ProvidersPage() {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'HTTP-Referer': window.location.origin, // For OpenRouter
-          'X-Title': 'FBChatAuto'
+          'X-Title': 'AutometaBot'
         }
       });
       if (response.ok) {
@@ -136,12 +175,46 @@ export default function ProvidersPage() {
     }
   }
 
-  async function setActive(id: string, type: 'chat' | 'embedding') {
-    const field = type === 'chat' ? 'is_active_chat' : 'is_active_embedding';
+  async function setActive(id: string, type: 'chat' | 'embedding' | 'summarization') {
+    const field = type === 'chat' ? 'is_active_chat' : type === 'embedding' ? 'is_active_embedding' : 'is_active_summarization';
     // Deactivate all first
     await supabase.from('ai_providers').update({ [field]: false }).neq('id', '00000000-0000-0000-0000-000000000000');
     // Activate selected
-    await supabase.from('ai_providers').update({ [field]: true }).eq('id', id);
+    const updates: any = { [field]: true };
+    if (type === 'chat') {
+      updates.fallback_order = 0; // If primary, it is not in the fallback list
+    }
+    await supabase.from('ai_providers').update(updates).eq('id', id);
+    load();
+  }
+
+  async function updateFallbackOrder(id: string, order: number) {
+    const updates: any = { fallback_order: order };
+    if (order > 0) {
+      updates.is_active_chat = false; // Cannot be primary and fallback at the same time
+    }
+    await supabase.from('ai_providers').update(updates).eq('id', id);
+    load();
+  }
+
+  async function duplicate(p: Provider) {
+    await supabase.from('ai_providers').insert({
+      user_id: null,
+      is_global: true,
+      provider_name: p.provider_name,
+      display_name: `${p.display_name} (Copy)`,
+      base_url: p.base_url,
+      api_key: p.api_key,
+      model_chat: p.model_chat,
+      model_embedding: p.model_embedding,
+      is_active_chat: false,
+      is_active_embedding: false,
+      is_active_summarization: false,
+      fallback_order: p.fallback_order || 0,
+      max_tokens: p.max_tokens,
+      temperature: p.temperature,
+      context_window: p.context_window,
+    });
     load();
   }
 
@@ -184,12 +257,34 @@ export default function ProvidersPage() {
             {PROVIDER_LABELS[p.provider_name] || 'AI'}
           </div>
           <div className="list-item-content">
-            <div className="list-item-title">{p.display_name}</div>
+            <div className="list-item-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span>{p.display_name}</span>
+              {p.is_active_chat && (
+                <span style={{ fontSize: '10px', background: 'rgba(249, 115, 22, 0.15)', color: 'var(--accent-primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                  Primary Chat
+                </span>
+              )}
+              {p.is_active_embedding && (
+                <span style={{ fontSize: '10px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                  Active Embed
+                </span>
+              )}
+              {p.is_active_summarization && (
+                <span style={{ fontSize: '10px', background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                  Active Summarize
+                </span>
+              )}
+              {p.fallback_order && p.fallback_order > 0 ? (
+                <span style={{ fontSize: '10px', background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                  Backup #{p.fallback_order}
+                </span>
+              ) : null}
+            </div>
             <div className="list-item-subtitle">
               Chat: {p.model_chat || '—'} • Embed: {p.model_embedding || '—'} • Temp: {p.temperature} • Context: {p.context_window} msgs
             </div>
           </div>
-          <div className="list-item-actions">
+          <div className="list-item-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               className={`btn btn-sm ${p.is_active_chat ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setActive(p.id, 'chat')}
@@ -205,15 +300,43 @@ export default function ProvidersPage() {
             >
               {p.is_active_embedding && <Check size={12}/>} Embed
             </button>
+            <button
+              className={`btn btn-sm ${p.is_active_summarization ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActive(p.id, 'summarization')}
+              title="Set as active summarization provider"
+            >
+              {p.is_active_summarization && <Check size={12}/>} Summarize
+            </button>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={{ fontSize: '9px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Fallback Role</span>
+              <select
+                className="form-select form-select-sm"
+                style={{ width: '120px', padding: '2px 4px', fontSize: '11px', height: '24px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-light)', borderRadius: '4px' }}
+                value={p.fallback_order || 0}
+                onChange={(e) => updateFallbackOrder(p.id, Number(e.target.value))}
+                title="Choose when this provider is used if other models fail"
+              >
+                <option value="0">No Backup</option>
+                <option value="1">1st Backup</option>
+                <option value="2">2nd Backup</option>
+                <option value="3">3rd Backup</option>
+                <option value="4">4th Backup</option>
+                <option value="5">5th Backup</option>
+              </select>
+            </div>
+
+            <button className="btn-ghost btn-icon" onClick={() => duplicate(p)} title="Duplicate AI provider"><Copy size={14}/></button>
+            <button className="btn-ghost btn-icon" onClick={() => openEdit(p)} title="Edit AI provider"><Edit2 size={14}/></button>
             <button className="btn-ghost btn-icon" onClick={() => del(p.id)}><Trash2 size={14}/></button>
           </div>
         </div>
       ))}
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:'560px'}}>
-            <div className="modal-header"><h2>Add AI Provider</h2><button className="btn-ghost btn-icon" onClick={() => setShowModal(false)}><X size={18}/></button></div>
+        <div className="modal-overlay">
+          <div className="modal" style={{maxWidth:'560px'}}>
+            <div className="modal-header"><h2>{editingProvider ? 'Edit AI Provider' : 'Add AI Provider'}</h2><button className="btn-ghost btn-icon" onClick={() => setShowModal(false)}><X size={18}/></button></div>
             <form onSubmit={handleSubmit}>
               <div className="modal-body">
                 <div className="form-group">
@@ -279,7 +402,7 @@ export default function ProvidersPage() {
                   <button type="button" className="btn btn-ghost" onClick={() => setShowModal(false)}>Cancel</button>
                   <button type="submit" className="btn btn-primary" disabled={saving}>
                     {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Save size={14}/>}
-                    {saving ? 'Saving...' : 'Add Provider'}
+                    {saving ? 'Saving...' : editingProvider ? 'Save Changes' : 'Add Provider'}
                   </button>
                 </div>
               </div>

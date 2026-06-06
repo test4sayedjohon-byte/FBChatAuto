@@ -21,16 +21,37 @@ function generateId() {
 
 export default function SandboxPage() {
   const { user } = useAuth();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const saved = localStorage.getItem('sandbox_messages');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved sandbox messages', e);
+      }
+    }
+    return [];
+  });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
-  const [sessionId, setSessionId] = useState(generateId());
+  const [sessionId, setSessionId] = useState(() => {
+    const saved = localStorage.getItem('sandbox_session_id');
+    return saved || generateId();
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sandbox_messages', JSON.stringify(messages));
+  }, [messages]);
+
+  useEffect(() => {
+    localStorage.setItem('sandbox_session_id', sessionId);
+  }, [sessionId]);
   const [globalProviders, setGlobalProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('default');
-  const [pages, setPages] = useState<{page_id: string, page_name: string|null}[]>([]);
+  const [pages, setPages] = useState<{page_id: string, page_name: string|null, is_active: boolean}[]>([]);
   const [selectedPageId, setSelectedPageId] = useState('');
 
   const scrollToBottom = () => {
@@ -60,13 +81,18 @@ export default function SandboxPage() {
       setGlobalProviders(gData);
     }
 
-    // Load connected pages
-    const { data: pData } = await supabase.from('page_connections').select('page_id, page_name');
+    // Load connected pages (all, including inactive, so user can see status)
+    const { data: pData } = await supabase
+      .from('page_connections')
+      .select('page_id, page_name, is_active')
+      .eq('user_id', user!.id)
+      .order('connected_at');
     if (pData) {
       setPages(pData);
-      if (pData.length > 0) {
-        setSelectedPageId(pData[0].page_id);
-      }
+      // Default to first ACTIVE page
+      const firstActive = pData.find((p) => p.is_active);
+      if (firstActive) setSelectedPageId(firstActive.page_id);
+      else if (pData.length > 0) setSelectedPageId(pData[0].page_id);
     }
   }
 
@@ -100,7 +126,7 @@ export default function SandboxPage() {
 
     try {
       // Send to our Cloudflare Worker test endpoint
-      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://fbchatauto-webhook.test4-sayedjohon.workers.dev';
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://metachat.junoverseai.com';
       const response = await fetch(`${WORKER_URL}/test-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,6 +165,8 @@ export default function SandboxPage() {
     }
   };
 
+  const selectedPageInfo = pages.find((p) => p.page_id === selectedPageId);
+
   return (
     <div className="animate-slideUp" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 100px)' }}>
       <div className="page-header" style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -172,11 +200,13 @@ export default function SandboxPage() {
               className="form-select" 
               style={{ border: 'none', background: 'var(--bg-secondary)', color: 'var(--text-primary)', padding: '4px', fontSize: '14px', width: 'auto' }}
               value={selectedPageId}
-              onChange={(e) => setSelectedPageId(e.target.value)}
+              onChange={(e) => { setSelectedPageId(e.target.value); clearChat(); }}
             >
               <option value="global">Global Settings (No Page)</option>
               {pages.map(p => (
-                <option key={p.page_id} value={p.page_id}>Page: {p.page_name || p.page_id}</option>
+                <option key={p.page_id} value={p.page_id}>
+                  {p.is_active ? '✅' : '⏸️'} {p.page_name || p.page_id}{!p.is_active ? ' (inactive)' : ''}
+                </option>
               ))}
             </select>
           </div>
@@ -186,6 +216,13 @@ export default function SandboxPage() {
           </button>
         </div>
       </div>
+
+      {selectedPageInfo && !selectedPageInfo.is_active && (
+        <div style={{ padding: '12px 16px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 'var(--radius-lg)', color: '#f59e0b', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.9rem' }}>
+          <span style={{ fontSize: '1.2rem' }}>⏸️</span>
+          <span><strong>{selectedPageInfo.page_name || selectedPageInfo.page_id}</strong> is currently <strong>inactive</strong>. Enable it from the <strong>Facebook Pages</strong> section before testing.</span>
+        </div>
+      )}
 
       {error && (
         <div style={{ padding: '16px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-lg)', color: 'var(--error)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>

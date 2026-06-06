@@ -17,6 +17,36 @@ interface KnowledgeField {
   field_name: string;
   field_value: string;
   category: string;
+  value_type?: 'string' | 'list' | 'boolean' | 'number';
+  display_label?: string | null;
+  description?: string | null;
+}
+
+/**
+ * Escape regex characters in a string.
+ */
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Format a field value for prompt injection based on its type.
+ */
+function formatFieldValueForPrompt(field: KnowledgeField): string {
+  if (field.value_type === 'list') {
+    try {
+      const parsed = JSON.parse(field.field_value);
+      if (Array.isArray(parsed)) {
+        return parsed.join(', ');
+      }
+    } catch (_) {
+      // Return raw string if parsing fails
+    }
+  }
+  if (field.value_type === 'boolean') {
+    return field.field_value === 'true' ? 'Yes' : 'No';
+  }
+  return field.field_value;
 }
 
 /**
@@ -29,6 +59,7 @@ interface KnowledgeField {
 export async function buildSystemPrompt(
   supabase: SupabaseClient,
   pageConnection: PageConnection,
+  senderId: string,
   ragContext?: string
 ): Promise<string> {
   const userId = pageConnection.user_id;
@@ -37,18 +68,42 @@ export async function buildSystemPrompt(
   // 1. Fetch the user's knowledge fields (Global or Page-specific)
   const { data: fields } = await supabase
     .from('knowledge_fields')
-    .select('field_name, field_value, category')
+    .select('field_name, field_value, category, value_type, display_label, description')
     .eq('user_id', userId)
     .eq('is_active', true)
     .or(`page_id.eq.${pageId},page_id.is.null`)
     .order('sort_order', { ascending: true });
+
+  // 1b. Fetch Customer Profile Summary if profiling is enabled
+  let customerSummary = null;
+  if (pageConnection.enable_customer_profiling) {
+    const { data: profile } = await supabase
+      .from('customer_profiles')
+      .select('summary')
+      .eq('page_id', pageId)
+      .eq('sender_id', senderId)
+      .maybeSingle();
+      
+    if (profile?.summary) {
+      customerSummary = profile.summary;
+    }
+  }
 
   // 2. Build the base prompt
   const parts: string[] = [];
 
   // Base persona
   if (pageConnection.custom_system_prompt && pageConnection.custom_system_prompt.trim().length > 0) {
-    parts.push(pageConnection.custom_system_prompt.trim());
+    let customPrompt = pageConnection.custom_system_prompt.trim();
+    // Replace variable placeholders like {{business_name}}
+    if (fields && fields.length > 0) {
+      for (const field of fields as KnowledgeField[]) {
+        const placeholder = `{{${field.field_name}}}`;
+        const val = formatFieldValueForPrompt(field);
+        customPrompt = customPrompt.replace(new RegExp(escapeRegExp(placeholder), 'g'), val);
+      }
+    }
+    parts.push(customPrompt);
     parts.push('');
   } else {
     const botName = pageConnection.bot_name ?? 'a helpful, friendly, and professional AI assistant';
@@ -65,7 +120,16 @@ export async function buildSystemPrompt(
     parts.push('');
   }
 
-  // 3. Inject knowledge fields grouped by category
+  // 2b. Inject Customer Summary
+  if (customerSummary) {
+    parts.push('## Customer Profile (Internal Memory)');
+    parts.push('Here is a summary of what you know about this specific customer from past interactions:');
+    parts.push(customerSummary);
+    parts.push('');
+  }
+
+  // 3. Inject knowledge fields grouped by category (only if not using custom prompt or if they want to combine)
+  // Note: We inject fields even with custom prompts if they don't use placeholders, as a safety net.
   if (fields && fields.length > 0) {
     parts.push('## Business Information');
     parts.push('Use the following verified facts to answer questions:');
@@ -77,7 +141,9 @@ export async function buildSystemPrompt(
     for (const [category, categoryFields] of Object.entries(grouped)) {
       parts.push(`### ${formatCategoryName(category)}`);
       for (const field of categoryFields) {
-        parts.push(`- **${field.field_name}:** ${field.field_value}`);
+        const label = field.display_label || formatCategoryName(field.field_name);
+        const displayVal = formatFieldValueForPrompt(field);
+        parts.push(`- **${label}:** ${displayVal}`);
       }
       parts.push('');
     }

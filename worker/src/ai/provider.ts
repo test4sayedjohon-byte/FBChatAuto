@@ -23,6 +23,7 @@ interface AIProviderRow {
   is_active_chat: boolean;
   is_active_embedding: boolean;
   is_global?: boolean;
+  fallback_order?: number;
   extra_headers: Record<string, string>;
   max_tokens: number | null;
   temperature: number | null;
@@ -98,25 +99,92 @@ export async function getAllChatProviders(
 ): Promise<AIProviderConfig[]> {
   const providers: AIProviderConfig[] = [];
   const addProvider = (row: AIProviderRow) => {
-    if (!providers.find(p => p.baseUrl === row.base_url)) {
+    if (!providers.find(p => p.id === row.id)) {
       providers.push(rowToConfig(row));
     }
   };
 
-  // 1. Tenant's active provider
-  const { data: tenantActive } = await supabase.from('ai_providers').select('*').eq('user_id', userId).eq('is_active_chat', true).maybeSingle();
+  // Fetch the user's explicitly assigned providers from the users table
+  const { data: userRecord } = await supabase
+    .from('users')
+    .select('assigned_chat_provider_id, assigned_fallback_chat_provider_id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  // 1. User's assigned primary provider
+  if (userRecord?.assigned_chat_provider_id) {
+    const { data: assignedPrimary } = await supabase
+      .from('ai_providers')
+      .select('*')
+      .eq('id', userRecord.assigned_chat_provider_id)
+      .maybeSingle();
+    if (assignedPrimary) addProvider(assignedPrimary as AIProviderRow);
+  }
+
+  // 2. User's assigned fallback provider
+  if (userRecord?.assigned_fallback_chat_provider_id) {
+    const { data: assignedFallback } = await supabase
+      .from('ai_providers')
+      .select('*')
+      .eq('id', userRecord.assigned_fallback_chat_provider_id)
+      .maybeSingle();
+    if (assignedFallback) addProvider(assignedFallback as AIProviderRow);
+  }
+
+  // 3. Tenant's own active provider
+  const { data: tenantActive } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_active_chat', true)
+    .maybeSingle();
   if (tenantActive) addProvider(tenantActive as AIProviderRow);
 
-  // 2. Tenant's other providers
-  const { data: tenantOthers } = await supabase.from('ai_providers').select('*').eq('user_id', userId).eq('is_active_chat', false);
+  // 4. Tenant's own fallback providers ordered by fallback_order ASC
+  const { data: tenantFallbacks } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_active_chat', false)
+    .gt('fallback_order', 0)
+    .order('fallback_order', { ascending: true });
+  if (tenantFallbacks) tenantFallbacks.forEach(row => addProvider(row as AIProviderRow));
+
+  // 5. Tenant's remaining active/inactive providers
+  const { data: tenantOthers } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_active_chat', false)
+    .eq('fallback_order', 0);
   if (tenantOthers) tenantOthers.forEach(row => addProvider(row as AIProviderRow));
 
-  // 3. Global active provider
-  const { data: globalActive } = await supabase.from('ai_providers').select('*').eq('is_global', true).eq('is_active_chat', true).maybeSingle();
+  // 6. Global active provider
+  const { data: globalActive } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('is_global', true)
+    .eq('is_active_chat', true)
+    .maybeSingle();
   if (globalActive) addProvider(globalActive as AIProviderRow);
 
-  // 4. Global other providers
-  const { data: globalOthers } = await supabase.from('ai_providers').select('*').eq('is_global', true).eq('is_active_chat', false);
+  // 7. Global fallback providers ordered by fallback_order ASC
+  const { data: globalFallbacks } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('is_global', true)
+    .eq('is_active_chat', false)
+    .gt('fallback_order', 0)
+    .order('fallback_order', { ascending: true });
+  if (globalFallbacks) globalFallbacks.forEach(row => addProvider(row as AIProviderRow));
+
+  // 8. Global remaining inactive providers
+  const { data: globalOthers } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('is_global', true)
+    .eq('is_active_chat', false)
+    .eq('fallback_order', 0);
   if (globalOthers) globalOthers.forEach(row => addProvider(row as AIProviderRow));
 
   return providers;
@@ -219,6 +287,26 @@ export async function listProviders(
   }
 
   return (data as AIProviderRow[]).map(rowToConfig);
+}
+
+/**
+ * Load a specific provider by its ID.
+ */
+export async function getProviderById(
+  supabase: SupabaseClient,
+  id: string
+): Promise<AIProviderConfig | null> {
+  const { data, error } = await supabase
+    .from('ai_providers')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return rowToConfig(data as AIProviderRow);
 }
 
 /**

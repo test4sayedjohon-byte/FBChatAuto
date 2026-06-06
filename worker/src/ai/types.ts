@@ -72,8 +72,8 @@ export const PROVIDER_PRESETS: Record<string, {
     defaultChatModel: 'openai/gpt-4o-mini',
     defaultEmbeddingModel: 'openai/text-embedding-3-small',
     extraHeaders: {
-      'HTTP-Referer': 'https://fbchatauto.pages.dev',
-      'X-Title': 'FBChatAuto',
+      'HTTP-Referer': 'https://autometabot.com',
+      'X-Title': 'AutometaBot',
     },
   },
   gemini: {

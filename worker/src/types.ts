@@ -76,4 +76,10 @@ export interface PageConnection {
   custom_system_prompt: string | null;
   ai_model: string | null;
   temperature: number;
+  ai_provider_id?: string | null;
+  enable_customer_profiling?: boolean;
+  profiling_model?: string | null;
+  trigger_words?: string[] | null;
+  trigger_responses?: string[] | null;
+  is_trigger_enabled?: boolean;
 }

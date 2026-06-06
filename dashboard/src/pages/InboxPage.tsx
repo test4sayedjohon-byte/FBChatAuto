@@ -60,6 +60,11 @@ export default function InboxPage() {
 
   const [pages, setPages] = useState<Record<string, string>>({});
 
+  const activeSessionIdRef = useRef(activeSessionId);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
   useEffect(() => {
@@ -81,7 +86,7 @@ export default function InboxPage() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `user_id=eq.${user?.id}` }, (payload) => {
         setMessages(prev => {
           // Only add if it belongs to the active session
-          if (payload.new.session_id === activeSessionId) {
+          if (payload.new.session_id === activeSessionIdRef.current) {
             return [...prev, payload.new as ChatMessage];
           }
           return prev;
@@ -93,7 +98,7 @@ export default function InboxPage() {
       supabase.removeChannel(sessionsSubscription);
       supabase.removeChannel(messagesSubscription);
     };
-  }, [user?.id, activeSessionId]);
+  }, [user?.id]);
 
   useEffect(() => {
     if (activeSessionId) {

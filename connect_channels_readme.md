@@ -45,8 +45,9 @@ Each user creates their own Meta Developer App and connects it to the platform.
    - Copy the **App ID** (located at the top of the page).
    - Find the **App Secret** field, click **Show**, enter your password, and copy the App Secret.
    - Paste both the **App ID** and **App Secret** into a Notepad/Text Editor file on your computer for easy access later.
-7. **Important Requirements for Later (Making App Live):**
-   - In the same **Basic Settings** page, you must fill in the **Privacy Policy URL** (e.g., `https://autometabot.com/privacy`) and **Terms of Service URL** (e.g., `https://autometabot.com/terms`).
+7. **Important Requirements (Required to make the App Live later):**
+   - In the same **Basic Settings** page, you **MUST** fill in the **Privacy Policy URL** and **Terms of Service URL** (e.g., `https://autometabot.com/privacy` and `https://autometabot.com/terms`).
+   - *Tip:* Fill these in now so you don't get blocked when switching to Live mode later. If you don't have privacy/terms pages set up yet, you can temporarily copy and paste the Privacy and Terms links from another public website, though using your own domain's links is best practice.
    - Select a Category (e.g., "Business and Pages").
    - Click **Save changes** at the bottom.
 8. Go back to your AutometaBot dashboard (under settings), paste the new App Secret into the field, and click **Save App Settings**.

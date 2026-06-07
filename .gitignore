@@ -6,3 +6,5 @@ dist/
 .env.local
 *.log
 Agent_Chats/
+.vscode/
+.cursor/

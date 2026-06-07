@@ -20,7 +20,7 @@ function generateId() {
 }
 
 export default function SandboxPage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [messages, setMessages] = useState<Message[]>(() => {
     const saved = localStorage.getItem('sandbox_messages');
     if (saved) {
@@ -179,20 +179,22 @@ export default function SandboxPage() {
         </div>
         
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
-            <Cpu size={16} style={{ color: 'var(--text-secondary)' }} />
-            <select 
-              className="form-select" 
-              style={{ border: 'none', background: 'var(--bg-secondary)', color: 'var(--text-primary)', padding: '4px', fontSize: '14px', width: 'auto' }}
-              value={selectedProvider}
-              onChange={handleProviderChange}
-            >
-              <option value="default">Default Active Model</option>
-              {globalProviders.map(p => (
-                <option key={p.id} value={p.id}>{p.display_name} ({p.model_chat || 'No model'})</option>
-              ))}
-            </select>
-          </div>
+          {profile?.is_super_admin && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
+              <Cpu size={16} style={{ color: 'var(--text-secondary)' }} />
+              <select 
+                className="form-select" 
+                style={{ border: 'none', background: 'var(--bg-secondary)', color: 'var(--text-primary)', padding: '4px', fontSize: '14px', width: 'auto' }}
+                value={selectedProvider}
+                onChange={handleProviderChange}
+              >
+                <option value="default">Default Active Model</option>
+                {globalProviders.map(p => (
+                  <option key={p.id} value={p.id}>{p.display_name} ({p.model_chat || 'No model'})</option>
+                ))}
+              </select>
+            </div>
+          )}
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
             <Bot size={16} style={{ color: 'var(--text-secondary)' }} />
@@ -202,7 +204,11 @@ export default function SandboxPage() {
               value={selectedPageId}
               onChange={(e) => { setSelectedPageId(e.target.value); clearChat(); }}
             >
-              <option value="global">Global Settings (No Page)</option>
+              {!profile?.is_super_admin && pages.length === 0 ? (
+                <option value="global">No connected pages</option>
+              ) : profile?.is_super_admin ? (
+                <option value="global">Global Settings (No Page)</option>
+              ) : null}
               {pages.map(p => (
                 <option key={p.page_id} value={p.page_id}>
                   {p.is_active ? '✅' : '⏸️'} {p.page_name || p.page_id}{!p.is_active ? ' (inactive)' : ''}
@@ -279,7 +285,7 @@ export default function SandboxPage() {
                     <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{msg.content}</p>
                   </div>
                   
-                  {msg.metadata && (
+                  {msg.metadata && profile?.is_super_admin && (
                     <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Sparkles size={12} />

@@ -78,6 +78,42 @@ export async function sendFacebookSenderAction(
 }
 
 /**
+ * Helper: Calculate human-like reply delay based on response length.
+ * Follows structured length-based logic 75% of the time, and completely
+ * randomized copy-paste/arbitrary behavior 25% of the time.
+ */
+export function getReplyDelay(text: string, isVisionCanned: boolean): number {
+  if (isVisionCanned) {
+    // 10 to 20 seconds
+    return Math.floor(Math.random() * 10000) + 10000;
+  }
+
+  // 25% chance of completely randomized behavior (simulating human copy-paste or erratic typing patterns)
+  if (Math.random() < 0.25) {
+    const randomChoice = Math.random();
+    if (randomChoice < 0.40) {
+      return 0; // 40% chance of instant reply (copy-paste)
+    } else if (randomChoice < 0.70) {
+      return Math.floor(Math.random() * 4000) + 1000; // 30% chance of random medium delay (1-5s)
+    } else {
+      return Math.floor(Math.random() * 9000) + 6000; // 30% chance of random long delay (6-15s)
+    }
+  }
+
+  // 75% chance of structured length-dependent delays:
+  const length = text.length;
+  if (length < 50) {
+    return Math.floor(Math.random() * 1500) + 1000; // Short text: 1 to 2.5s
+  } else if (length < 150) {
+    return Math.floor(Math.random() * 3000) + 3000; // Medium text: 3 to 6s
+  } else if (length < 300) {
+    return Math.floor(Math.random() * 4000) + 7000; // Long text: 7 to 11s
+  } else {
+    return Math.floor(Math.random() * 6000) + 12000; // Very long text: 12 to 18s
+  }
+}
+
+/**
  * Split a long message into chunks that respect word boundaries.
  */
 function splitMessage(text: string, maxLength: number): string[] {

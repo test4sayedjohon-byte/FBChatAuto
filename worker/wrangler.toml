@@ -17,4 +17,8 @@ routes = [
 # OPENAI_API_KEY         - OpenAI API key (Phase 2)
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
+
+[triggers]
+crons = ["*/5 * * * *"]
+

@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /login
+Allow: /terms
+Allow: /privacy
+Allow: /reset-password
+Disallow: /inbox
+Disallow: /knowledge
+Disallow: /folders
+Disallow: /documents
+Disallow: /providers
+Disallow: /pages
+Disallow: /sandbox
+Disallow: /store
+Disallow: /fb-app
+Disallow: /usage
+Disallow: /super-stats
+Disallow: /super-users
+Disallow: /super-purchases
+
+Sitemap: https://autometabot.com/sitemap.xml

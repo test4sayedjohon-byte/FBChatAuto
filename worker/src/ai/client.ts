@@ -25,6 +25,8 @@ export async function callChatCompletion(
     maxTokens?: number;
     temperature?: number;
     stream?: boolean;
+    tools?: any[]; // AITool[]
+    toolChoice?: 'auto' | 'none' | { type: 'function', function: { name: string } };
   }
 ): Promise<ChatCompletionResponse> {
   const url = `${provider.baseUrl}/chat/completions`;
@@ -35,7 +37,7 @@ export async function callChatCompletion(
     ...provider.extraHeaders,
   };
 
-  const body = {
+  const body: any = {
     model: provider.modelChat,
     messages,
     max_tokens: options?.maxTokens ?? provider.maxTokens ?? 1024,
@@ -43,12 +45,20 @@ export async function callChatCompletion(
     stream: options?.stream ?? false,
   };
 
+  if (options?.tools && options.tools.length > 0) {
+    body.tools = options.tools;
+    if (options.toolChoice) {
+      body.tool_choice = options.toolChoice;
+    }
+  }
+
   console.log(`[AI] Calling ${provider.providerName} (${provider.modelChat}) at ${provider.baseUrl}`);
 
   const response = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000), // 30s timeout
   });
 
   if (!response.ok) {
@@ -94,6 +104,7 @@ export async function callEmbedding(
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000), // 15s timeout
   });
 
   if (!response.ok) {

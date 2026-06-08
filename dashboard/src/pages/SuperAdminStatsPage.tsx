@@ -72,6 +72,21 @@ export default function SuperAdminStatsPage() {
 
   return (
     <div className="animate-slideUp">
+      <style>{`
+        @media (max-width: 600px) {
+          .stats-grid-responsive {
+            grid-template-columns: 1fr !important;
+          }
+          .warning-banner-flex {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 12px !important;
+          }
+          .warning-banner-flex button {
+            width: 100% !important;
+          }
+        }
+      `}</style>
       <div className="page-header flex justify-between items-center" style={{ marginBottom: pendingPurchases > 0 ? '16px' : '32px' }}>
         <div>
           <h1>Global Statistics 🌍</h1>
@@ -80,7 +95,7 @@ export default function SuperAdminStatsPage() {
       </div>
 
       {pendingPurchases > 0 && (
-        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--error)', padding: '16px 24px', borderRadius: 'var(--radius-md)', marginBottom: '32px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div className="warning-banner-flex" style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--error)', padding: '16px 24px', borderRadius: 'var(--radius-md)', marginBottom: '32px', display: 'flex', alignItems: 'center', gap: '16px' }}>
           <AlertTriangle style={{ color: 'var(--error)', flexShrink: 0 }} size={24} />
           <div style={{ flex: 1 }}>
             <h4 style={{ margin: 0, color: 'var(--error)', fontSize: '1rem', fontWeight: 'bold' }}>Action Required</h4>
@@ -92,11 +107,11 @@ export default function SuperAdminStatsPage() {
         </div>
       )}
 
-      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+      <div className="stats-grid stats-grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
         <div className="card stat-card">
           <div className="stat-label">
             <Users size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
-            Total Tenants
+            Total Users
           </div>
           <div className="stat-value">{loading ? '—' : stats.totalUsers}</div>
         </div>

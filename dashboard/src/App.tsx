@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
+import ToastContainer from './components/ToastContainer';
 import LoginPage from './pages/LoginPage';
 import TermsPage from './pages/TermsPage';
 import PrivacyPage from './pages/PrivacyPage';
@@ -13,11 +15,13 @@ import SandboxPage from './pages/SandboxPage';
 import InboxPage from './pages/InboxPage';
 import SuperAdminStatsPage from './pages/SuperAdminStatsPage';
 import SuperAdminUsersPage from './pages/SuperAdminUsersPage';
+import UserWorkspacePage from './pages/UserWorkspacePage';
 import SuperAdminPurchasesPage from './pages/SuperAdminPurchasesPage';
 import FacebookAppSettingsPage from './pages/FacebookAppSettingsPage';
 import UsagePage from './pages/UsagePage';
 import StorePage from './pages/StorePage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+
 import type { ReactNode } from 'react';
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
@@ -51,6 +55,17 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+
+
+/**
+ * Route guard for admin pages — accessible by both admin and super_admin.
+ */
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { isAdmin } = useAuth();
+  if (!isAdmin) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function PublicRoute({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
 
@@ -61,8 +76,8 @@ function PublicRoute({ children }: { children: ReactNode }) {
 }
 
 function DashboardRouter() {
-  const { profile } = useAuth();
-  if (profile?.is_super_admin) {
+  const { isAdmin } = useAuth();
+  if (isAdmin) {
     return <Navigate to="/super-stats" replace />;
   }
   return <DashboardPage />;
@@ -70,31 +85,37 @@ function DashboardRouter() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
-          <Route path="/terms" element={<TermsPage />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-            <Route path="/" element={<DashboardRouter />} />
-            <Route path="/inbox" element={<InboxPage />} />
-            <Route path="/knowledge" element={<KnowledgePage />} />
-            <Route path="/documents" element={<DocumentsPage />} />
-            <Route path="/providers" element={<ProvidersPage />} />
-            <Route path="/pages" element={<PagesPage />} />
-            <Route path="/fb-app" element={<FacebookAppSettingsPage />} />
-            <Route path="/usage" element={<UsagePage />} />
-            <Route path="/sandbox" element={<SandboxPage />} />
-            <Route path="/store" element={<StorePage />} />
-            <Route path="/super-stats" element={<SuperAdminStatsPage />} />
-            <Route path="/super-users" element={<SuperAdminUsersPage />} />
-            <Route path="/super-purchases" element={<SuperAdminPurchasesPage />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <ToastContainer />
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+              <Route path="/" element={<DashboardRouter />} />
+              <Route path="/inbox" element={<InboxPage />} />
+              <Route path="/knowledge" element={<KnowledgePage />} />
+              <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/providers" element={<ProvidersPage />} />
+              <Route path="/pages" element={<PagesPage />} />
+              <Route path="/fb-app" element={<FacebookAppSettingsPage />} />
+              <Route path="/usage" element={<UsagePage />} />
+              <Route path="/sandbox" element={<SandboxPage />} />
+              <Route path="/agent" element={<Navigate to="/" replace />} />
+              <Route path="/store" element={<StorePage />} />
+              {/* Admin routes — accessible by admin AND super_admin */}
+              <Route path="/super-stats" element={<AdminRoute><SuperAdminStatsPage /></AdminRoute>} />
+              <Route path="/super-users" element={<AdminRoute><SuperAdminUsersPage /></AdminRoute>} />
+              <Route path="/super-users/:userId" element={<AdminRoute><UserWorkspacePage /></AdminRoute>} />
+              <Route path="/super-purchases" element={<AdminRoute><SuperAdminPurchasesPage /></AdminRoute>} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

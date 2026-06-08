@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bot, Send, User, Sparkles, Loader2, AlertCircle, Trash2, Cpu } from 'lucide-react';
+import { Bot, Send, User, Sparkles, Loader, AlertCircle, Trash2, Cpu, Image, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
+import { workerPost } from '../lib/workerApi';
 
 type Message = {
   id: string;
@@ -12,6 +13,7 @@ type Message = {
     model?: string;
     ragUsed?: boolean;
     tokensUsed?: number;
+    attachment_urls?: string[];
   };
 };
 
@@ -53,6 +55,29 @@ export default function SandboxPage() {
   const [selectedProvider, setSelectedProvider] = useState('default');
   const [pages, setPages] = useState<{page_id: string, page_name: string|null, is_active: boolean}[]>([]);
   const [selectedPageId, setSelectedPageId] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<{ name: string; dataUrl: string }[]>([]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string;
+        if (dataUrl) {
+          setSelectedFiles((prev) => [...prev, { name: file.name, dataUrl }]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  const removeFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -111,39 +136,36 @@ export default function SandboxPage() {
 
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!input.trim() || isLoading || !user) return;
+    const hasAttachments = selectedFiles.length > 0;
+    if ((!input.trim() && !hasAttachments) || isLoading || !user) return;
+
+    const messageContent = input.trim();
+    const attachmentUrls = selectedFiles.map(f => f.dataUrl);
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content: messageContent || (selectedFiles.length === 1 ? '[Attachment: image]' : `[Attachment: ${selectedFiles.length} images]`),
+      metadata: hasAttachments ? {
+        attachment_urls: attachmentUrls
+      } : undefined
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
+    setSelectedFiles([]);
     setIsLoading(true);
     setError('');
 
     try {
-      // Send to our Cloudflare Worker test endpoint
-      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://metachat.junoverseai.com';
-      const response = await fetch(`${WORKER_URL}/test-chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          message: userMessage.content,
-          sessionId: sessionId,
-          pageId: selectedPageId === 'global' ? undefined : selectedPageId,
-        }),
+      // Send to our Cloudflare Worker test endpoint (authenticated)
+      const data = await workerPost('/test-chat', {
+        userId: user.id,
+        message: messageContent,
+        sessionId: sessionId,
+        pageId: selectedPageId === 'global' ? undefined : selectedPageId,
+        attachmentUrls: hasAttachments ? attachmentUrls : undefined
       });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to get response');
-      }
-
-      const data = await response.json();
 
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -169,7 +191,7 @@ export default function SandboxPage() {
 
   return (
     <div className="animate-slideUp" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 100px)' }}>
-      <div className="page-header" style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div className="page-header flex-mobile-col flex-wrap" style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px' }}>
         <div>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Sparkles size={24} style={{ color: 'var(--accent-primary)' }} />
@@ -178,7 +200,7 @@ export default function SandboxPage() {
           <p>Test your AI responses and knowledge base locally</p>
         </div>
         
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
           {profile?.is_super_admin && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
               <Cpu size={16} style={{ color: 'var(--text-secondary)' }} />
@@ -282,6 +304,24 @@ export default function SandboxPage() {
                     color: msg.role === 'user' ? 'white' : 'var(--text-primary)',
                     border: msg.role === 'assistant' ? '1px solid var(--border-primary)' : 'none'
                   }}>
+                    {msg.metadata?.attachment_urls && msg.metadata.attachment_urls.length > 0 && (
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                        {msg.metadata.attachment_urls.map((url: string, index: number) => (
+                          <img
+                            key={index}
+                            src={url}
+                            alt="Attachment"
+                            style={{
+                              maxWidth: '100%',
+                              maxHeight: '200px',
+                              borderRadius: 'var(--radius-sm)',
+                              objectFit: 'contain',
+                              border: '1px solid var(--border-light)'
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
                     <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{msg.content}</p>
                   </div>
                   
@@ -309,7 +349,7 @@ export default function SandboxPage() {
                 <Bot size={20} style={{ color: 'var(--text-primary)' }} />
               </div>
               <div style={{ padding: '16px', borderRadius: 'var(--radius-lg)', borderTopLeftRadius: '4px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                <Loader size={16} className="animate-spin" style={{ color: 'var(--accent-primary)' }} />
                 <span style={{ color: 'var(--text-muted)' }}>AI is thinking...</span>
               </div>
             </div>
@@ -319,24 +359,108 @@ export default function SandboxPage() {
       </div>
 
       {/* Input Area */}
-      <form onSubmit={handleSend} style={{ position: 'relative', display: 'flex', gap: '12px' }}>
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type a message to test the AI..."
-          disabled={isLoading}
-          className="form-input"
-          style={{ flex: 1, padding: '16px', paddingRight: '64px', borderRadius: 'var(--radius-lg)' }}
-        />
-        <button
-          type="submit"
-          disabled={!input.trim() || isLoading}
-          className="btn-primary"
-          style={{ position: 'absolute', right: '8px', top: '8px', bottom: '8px', width: '40px', padding: 0, borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <Send size={18} />
-        </button>
+      <form onSubmit={handleSend} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {/* Attachments Preview Area */}
+        {selectedFiles.length > 0 && (
+          <div style={{
+            display: 'flex',
+            gap: '12px',
+            flexWrap: 'wrap',
+            padding: '12px',
+            background: 'var(--bg-secondary)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--border-light)'
+          }}>
+            {selectedFiles.map((file, idx) => (
+              <div key={idx} style={{ position: 'relative', display: 'inline-block' }}>
+                <img
+                  src={file.dataUrl}
+                  alt={file.name}
+                  style={{
+                    width: '60px',
+                    height: '60px',
+                    borderRadius: 'var(--radius-md)',
+                    objectFit: 'cover',
+                    border: '1px solid var(--border-primary)'
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeFile(idx)}
+                  style={{
+                    position: 'absolute',
+                    top: '-6px',
+                    right: '-6px',
+                    background: 'var(--error)',
+                    color: 'white',
+                    borderRadius: '50%',
+                    width: '18px',
+                    height: '18px',
+                    padding: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '10px'
+                  }}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ position: 'relative', display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '48px',
+              height: '48px',
+              borderRadius: 'var(--radius-lg)',
+              cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-light)',
+              flexShrink: 0,
+              transition: 'all 0.2s'
+            }}
+            title="Upload Image"
+          >
+            <Image size={20} />
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+              disabled={isLoading}
+            />
+          </label>
+          
+          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={selectedFiles.length > 0 ? "Add a message or hit send..." : "Type a message to test the AI..."}
+              disabled={isLoading}
+              className="form-input"
+              style={{ flex: 1, padding: '14px', paddingRight: '54px', borderRadius: 'var(--radius-lg)', height: '48px' }}
+            />
+            <button
+              type="submit"
+              disabled={(!input.trim() && selectedFiles.length === 0) || isLoading}
+              className="btn-primary"
+              style={{ position: 'absolute', right: '4px', top: '4px', bottom: '4px', width: '40px', padding: 0, borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '40px' }}
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   );

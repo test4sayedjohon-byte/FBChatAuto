@@ -5,7 +5,6 @@ import { supabase } from '../lib/supabase';
 import {
   LayoutDashboard,
   BookOpen,
-  FileText,
   Cpu,
   Globe,
   LogOut,
@@ -14,17 +13,24 @@ import {
   Users,
   Shield,
   ChevronUp,
-  DollarSign
+  DollarSign,
+  Folder,
+  X
 } from 'lucide-react';
 
-export default function Sidebar() {
-  const { user, profile, signOut } = useAuth();
+interface SidebarProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export default function Sidebar({ isOpen, onClose }: SidebarProps) {
+  const { user, profile, isAdmin, isSuperAdmin, signOut } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [pendingPurchases, setPendingPurchases] = useState(0);
 
   useEffect(() => {
-    if (profile?.is_super_admin) {
+    if (isAdmin) {
       loadPendingPurchases();
       
       // Optional: Set up real-time subscription for purchases
@@ -56,62 +62,76 @@ export default function Sidebar() {
     : user?.email?.[0]?.toUpperCase() ?? '?';
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
       <div className="sidebar-logo">
-        <div className="sidebar-logo-icon">
-          <MessageSquare size={18} color="white" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+          <div className="sidebar-logo-icon">
+            <MessageSquare size={18} color="white" />
+          </div>
+          <h2>AutometaBot</h2>
         </div>
-        <h2>AutometaBot</h2>
+        <button 
+          className="btn-ghost btn-icon sidebar-close-btn" 
+          onClick={onClose}
+          aria-label="Close menu"
+        >
+          <X size={20} color="var(--text-secondary)" />
+        </button>
       </div>
 
       <nav className="sidebar-nav">
-        {!profile?.is_super_admin && (
+        {!isAdmin && (
           <>
             <span className="sidebar-section-label">Main</span>
 
-            <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <LayoutDashboard className="nav-icon" />
               Dashboard
             </NavLink>
             
-            <NavLink to="/inbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/inbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <MessageSquare className="nav-icon" />
               Inbox
             </NavLink>
 
-            <NavLink to="/sandbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/sandbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Bot className="nav-icon" />
               Chat Sandbox
             </NavLink>
 
-            <NavLink to="/knowledge" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/knowledge" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <BookOpen className="nav-icon" />
-              Knowledge Base
+              Quick Answers
             </NavLink>
 
-            <NavLink to="/documents" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <FileText className="nav-icon" />
-              Documents
+            <NavLink to="/documents" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Folder className="nav-icon" />
+              Knowledge Base
             </NavLink>
           </>
         )}
 
-        {profile?.is_super_admin && (
+        {isAdmin && (
           <>
-            <span className="sidebar-section-label">Super Admin</span>
-            <NavLink to="/super-stats" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <span className="sidebar-section-label">
+              {isSuperAdmin ? 'Super Admin' : 'Admin'}
+            </span>
+            <NavLink to="/super-stats" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <LayoutDashboard className="nav-icon" />
               Global Stats
             </NavLink>
-            <NavLink to="/super-users" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/super-users" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Users className="nav-icon" />
-              Users & Tenants
+              Users
             </NavLink>
-            <NavLink to="/providers" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Cpu className="nav-icon" />
-              AI Providers
-            </NavLink>
-            <NavLink to="/super-purchases" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+            {/* AI Providers — super_admin only (global provider management) */}
+            {isSuperAdmin && (
+              <NavLink to="/providers" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+                <Cpu className="nav-icon" />
+                AI Providers
+              </NavLink>
+            )}
+            <NavLink to="/super-purchases" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
               <div style={{display:'flex', alignItems:'center'}}>
                 <DollarSign className="nav-icon" />
                 Purchases
@@ -125,16 +145,16 @@ export default function Sidebar() {
           </>
         )}
 
-        {!profile?.is_super_admin && (
+        {!isAdmin && (
           <>
             <span className="sidebar-section-label">Settings</span>
 
-            <NavLink to="/pages" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/pages" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Globe className="nav-icon" />
               Meta Channels
             </NavLink>
 
-            <NavLink to="/store" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <NavLink to="/store" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <DollarSign className="nav-icon" />
               Upgrade Store
             </NavLink>
@@ -163,7 +183,7 @@ export default function Sidebar() {
 
             <NavLink 
               to="/fb-app" 
-              onClick={() => setMenuOpen(false)}
+              onClick={() => { setMenuOpen(false); onClose(); }}
               className="nav-item"
               style={{
                 padding: '8px 12px',
@@ -175,7 +195,7 @@ export default function Sidebar() {
               Meta App Settings
             </NavLink>
             <button 
-              onClick={() => { setMenuOpen(false); handleSignOut(); }}
+              onClick={() => { setMenuOpen(false); onClose(); handleSignOut(); }}
               className="nav-item"
               style={{
                 padding: '8px 12px',

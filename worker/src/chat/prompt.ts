@@ -66,13 +66,27 @@ export async function buildSystemPrompt(
   const pageId = pageConnection.page_id;
 
   // 1. Fetch the user's knowledge fields (Global or Page-specific)
-  const { data: fields } = await supabase
+  const { data: rawFields } = await supabase
     .from('knowledge_fields')
-    .select('field_name, field_value, category, value_type, display_label, description')
+    .select('field_name, field_value, category, value_type, display_label, description, page_id')
     .eq('user_id', userId)
     .eq('is_active', true)
     .or(`page_id.eq.${pageId},page_id.is.null`)
     .order('sort_order', { ascending: true });
+
+  // Deduplicate: page-specific fields override global (page_id=null) fields
+  // with the same field_name to avoid contradictory info in the prompt
+  const fieldMap = new Map<string, KnowledgeField>();
+  if (rawFields) {
+    for (const f of rawFields) {
+      const existing = fieldMap.get(f.field_name);
+      // Keep page-specific (has page_id) over global (page_id=null)
+      if (!existing || (f.page_id && !existing)) {
+        fieldMap.set(f.field_name, f as KnowledgeField);
+      }
+    }
+  }
+  const fields = Array.from(fieldMap.values());
 
   // 1b. Fetch Customer Profile Summary if profiling is enabled
   let customerSummary = null;

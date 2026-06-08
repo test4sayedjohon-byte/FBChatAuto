@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X, Loader2, DollarSign, Send, Landmark, Smartphone } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
+import { toast } from '../hooks/useToast';
 
 interface PricingModalProps {
   onClose: () => void;
@@ -13,22 +14,36 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
   const [step, setStep] = useState<'plan' | 'checkout' | 'success'>('plan');
   const [channelsToBuy, setChannelsToBuy] = useState(initialChannels);
   const [messageAddon, setMessageAddon] = useState<'default' | '+500' | '+1000' | 'unlimited'>('default');
-  const [currency, setCurrency] = useState<'USD' | 'BDT'>('USD');
+  const [visionAddon, setVisionAddon] = useState<'none' | '+50' | '+200'>('none');
+  const [agentAddon, setAgentAddon] = useState<'none' | '+50' | '+200'>('none');
+  const [currency, setCurrency] = useState<'USD' | 'BTT'>('USD');
   
   // Checkout state
   const [paymentMethod, setPaymentMethod] = useState<'manual' | 'direct_bkash' | 'direct_card' | 'direct_bank'>('manual');
   const [manualDetails, setManualDetails] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const baseRate = currency === 'BDT' ? 3000 : 30;
+  const baseRate = currency === 'BTT' ? 3000 : 30;
   const addonRates = {
     'default': 0,
-    '+500': currency === 'BDT' ? 500 : 5,
-    '+1000': currency === 'BDT' ? 800 : 8,
-    'unlimited': currency === 'BDT' ? 3000 : 30
+    '+500': currency === 'BTT' ? 500 : 5,
+    '+1000': currency === 'BTT' ? 800 : 8,
+    'unlimited': currency === 'BTT' ? 3000 : 30
+  };
+
+  const visionRates = {
+    'none': 0,
+    '+50': currency === 'BTT' ? 500 : 5,
+    '+200': currency === 'BTT' ? 1500 : 15
+  };
+
+  const agentRates = {
+    'none': 0,
+    '+50': currency === 'BTT' ? 5000 : 50,
+    '+200': currency === 'BTT' ? 15000 : 150
   };
   
-  const totalAmount = (channelsToBuy * baseRate) + addonRates[messageAddon];
+  const totalAmount = (channelsToBuy * baseRate) + addonRates[messageAddon] + visionRates[visionAddon] + agentRates[agentAddon];
 
   async function handleCheckout(e: React.FormEvent) {
     e.preventDefault();
@@ -37,10 +52,17 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
     setSubmitting(true);
     
     try {
+      // Create a descriptive string for all addons purchased
+      const descParts = [];
+      if (messageAddon !== 'default') descParts.push(`Messages: ${messageAddon}`);
+      if (visionAddon !== 'none') descParts.push(`Vision: ${visionAddon}`);
+      if (agentAddon !== 'none') descParts.push(`Agent: ${agentAddon}`);
+      const addonDescription = descParts.join(', ') || messageAddon;
+
       const { error } = await supabase.from('purchases').insert({
         user_id: user.id,
         channels_count: channelsToBuy,
-        message_addon: messageAddon,
+        message_addon: addonDescription,
         currency: currency,
         total_amount: totalAmount,
         payment_method: paymentMethod,
@@ -51,7 +73,7 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
       if (error) throw error;
       setStep('success');
     } catch (error: any) {
-      alert('Error submitting purchase: ' + error.message);
+      toast.error('Error submitting purchase: ' + error.message);
     } finally {
       setSubmitting(false);
     }
@@ -79,9 +101,9 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
                   style={{padding: '4px 12px', borderRadius: '4px', border: 'none', background: currency === 'USD' ? 'var(--accent-primary)' : 'transparent', color: currency === 'USD' ? '#fff' : 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold'}}
                 >USD ($)</button>
                 <button 
-                  onClick={() => setCurrency('BDT')} 
-                  style={{padding: '4px 12px', borderRadius: '4px', border: 'none', background: currency === 'BDT' ? 'var(--accent-primary)' : 'transparent', color: currency === 'BDT' ? '#fff' : 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold'}}
-                >BDT (৳)</button>
+                  onClick={() => setCurrency('BTT')} 
+                  style={{padding: '4px 12px', borderRadius: '4px', border: 'none', background: currency === 'BTT' ? 'var(--accent-primary)' : 'transparent', color: currency === 'BTT' ? '#fff' : 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold'}}
+                >BTT</button>
               </div>
             </div>
 
@@ -98,7 +120,7 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
                 onChange={e => setChannelsToBuy(parseInt(e.target.value))}
                 style={{width: '100%', accentColor: 'var(--accent-primary)'}} 
               />
-              <p className="form-hint" style={{marginTop: '8px'}}>Base price: {currency === 'BDT' ? '3000 ৳' : '$30'} / channel</p>
+              <p className="form-hint" style={{marginTop: '8px'}}>Base price: {currency === 'BTT' ? '3000 BTT' : '$30'} / channel</p>
             </div>
 
             <div className="form-group" style={{marginTop: '20px'}}>
@@ -116,7 +138,47 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
                         : addon === 'unlimited' ? 'Unlimited Messages' : `+ ${addon} Messages`}
                     </div>
                     <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px'}}>
-                      {addon === 'default' ? 'Included free' : `+ ${currency === 'BDT' ? `${addonRates[addon as keyof typeof addonRates]} ৳` : `$${addonRates[addon as keyof typeof addonRates]}`} / month`}
+                      {addon === 'default' ? 'Included free' : `+ ${currency === 'BTT' ? `${addonRates[addon as keyof typeof addonRates]} BTT` : `$${addonRates[addon as keyof typeof addonRates]}`} / month`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-group" style={{marginTop: '20px'}}>
+              <label className="form-label">Image Vision Queries Addon</label>
+              <div style={{display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '8px'}}>
+                {['none', '+50', '+200'].map((addon) => (
+                  <div 
+                    key={addon}
+                    onClick={() => setVisionAddon(addon as any)}
+                    style={{padding: '12px', borderRadius: '8px', border: `2px solid ${visionAddon === addon ? '#10b981' : 'var(--border-light)'}`, cursor: 'pointer', background: visionAddon === addon ? 'rgba(16,185,129,0.05)' : 'var(--bg-secondary)'}}
+                  >
+                    <div style={{fontWeight: 'bold', fontSize: '0.9rem'}}>
+                      {addon === 'none' ? 'No Extra Vision' : `${addon} Vision`}
+                    </div>
+                    <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px'}}>
+                      {addon === 'none' ? 'None' : `+ ${currency === 'BTT' ? `${visionRates[addon as keyof typeof visionRates]} BTT` : `$${visionRates[addon as keyof typeof visionRates]}`}`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-group" style={{marginTop: '20px'}}>
+              <label className="form-label">Dashboard AI Agent Queries Addon</label>
+              <div style={{display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '8px'}}>
+                {['none', '+50', '+200'].map((addon) => (
+                  <div 
+                    key={addon}
+                    onClick={() => setAgentAddon(addon as any)}
+                    style={{padding: '12px', borderRadius: '8px', border: `2px solid ${agentAddon === addon ? 'var(--accent-primary)' : 'var(--border-light)'}`, cursor: 'pointer', background: agentAddon === addon ? 'rgba(249,115,22,0.05)' : 'var(--bg-secondary)'}}
+                  >
+                    <div style={{fontWeight: 'bold', fontSize: '0.9rem'}}>
+                      {addon === 'none' ? 'No Extra Agent' : `${addon} Agent`}
+                    </div>
+                    <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px'}}>
+                      {addon === 'none' ? 'None' : `+ ${currency === 'BTT' ? `${agentRates[addon as keyof typeof agentRates]} BTT` : `$${agentRates[addon as keyof typeof agentRates]}`}`}
                     </div>
                   </div>
                 ))}
@@ -127,7 +189,7 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                 <span style={{fontWeight: 'bold', fontSize: '1.1rem'}}>Total Monthly Cost</span>
                 <span style={{fontWeight: 'bold', fontSize: '1.5rem', color: 'var(--accent-primary)'}}>
-                  {currency === 'BDT' ? '৳ ' : '$'}{totalAmount}
+                  {currency === 'BTT' ? 'BTT ' : '$'}{totalAmount}
                 </span>
               </div>
             </div>
@@ -138,7 +200,7 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
                 className="btn btn-primary" 
                 onClick={() => setStep('checkout')}
                 disabled={totalAmount === 0}
-                title={totalAmount === 0 ? 'Please select at least 1 channel or a message addon.' : ''}
+                title={totalAmount === 0 ? 'Please select at least one upgrade option.' : ''}
               >
                 Proceed to Checkout
               </button>
@@ -150,7 +212,7 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
           <form onSubmit={handleCheckout} className="modal-body">
             <div style={{background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.2)', padding: '16px', borderRadius: '8px', marginBottom: '20px'}}>
               <div style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Amount to Pay:</div>
-              <div style={{fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--accent-primary)'}}>{currency === 'BDT' ? '৳ ' : '$'}{totalAmount}</div>
+              <div style={{fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--accent-primary)'}}>{currency === 'BTT' ? 'BTT ' : '$'}{totalAmount}</div>
             </div>
 
             <div className="form-group">
@@ -174,7 +236,7 @@ export default function PricingModal({ onClose, initialChannels = 1 }: PricingMo
             {paymentMethod === 'manual' && (
               <div className="form-group" style={{marginTop: '20px', padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px'}}>
                 <p style={{fontSize: '0.9rem', marginBottom: '12px'}}>
-                  Please transfer <strong>{currency === 'BDT' ? '৳ ' : '$'}{totalAmount}</strong> manually and contact us on WhatsApp or Telegram with your payment details.
+                   Please transfer <strong>{currency === 'BTT' ? 'BTT ' : '$'}{totalAmount}</strong> manually and contact us on WhatsApp or Telegram with your payment details.
                 </p>
                 <div style={{display: 'flex', gap: '12px', marginBottom: '16px'}}>
                   <a href="https://wa.me/123456789" target="_blank" rel="noreferrer" className="btn btn-secondary" style={{flex: 1, display: 'flex', justifyContent: 'center', background: '#25D366', color: '#fff', border: 'none'}}>

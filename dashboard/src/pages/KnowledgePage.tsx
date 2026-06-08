@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { toast } from '../hooks/useToast';
 import { supabase } from '../lib/supabase';
 import { Plus, Pencil, Trash2, BookOpen, Save, X, Filter, Upload } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import HelpTooltip from '../components/HelpTooltip';
 
 interface KnowledgeField {
   id: string;
@@ -18,6 +21,7 @@ interface PageOption {
 }
 
 export default function KnowledgePage() {
+  useDocumentTitle('Quick Answers — AutometaBot');
   const { user } = useAuth();
   const [fields, setFields] = useState<KnowledgeField[]>([]);
   const [pages, setPages] = useState<PageOption[]>([]);
@@ -47,6 +51,10 @@ export default function KnowledgePage() {
   useEffect(() => {
     if (user) {
       loadAll();
+      
+      const handleAgentUpdate = () => loadAll();
+      window.addEventListener('agent-data-updated', handleAgentUpdate);
+      return () => window.removeEventListener('agent-data-updated', handleAgentUpdate);
     }
   }, [user]);
 
@@ -98,7 +106,7 @@ export default function KnowledgePage() {
     setSaving(true);
 
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { alert('You must be logged in.'); setSaving(false); return; }
+    if (!user) { toast.error('You must be logged in.'); setSaving(false); return; }
 
     const finalCategory = selectedCategoryOption === 'custom'
       ? customCategoryValue.trim().toLowerCase().replace(/\s+/g, '_') || 'general'
@@ -116,12 +124,12 @@ export default function KnowledgePage() {
         .from('knowledge_fields')
         .update(payload)
         .eq('id', editingField.id);
-      if (error) { alert('Error: ' + error.message); }
+      if (error) { toast.error('Error: ' + error.message); }
     } else {
       const { error } = await supabase
         .from('knowledge_fields')
         .insert({ ...payload, user_id: user.id });
-      if (error) { alert('Error: ' + error.message); }
+      if (error) { toast.error('Error: ' + error.message); }
     }
 
     setSaving(false);
@@ -172,9 +180,9 @@ export default function KnowledgePage() {
       setShowImportModal(false);
       setImportJson('');
       loadAll();
-      alert('Knowledge base imported successfully!');
+      toast.success('Knowledge base imported successfully!');
     } catch (err: any) {
-      alert('Import failed: ' + err.message);
+      toast.error('Import failed: ' + err.message);
     }
     setImporting(false);
   }
@@ -205,12 +213,15 @@ export default function KnowledgePage() {
 
   return (
     <div className="animate-slideUp">
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1>Knowledge Base</h1>
-          <p>Add business information that the AI will use to answer customer questions.</p>
+          <h1 style={{ display: 'flex', alignItems: 'center' }}>
+            Quick Answers
+            <HelpTooltip id="quickAnswers" />
+          </h1>
+          <p>Store short, strict rules and facts about your business that the AI can instantly look up.</p>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
             <Upload size={16} /> Import AI Data
           </button>
@@ -270,8 +281,8 @@ export default function KnowledgePage() {
         <div className="card">
           <div className="empty-state">
             <BookOpen className="empty-state-icon" />
-            <h3>No Knowledge Fields</h3>
-            <p>Add business information like hours, pricing, and policies. The AI will inject these into every response.</p>
+            <h3>No Quick Answers</h3>
+            <p>Add fields below to give the AI factual context about your business. The AI will inject these into every response.</p>
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginTop: '16px' }}>
               <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
                 <Upload size={16} /> Import AI Data
@@ -285,7 +296,7 @@ export default function KnowledgePage() {
       ) : (
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
           gap: '20px'
         }}>
           {sortedFields.map((field) => (
@@ -386,7 +397,7 @@ export default function KnowledgePage() {
         <div className="modal-overlay" onClick={() => setShowImportModal(false)}>
           <div className="modal" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Import Knowledge Base Data</h2>
+              <h2>Import Quick Answers</h2>
               <button className="btn-ghost btn-icon" onClick={() => setShowImportModal(false)}>
                 <X size={18} />
               </button>

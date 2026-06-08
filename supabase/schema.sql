@@ -26,7 +26,11 @@ CREATE TABLE public.users (
                     CHECK (plan IN ('free', 'pro', 'enterprise')),
     settings        JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    agent_monthly_limit INT NOT NULL DEFAULT 30,
+    agent_queries_used  INT NOT NULL DEFAULT 0,
+    agent_extra_queries INT NOT NULL DEFAULT 0,
+    agent_usage_month   TEXT
 );
 
 COMMENT ON TABLE public.users IS 'Public user profiles extending Supabase Auth. One row per tenant.';
@@ -310,14 +314,15 @@ CREATE OR REPLACE FUNCTION public.get_session_context(
 RETURNS TABLE (
     role TEXT,
     content TEXT,
-    created_at TIMESTAMPTZ
+    created_at TIMESTAMPTZ,
+    metadata JSONB
 )
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-    SELECT cm.role, cm.content, cm.created_at
+    SELECT cm.role, cm.content, cm.created_at, cm.metadata
     FROM public.chat_messages cm
     WHERE cm.session_id = p_session_id
     ORDER BY cm.created_at DESC
@@ -354,9 +359,10 @@ AS $$
         dc.metadata
     FROM public.document_chunks dc
     JOIN public.documents d ON d.id = dc.document_id
+    JOIN public.folder_page_assignments fpa ON fpa.folder_id = d.folder_id
     WHERE dc.user_id = p_user_id
       AND d.is_active = true
-      AND (d.page_id IS NULL OR d.page_id = p_page_id)
+      AND (p_page_id IS NULL OR fpa.page_id = p_page_id)
       AND 1 - (dc.embedding <=> p_query_embedding) > p_match_threshold
     ORDER BY dc.embedding <=> p_query_embedding
     LIMIT p_match_count;

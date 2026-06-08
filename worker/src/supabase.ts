@@ -34,12 +34,35 @@ export async function getPageConnection(
   const { data, error } = await supabase
     .from('page_connections')
     .select('*')
-    .or(`page_id.eq.${pageId},instagram_account_id.eq.${pageId}`)
+    .or(`page_id.eq.${pageId},instagram_account_id.eq.${pageId},whatsapp_phone_number_id.eq.${pageId}`)
     .eq('is_active', true)
     .maybeSingle();
 
   if (error || !data) {
     if (error) console.error(`[Supabase] Error fetching page connection for ${pageId}:`, error.message);
+    return null;
+  }
+
+  return data as PageConnection;
+}
+
+/**
+ * Look up a page connection by WhatsApp Phone Number ID.
+ */
+export async function getWhatsAppConnection(
+  supabase: SupabaseClient,
+  phoneNumberId: string
+): Promise<PageConnection | null> {
+  const { data, error } = await supabase
+    .from('page_connections')
+    .select('*')
+    .eq('whatsapp_phone_number_id', phoneNumberId)
+    .eq('is_active', true)
+    .eq('is_whatsapp_active', true)
+    .maybeSingle();
+
+  if (error || !data) {
+    if (error) console.error(`[Supabase] Error fetching WhatsApp connection for ${phoneNumberId}:`, error.message);
     return null;
   }
 
@@ -78,7 +101,9 @@ export async function storeIncomingMessage(
   const sessionId = sessionData.o_session_id;
   const botPaused = sessionData.o_bot_paused;
 
-  // 2. Check for duplicate message (Facebook can retry webhooks)
+  // 2. Check for duplicate message (Facebook can retry webhooks).
+  //    We do a pre-check first as an optimisation, but the real safety net
+  //    is the UNIQUE index on fb_message_id at the DB level below.
   const { data: existing } = await supabase
     .from('chat_messages')
     .select('id')
@@ -86,11 +111,14 @@ export async function storeIncomingMessage(
     .maybeSingle();
 
   if (existing) {
-    console.log(`[Webhook] Duplicate message ${fbMessageId}, skipping`);
+    console.log(`[Webhook] Duplicate message ${fbMessageId} detected (pre-check), skipping`);
     return null; // Return null so the worker doesn't process it again
   }
 
-  // 3. Insert the user's message
+  // 3. Insert the user's message.
+  //    The DB has a partial UNIQUE index on fb_message_id (WHERE fb_message_id IS NOT NULL).
+  //    If a concurrent worker already inserted this exact message, Postgres throws error code
+  //    23505 (unique_violation). We treat this as a safe duplicate and bail out.
   const { error: insertError } = await supabase.from('chat_messages').insert({
     session_id: sessionId,
     user_id: userId,
@@ -100,6 +128,11 @@ export async function storeIncomingMessage(
   });
 
   if (insertError) {
+    // 23505 = unique_violation — another worker already inserted this message
+    if ((insertError as any).code === '23505') {
+      console.log(`[Webhook] Duplicate message ${fbMessageId} rejected by DB unique constraint, skipping`);
+      return null;
+    }
     console.error('[Supabase] Failed to insert message:', insertError.message);
     return null;
   }
@@ -118,7 +151,9 @@ export async function storeIncomingMessage(
 
   if (!sessionInfo?.sender_name && accessToken) {
     try {
-      const fbRes = await fetch(`https://graph.facebook.com/v21.0/${senderId}?fields=first_name,last_name,profile_pic&access_token=${accessToken}`);
+      const fbRes = await fetch(`https://graph.facebook.com/v21.0/${senderId}?fields=first_name,last_name,profile_pic`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+      });
       if (fbRes.ok) {
         const fbData: any = await fbRes.json();
         if (fbData.first_name || fbData.last_name) {
@@ -139,4 +174,51 @@ export async function storeIncomingMessage(
     .eq('id', sessionId);
 
   return { sessionId, botPaused };
+}
+
+// ============================================================================
+// Session Concurrency Lock Helpers
+// ============================================================================
+// These prevent two concurrent Cloudflare Worker invocations from processing
+// the same chat session at the same time, avoiding double AI replies.
+
+/**
+ * Attempt to acquire an exclusive processing lock on a chat session.
+ * Returns true if the lock was granted, false if another worker holds it.
+ * The lock auto-expires after `durationSeconds` to prevent deadlocks.
+ */
+export async function acquireSessionLock(
+  supabase: SupabaseClient,
+  sessionId: string,
+  durationSeconds: number = 30
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc('acquire_session_lock', {
+    p_session_id: sessionId,
+    p_lock_duration: durationSeconds,
+  });
+
+  if (error) {
+    console.error('[Supabase] Failed to acquire session lock:', error.message);
+    // On error, allow processing to continue rather than blocking everything
+    return true;
+  }
+
+  return data === true;
+}
+
+/**
+ * Release the processing lock on a chat session.
+ * Always call this in a `finally` block after processing is complete.
+ */
+export async function releaseSessionLock(
+  supabase: SupabaseClient,
+  sessionId: string
+): Promise<void> {
+  const { error } = await supabase.rpc('release_session_lock', {
+    p_session_id: sessionId,
+  });
+
+  if (error) {
+    console.error('[Supabase] Failed to release session lock:', error.message);
+  }
 }

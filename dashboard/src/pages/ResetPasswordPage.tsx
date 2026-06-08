@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Loader2, Key } from 'lucide-react';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState('');
@@ -11,6 +12,8 @@ export default function ResetPasswordPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useDocumentTitle('Reset Password — AutometaBot', 'Set a new password for your AutometaBot account.', 'https://autometabot.com/reset-password');
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();

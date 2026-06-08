@@ -3,8 +3,10 @@ import { useState, useId, useEffect } from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
+import { toast } from "../hooks/useToast";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 // Helper for minimal class merging without tailwind-merge
 function cn(...classes: (string | undefined | null | false)[]) {
@@ -345,7 +347,7 @@ function AuthFormContainer({ mode, setMode }: { mode: 'signin' | 'signup' | 'for
                 </span>
             </div>
             
-            <Button variant="secondary" type="button" onClick={() => alert("Google login not implemented yet.")} style={{ width: "100%", marginTop: "16px", display: "flex", gap: "8px", alignItems: "center", justifyContent: "center" }}>
+            <Button variant="secondary" type="button" onClick={() => toast.info("Google login not implemented yet.")} style={{ width: "100%", marginTop: "16px", display: "flex", gap: "8px", alignItems: "center", justifyContent: "center" }}>
                 <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google icon" style={{ width: "18px", height: "18px" }} />
                 Continue with Google
             </Button>
@@ -471,5 +473,6 @@ export function AuthUI({ signInContent = {}, signUpContent = {} }: AuthUIProps) 
 }
 
 export default function LoginPage() {
+  useDocumentTitle('Sign In — AutometaBot', 'Sign in or create an account for AutometaBot.', 'https://autometabot.com/login');
   return <AuthUI />;
 }

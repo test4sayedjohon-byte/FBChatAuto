@@ -17,7 +17,31 @@ export interface Env {
 
   // General
   ENVIRONMENT: string;
+  
+  // Agent configuration (optional, for highly capable agentic tasks)
+  AGENT_API_KEY?: string;
+  AGENT_MODEL?: string;
 }
+
+/**
+ * Authenticated user info attached by the requireAuth middleware.
+ */
+export interface AuthUser {
+  id: string;
+  email?: string;
+}
+
+/**
+ * Hono app environment type — combines Cloudflare bindings with
+ * custom context variables set by middleware (e.g., authUser).
+ */
+export type AppEnv = {
+  Bindings: Env;
+  Variables: {
+    authUser: AuthUser;
+  };
+};
+
 
 /**
  * Facebook Webhook Event payload.
@@ -62,6 +86,98 @@ export interface FacebookMessagingEvent {
 }
 
 /**
+ * WhatsApp Webhook Event payload.
+ * @see https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples
+ */
+export interface WhatsAppWebhookEvent {
+  object: string;
+  entry: WhatsAppEntry[];
+}
+
+export interface WhatsAppEntry {
+  id: string;        // WABA (WhatsApp Business Account) ID
+  changes: WhatsAppChange[];
+}
+
+export interface WhatsAppChange {
+  value: WhatsAppValue;
+  field: string;
+}
+
+export interface WhatsAppValue {
+  messaging_product: string; // 'whatsapp'
+  metadata: {
+    display_phone_number: string;
+    phone_number_id: string;
+  };
+  contacts?: WhatsAppContact[];
+  messages?: WhatsAppMessage[];
+  statuses?: WhatsAppStatus[];
+}
+
+export interface WhatsAppContact {
+  profile: {
+    name: string;
+  };
+  wa_id: string;
+}
+
+export interface WhatsAppMessage {
+  from: string;
+  id: string;
+  timestamp: string;
+  type: string;
+  text?: {
+    body: string;
+  };
+  image?: {
+    mime_type: string;
+    sha256: string;
+    id: string;
+  };
+  audio?: {
+    mime_type: string;
+    sha256: string;
+    id: string;
+  };
+  video?: {
+    mime_type: string;
+    sha256: string;
+    id: string;
+  };
+  document?: {
+    mime_type: string;
+    sha256: string;
+    id: string;
+    filename?: string;
+  };
+  voice?: {
+    mime_type: string;
+    sha256: string;
+    id: string;
+  };
+  interactive?: {
+    type: string;
+    button_reply?: {
+      id: string;
+      title: string;
+    };
+    list_reply?: {
+      id: string;
+      title: string;
+      description?: string;
+    };
+  };
+}
+
+export interface WhatsAppStatus {
+  id: string;
+  status: string;
+  timestamp: string;
+  recipient_id: string;
+}
+
+/**
  * Page connection row from Supabase.
  */
 export interface PageConnection {
@@ -82,4 +198,7 @@ export interface PageConnection {
   trigger_words?: string[] | null;
   trigger_responses?: string[] | null;
   is_trigger_enabled?: boolean;
+  whatsapp_phone_number_id?: string | null;
+  whatsapp_business_account_id?: string | null;
+  is_whatsapp_active?: boolean;
 }

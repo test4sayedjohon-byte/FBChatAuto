@@ -8,3 +8,4 @@ dist/
 Agent_Chats/
 .vscode/
 .cursor/
+.test-credentials.json

@@ -19,7 +19,7 @@
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getAllChatProviders, getActiveEmbeddingProvider, getProviderById } from '../ai/provider';
+import { getAllChatProviders, getActiveEmbeddingProvider, getProviderById, getActiveVisionProvider } from '../ai/provider';
 import { callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage } from '../ai/types';
 import { searchDocuments } from '../rag/pipeline';
@@ -96,14 +96,13 @@ export async function handleChatMessage(
     const monthlyLimit = userData?.monthly_token_limit ?? 500000;
     const strictEnforcement = userData?.strict_token_enforcement ?? true;
 
-    // Fetch token counts for messages from this user in the current month
-    const { data: usageData } = await supabase
-      .from('chat_messages')
-      .select('token_count')
-      .eq('user_id', userId)
-      .gte('created_at', startOfMonth.toISOString());
+    // Get total token usage for the month via DB-side SUM (uses composite index)
+    const { data: usageResult } = await supabase.rpc('get_monthly_token_usage', {
+      p_user_id: userId,
+      p_month_start: startOfMonth.toISOString(),
+    });
 
-    const currentUsage = (usageData ?? []).reduce((acc: number, row: any) => acc + (row.token_count || 0), 0);
+    const currentUsage = typeof usageResult === 'number' ? usageResult : 0;
 
     if (currentUsage >= monthlyLimit) {
       console.warn(`[Chat] Tenant ${userId} has exceeded monthly token limit: ${currentUsage} >= ${monthlyLimit}`);
@@ -128,23 +127,200 @@ export async function handleChatMessage(
     p_limit: chatProviders[0].contextWindow,
   });
 
+  const rows = historyRows ?? [];
+
+  // Determine if vision is needed: check if any user message since the last assistant/human reply has attachments
+  let needsVision = false;
+  for (const row of rows) {
+    if (row.role === 'assistant' || row.role === 'human_agent') {
+      break; // Stop at the last response
+    }
+    if (row.role === 'user' && row.metadata?.attachment_urls?.length > 0) {
+      needsVision = true;
+      break;
+    }
+  }
+
   // Convert DB rows to ChatMessage format (reverse to chronological order)
-  const history: ChatMessage[] = (historyRows ?? [])
+  const history: ChatMessage[] = [...rows]
     .reverse()
-    .map((row: any) => ({
-      // The AI API only accepts 'user', 'assistant', or 'system'. 
-      // If a human agent sent a message, we tell the AI that the 'assistant' sent it
-      role: (row.role === 'human_agent' ? 'assistant' : row.role) as 'user' | 'assistant',
-      content: row.content,
-    }));
+    .map((row: any) => {
+      let finalContent: any = row.content;
+
+      // If this message has attachments
+      if (row.metadata?.attachment_urls?.length > 0) {
+        if (needsVision) {
+          // Multimodal format for vision models
+          finalContent = [];
+          if (row.content && !row.content.startsWith('[Attachment:')) {
+            finalContent.push({ type: 'text', text: row.content });
+          } else {
+            // Always include a text part — many models reject image-only arrays
+            finalContent.push({ type: 'text', text: 'What is in this image? Describe what you see and respond helpfully.' });
+          }
+          for (const url of row.metadata.attachment_urls) {
+            finalContent.push({ type: 'image_url', image_url: { url } });
+          }
+        } else {
+          // Plain text fallback for text-only models to avoid 400 Bad Request
+          if (row.content && !row.content.startsWith('[Attachment:')) {
+            finalContent = `${row.content} [Attached Image]`;
+          } else {
+            finalContent = '[Attached Image]';
+          }
+        }
+      }
+
+      return {
+        // The AI API only accepts 'user', 'assistant', or 'system'. 
+        // If a human agent sent a message, we tell the AI that the 'assistant' sent it
+        role: (row.role === 'human_agent' ? 'assistant' : row.role) as 'user' | 'assistant',
+        content: finalContent,
+      };
+    });
+
+  // If vision is needed for the current message, find a dedicated vision provider.
+  // IMPORTANT: When needsVision=true, we ONLY try the vision provider.
+  // Do NOT fall back through text-only providers — each has a 30s timeout, and
+  // cascading through all of them (with multimodal payloads they can't process)
+  // causes the Cloudflare Worker to time out before sending any reply.
+  if (needsVision) {
+    const humanVisionReplies = [
+      "Thanks for sharing! 🖼️ I can't quite view images directly at the moment. Could you type out a quick description of it for me?",
+      "I see you sent an image! 📷 Unfortunately, I'm unable to analyze images right now. If you have a question about it, please describe it in text!",
+      "Appreciate the image! 🖼️ I'm currently unable to view or process photos. Could you tell me a bit about what's in the image?",
+      "I received your photo! 📸 However, I can't process images at this time. Could you describe what you need help with in writing?",
+      "Nice picture! 🖼️ I'm not able to view attachments right now. Could you please explain what is in the image in text?",
+      "Got your image! 📷 My vision features are currently offline, so I can't view it. Please type out a description of what you'd like me to look at!",
+      "Thanks for sending! 🖼️ I don't have the ability to view photos right now. If you can describe it in text, I'd be happy to help!",
+      "I see the attachment! 📸 I'm only able to read text messages at the moment. Can you tell me what the image shows?"
+    ];
+
+    const getRandomVisionReply = () => {
+      const idx = Math.floor(Math.random() * humanVisionReplies.length);
+      return humanVisionReplies[idx];
+    };
+
+    const visionProvider = await getActiveVisionProvider(supabase, userId);
+
+    const visionCannedReply = async (reason: string): Promise<ChatHandlerResult> => {
+      const msg = getRandomVisionReply();
+      console.warn(`[Chat] ⚠️ Vision failed: ${reason}. Returning canned reply.`);
+      await supabase.from('chat_messages').insert({
+        session_id: sessionId,
+        user_id: userId,
+        role: 'assistant',
+        content: msg,
+        metadata: { provider: 'vision-failed', model: 'canned', rag_used: false, reason },
+      });
+      return { reply: msg, sessionId, ragUsed: false, provider: 'vision-failed', model: 'canned' };
+    };
+
+    if (!visionProvider) {
+      const noConfigMsg = getRandomVisionReply();
+      await supabase.from('chat_messages').insert({
+        session_id: sessionId,
+        user_id: userId,
+        role: 'assistant',
+        content: noConfigMsg,
+        metadata: { provider: 'vision-not-configured', model: 'canned', rag_used: false },
+      });
+      return { reply: noConfigMsg, sessionId, ragUsed: false, provider: 'vision-not-configured', model: 'canned' };
+    }
+
+    // Check vision quota limits
+    try {
+      const { data: userProfile } = await supabase
+        .from('users')
+        .select('vision_monthly_limit, vision_queries_used, vision_extra_queries, vision_usage_month')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      let {
+        vision_monthly_limit = 30,
+        vision_queries_used = 0,
+        vision_extra_queries = 0,
+        vision_usage_month
+      } = userProfile || {};
+
+      if (vision_usage_month !== currentMonth) {
+        vision_queries_used = 0;
+        vision_extra_queries = 0;
+        vision_usage_month = currentMonth;
+      }
+
+      let hasQuota = false;
+      if (vision_queries_used < vision_monthly_limit) {
+        vision_queries_used++;
+        hasQuota = true;
+      } else if (vision_extra_queries > 0) {
+        vision_extra_queries--;
+        hasQuota = true;
+      }
+
+      if (!hasQuota) {
+        const quotaMsg = getRandomVisionReply();
+        await supabase.from('chat_messages').insert({
+          session_id: sessionId,
+          user_id: userId,
+          role: 'assistant',
+          content: quotaMsg,
+          metadata: { provider: 'vision-limit-exceeded', model: 'canned', rag_used: false },
+        });
+        return { reply: quotaMsg, sessionId, ragUsed: false, provider: 'vision-limit-exceeded', model: 'canned' };
+      }
+
+      // Update vision usage in database
+      await supabase
+        .from('users')
+        .update({
+          vision_queries_used,
+          vision_extra_queries,
+          vision_usage_month
+        })
+        .eq('id', userId);
+    } catch (quotaErr) {
+      console.error('[Chat] Failed checking vision quota limits, continuing execution:', quotaErr);
+    }
+
+    // Try ONLY the vision provider — fail fast instead of cascading through text providers
+    console.log(`[Chat] 👁️ Vision required. Using: ${visionProvider.providerName} (${visionProvider.modelChat})`);
+    try {
+      const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, undefined);
+      const visionMessages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...history];
+      const response = await callChatCompletion(visionProvider, visionMessages, { maxTokens: 1024 });
+      const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't analyze the image. Please try again.";
+      await supabase.from('chat_messages').insert({
+        session_id: sessionId,
+        user_id: userId,
+        role: 'assistant',
+        content: reply,
+        token_count: response.usage?.total_tokens ?? response.usage?.completion_tokens,
+        metadata: { provider: visionProvider.providerName, model: response.model, tokens: response.usage, rag_used: false },
+      });
+      console.log(`[Chat] ✅ Vision response generated via ${visionProvider.providerName}`);
+      return { reply, sessionId, tokensUsed: response.usage?.total_tokens, ragUsed: false, provider: visionProvider.providerName, model: visionProvider.modelChat };
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      console.error(`[Chat] ❌ Vision provider failed:`, errMsg);
+      return visionCannedReply(errMsg.substring(0, 120));
+    }
+  }
+
 
   console.log(`[Chat] Loaded ${history.length} messages from session context`);
 
   // 3. Determine if we need RAG
+  // For messages with text (even if they also have images), use the text for RAG.
+  // Only skip RAG when the message is purely attachment-only with no user text.
+  const ragQuery = userMessage.startsWith('[Attachment:') || userMessage.startsWith('[Shared')
+    ? '' // No meaningful text to embed
+    : userMessage.replace(/\[Shared:.*?\]/g, '').replace(/\[Shared Link:.*?\]/g, '').trim(); // Strip link annotations, keep user text
   let ragContext: string | undefined;
   let ragUsed = false;
 
-  if (shouldTriggerRAG(userMessage, history)) {
+  if (ragQuery && shouldTriggerRAG(ragQuery, history)) {
     console.log('[Chat] RAG triggered — searching knowledge base');
 
     const embeddingProvider = await getActiveEmbeddingProvider(supabase, userId);
@@ -155,7 +331,7 @@ export async function handleChatMessage(
           supabase,
           embeddingProvider,
           userId,
-          userMessage,
+          ragQuery,
           pageConnection.page_id,
           0.4, // Low threshold to ensure short/simple docs are still retrieved
           3     // Top 3 results
@@ -234,8 +410,8 @@ export async function handleChatMessage(
         sessionId,
         tokensUsed,
         ragUsed,
-        provider: chatProvider.providerName,
-        model: chatProvider.modelChat,
+        provider: executionProvider.providerName,
+        model: executionProvider.modelChat,
       };
     } catch (error) {
       if (error instanceof AIProviderError) {

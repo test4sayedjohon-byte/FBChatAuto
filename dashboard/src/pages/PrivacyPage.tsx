@@ -1,4 +1,7 @@
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+
 export default function PrivacyPage() {
+  useDocumentTitle('Privacy Policy — AutometaBot', 'Learn how AutometaBot collects, uses, and secures your data.', 'https://autometabot.com/privacy');
   return (
     <div className="card" style={{ maxWidth: '800px', margin: '40px auto', padding: '40px' }}>
       <h1 style={{ marginBottom: '24px' }}>Privacy Policy</h1>

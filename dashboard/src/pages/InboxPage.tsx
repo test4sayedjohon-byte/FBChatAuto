@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
+import { toast } from '../hooks/useToast';
 import { useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { workerPost } from '../lib/workerApi';
 import { useAuth } from '../hooks/useAuth';
-import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle } from 'lucide-react';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft } from 'lucide-react';
 
 function timeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -41,6 +44,7 @@ type ChatMessage = {
 };
 
 export default function InboxPage() {
+  useDocumentTitle('Inbox — AutometaBot');
   const { user } = useAuth();
   const location = useLocation();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -53,12 +57,28 @@ export default function InboxPage() {
   const [scrollToTrigger, setScrollToTrigger] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Mobile responsiveness display states
+  const showSidebar = !isMobile || activeSessionId === null;
+  const showMain = !isMobile || activeSessionId !== null;
+
   // Profiling Summary State
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [customerSummary, setCustomerSummary] = useState<string | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
 
   const [pages, setPages] = useState<Record<string, string>>({});
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const activeSessionIdRef = useRef(activeSessionId);
   useEffect(() => {
@@ -154,18 +174,42 @@ export default function InboxPage() {
     setLoadingSessions(false);
   };
 
+  const MESSAGE_PAGE_SIZE = 50;
+
   const fetchMessages = async (sessionId: string) => {
     setLoadingMessages(true);
+    setHasMoreMessages(false);
     const { data, error } = await supabase
       .from('chat_messages')
       .select('*')
       .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(MESSAGE_PAGE_SIZE);
 
     if (!error && data) {
-      setMessages(data);
+      setHasMoreMessages(data.length === MESSAGE_PAGE_SIZE);
+      setMessages(data.reverse()); // Reverse to show oldest first
     }
     setLoadingMessages(false);
+  };
+
+  const loadOlderMessages = async () => {
+    if (!activeSessionId || messages.length === 0) return;
+    setLoadingOlder(true);
+    const oldestMessage = messages[0];
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .eq('session_id', activeSessionId)
+      .lt('created_at', oldestMessage.created_at)
+      .order('created_at', { ascending: false })
+      .limit(MESSAGE_PAGE_SIZE);
+
+    if (!error && data) {
+      setHasMoreMessages(data.length === MESSAGE_PAGE_SIZE);
+      setMessages(prev => [...data.reverse(), ...prev]);
+    }
+    setLoadingOlder(false);
   };
 
   const fetchCustomerSummary = async () => {
@@ -196,22 +240,13 @@ export default function InboxPage() {
     setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, bot_paused: newPausedState } : s));
 
     try {
-      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://metachat.junoverseai.com';
-      const response = await fetch(`${WORKER_URL}/api/chat/toggle-bot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: activeSession.id,
-          botPaused: newPausedState
-        }),
+      await workerPost('/api/chat/toggle-bot', {
+        sessionId: activeSession.id,
+        botPaused: newPausedState,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to toggle bot');
-      }
     } catch (err) {
       console.error(err);
-      alert('Error toggling bot');
+      toast.error('Error toggling bot');
       // Revert on failure
       setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, bot_paused: !newPausedState } : s));
     }
@@ -226,26 +261,17 @@ export default function InboxPage() {
     setReplyText('');
     
     try {
-      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://metachat.junoverseai.com';
-      const response = await fetch(`${WORKER_URL}/api/chat/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: activeSession.id,
-          text: textToSend,
-          pageId: activeSession.page_id,
-          recipientId: activeSession.sender_id
-        }),
+      await workerPost('/api/chat/send', {
+        sessionId: activeSession.id,
+        text: textToSend,
+        pageId: activeSession.page_id,
+        recipientId: activeSession.sender_id,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to send message');
-      }
       
       // We rely entirely on Supabase Realtime to push the message into the UI!
     } catch (err) {
       console.error(err);
-      alert('Error sending message');
+      toast.error('Error sending message');
       // Restore the text if it failed
       setReplyText(textToSend);
     } finally {
@@ -254,9 +280,17 @@ export default function InboxPage() {
   };
 
   return (
-    <div className="inbox-container" style={{ display: 'flex', height: 'calc(100vh - 40px)', background: '#1A1D21', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+    <div className="inbox-container" style={{ display: 'flex', height: isMobile ? 'calc(100vh - 100px)' : 'calc(100vh - 40px)', background: '#1A1D21', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
       {/* Sidebar */}
-      <div className="inbox-sidebar" style={{ width: '300px', borderRight: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column' }}>
+      <div 
+        className="inbox-sidebar" 
+        style={{ 
+          width: isMobile ? '100%' : '300px', 
+          borderRight: isMobile ? 'none' : '1px solid var(--border-color)', 
+          display: showSidebar ? 'flex' : 'none', 
+          flexDirection: 'column' 
+        }}
+      >
         <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)' }}>
           <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Inbox</h2>
         </div>
@@ -333,42 +367,71 @@ export default function InboxPage() {
       </div>
 
       {/* Main Chat Area */}
-      <div className="inbox-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
+      <div 
+        className="inbox-main" 
+        style={{ 
+          flex: 1, 
+          display: showMain ? 'flex' : 'none', 
+          flexDirection: 'column', 
+          background: 'var(--bg-primary)',
+          minWidth: 0
+        }}
+      >
         {activeSession ? (
           <>
             {/* Chat Header */}
-            <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+            <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                {isMobile && (
+                  <button
+                    onClick={() => setActiveSessionId(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      padding: '8px 4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      marginRight: '4px'
+                    }}
+                    aria-label="Back to sessions"
+                  >
+                    <ArrowLeft size={20} />
+                  </button>
+                )}
+                <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
                   {activeSession.sender_avatar ? (
                     <img src={activeSession.sender_avatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (
                     <User size={20} color="white" />
                   )}
                 </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '16px' }}>{activeSession.sender_name || 'Anonymous User'}</h3>
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                    {activeSession.bot_paused ? 'Bot is currently paused' : 'Bot is active'} • Page: {pages[activeSession.page_id] || 'Unknown'}
+                <div style={{ minWidth: 0 }}>
+                  <h3 style={{ margin: 0, fontSize: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeSession.sender_name || 'Anonymous User'}</h3>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {activeSession.bot_paused ? 'Bot is paused' : 'Bot is active'} • Page: {pages[activeSession.page_id] || 'Unknown'}
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                 <button 
                   className="btn btn-secondary"
                   onClick={fetchCustomerSummary}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: isMobile ? '8px' : '10px 20px' }}
+                  title="Profile Summary"
                 >
                   <User size={16} />
-                  Profile Summary
+                  {!isMobile && 'Profile Summary'}
                 </button>
                 <button 
-                  className={`btn ${activeSession.bot_paused ? 'btn-primary' : 'btn-secondary'}`}
+                  className={`btn ${activeSession.bot_paused ? 'btn-warning-glow' : 'btn-secondary'}`}
                   onClick={toggleBot}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: isMobile ? '8px' : '10px 20px' }}
+                  title={activeSession.bot_paused ? 'Resume Bot' : 'Pause Bot'}
                 >
                   {activeSession.bot_paused ? <PlayCircle size={16} /> : <PauseCircle size={16} />}
-                  {activeSession.bot_paused ? 'Resume Bot' : 'Pause Bot'}
+                  {!isMobile && (activeSession.bot_paused ? 'Resume Bot' : 'Pause Bot')}
                 </button>
               </div>
             </div>
@@ -378,7 +441,31 @@ export default function InboxPage() {
               {loadingMessages ? (
                 <div style={{ margin: 'auto', color: 'var(--text-secondary)' }}><Loader2 className="spin" /></div>
               ) : (
-                messages.map(msg => {
+                <>
+                  {hasMoreMessages && (
+                    <button
+                      onClick={loadOlderMessages}
+                      disabled={loadingOlder}
+                      style={{
+                        alignSelf: 'center',
+                        padding: '6px 16px',
+                        fontSize: '12px',
+                        color: 'var(--text-secondary)',
+                        background: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-primary)',
+                        borderRadius: '20px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      {loadingOlder ? <Loader2 size={12} className="spin" /> : <ChevronUp size={12} />}
+                      {loadingOlder ? 'Loading...' : 'Load older messages'}
+                    </button>
+                  )}
+                {messages.map(msg => {
                   const isUser = msg.role === 'user';
                   const isHumanAgent = msg.role === 'human_agent';
                   const isBot = msg.role === 'assistant';
@@ -387,7 +474,7 @@ export default function InboxPage() {
                   return (
                     <div id={`msg-${msg.id}`} key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-start' : 'flex-end', padding: '4px' }}>
                       <div style={{ 
-                        maxWidth: '70%', 
+                        maxWidth: isMobile ? '85%' : '70%', 
                         padding: '12px 16px', 
                         borderRadius: '16px',
                         borderBottomLeftRadius: isUser ? '4px' : '16px',
@@ -405,13 +492,61 @@ export default function InboxPage() {
                       </div>
                     </div>
                   );
-                })
+                })}
+                </>
               )}
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Bot Paused Banner */}
+            {activeSession.bot_paused && (
+              <div style={{
+                padding: '12px 20px',
+                background: 'var(--warning-bg)',
+                borderTop: '1px solid rgba(245, 158, 11, 0.15)',
+                borderBottom: '1px solid rgba(245, 158, 11, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                fontSize: '13px',
+                color: 'var(--warning)',
+                animation: 'fadeIn 0.3s ease'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertCircle size={16} style={{ flexShrink: 0, color: 'var(--warning)' }} />
+                  <span>
+                    <strong>Bot is Paused (Human Takeover Mode)</strong>. AI auto-replies are disabled for this session.
+                  </span>
+                </div>
+                <button
+                  onClick={toggleBot}
+                  style={{
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    color: '#fb923c',
+                    border: '1px solid var(--warning)',
+                    borderRadius: '4px',
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.background = 'rgba(245, 158, 11, 0.25)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.background = 'rgba(245, 158, 11, 0.15)';
+                  }}
+                >
+                  Resume Bot
+                </button>
+              </div>
+            )}
+
             {/* Message Input Area */}
-            <div style={{ padding: '20px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-card)' }}>
+            <div style={{ padding: isMobile ? '12px 16px' : '20px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-card)' }}>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
                 <textarea 
                   className="form-textarea" 

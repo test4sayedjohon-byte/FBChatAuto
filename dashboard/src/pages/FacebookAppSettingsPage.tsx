@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { Save, Loader2, Shield, Copy, Check, Edit2, Lock, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { toast } from '../hooks/useToast';
 
 export default function FacebookAppSettingsPage() {
   const { user } = useAuth();
@@ -59,9 +60,9 @@ export default function FacebookAppSettingsPage() {
 
     const { error } = await supabase.from('users').update({ settings: newSettings }).eq('id', user.id);
     if (error) {
-      alert('Error saving settings: ' + error.message);
+      toast.error('Error saving settings: ' + error.message);
     } else {
-      alert('Meta App Settings saved successfully!');
+      toast.success('Meta App Settings saved successfully!');
       setOriginalAppSecret(appSecret);
       setOriginalVerifyToken(verifyToken);
       setHasSavedSettings(true);
@@ -82,37 +83,39 @@ export default function FacebookAppSettingsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  if (loading) return <div className="p-8 text-center text-gray-400">Loading configurations...</div>;
+  if (loading) return <div style={{ padding: '48px', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading configurations...</div>;
 
   return (
-    <div className="animate-slideUp max-w-3xl">
+    <div className="animate-slideUp" style={{ maxWidth: '48rem' }}>
       <div className="page-header">
         <h1>Meta App Settings</h1>
         <p>Configure your own Meta Developer App credentials to enable the AI for your channels.</p>
       </div>
 
-      <div className="card mb-6">
-        <div className="card-header border-b border-gray-800 pb-4 mb-4">
-          <div className="flex items-center gap-2">
-            <Shield className="text-primary" size={20} />
-            <h2 className="text-lg font-semibold">Your Custom Webhook URL</h2>
+      <div className="card" style={{ marginBottom: '24px' }}>
+        <div className="card-header" style={{ borderBottom: '1px solid var(--border-primary)', paddingBottom: '16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Shield size={20} style={{ color: 'var(--accent-primary)' }} />
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600, margin: 0 }}>Your Custom Webhook URL</h2>
           </div>
-          <p className="text-sm text-gray-400 mt-1">Paste this exactly into your Meta Developer App's Webhook configuration.</p>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px', marginBottom: 0 }}>
+            Paste this exactly into your Meta Developer App's Webhook configuration.
+          </p>
         </div>
         
-        <div className="bg-darker p-4 rounded-lg flex items-center justify-between border border-gray-800">
-          <code className="text-primary text-sm break-all">{webhookUrl}</code>
-          <button onClick={handleCopy} className="btn btn-secondary btn-sm ml-4 whitespace-nowrap">
+        <div className="flex-mobile-col flex-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', background: 'var(--bg-tertiary)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-primary)' }}>
+          <code style={{ wordBreak: 'break-all', fontSize: '0.875rem', color: 'var(--accent-primary)' }}>{webhookUrl}</code>
+          <button onClick={handleCopy} className="btn btn-secondary btn-sm whitespace-nowrap">
             {copied ? <><Check size={14}/> Copied</> : <><Copy size={14}/> Copy URL</>}
           </button>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-header border-b border-gray-800 pb-4 mb-6 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <Lock className="text-gray-400" size={18} />
-            <h2 className="text-lg font-semibold">Credentials Configuration</h2>
+        <div className="card-header flex-mobile-col flex-wrap" style={{ borderBottom: '1px solid var(--border-primary)', paddingBottom: '16px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Lock size={18} style={{ color: 'var(--text-secondary)' }} />
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600, margin: 0 }}>Credentials Configuration</h2>
           </div>
           {hasSavedSettings && !isEditing && (
             <button 
@@ -126,12 +129,13 @@ export default function FacebookAppSettingsPage() {
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div className="space-y-6">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <div className="form-group">
               <label className="form-label">Meta App Secret</label>
               <input 
                 type="password"
-                className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed bg-darker' : ''}`} 
+                className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed' : ''}`} 
+                style={!isEditing ? { background: 'var(--bg-tertiary)' } : {}}
                 placeholder={isEditing ? "e.g., f0136a49357de602e36ef1f3f81bc39b" : "••••••••••••••••••••••••••••••••"} 
                 value={appSecret} 
                 onChange={e=>setAppSecret(e.target.value)} 
@@ -144,7 +148,8 @@ export default function FacebookAppSettingsPage() {
             <div className="form-group">
               <label className="form-label">Custom Verify Token</label>
               <input 
-                className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed bg-darker' : ''}`} 
+                className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed' : ''}`} 
+                style={!isEditing ? { background: 'var(--bg-tertiary)' } : {}}
                 placeholder={isEditing ? "Make up a secure password..." : "••••••••••••••••"} 
                 value={verifyToken} 
                 onChange={e=>setVerifyToken(e.target.value)} 
@@ -156,7 +161,7 @@ export default function FacebookAppSettingsPage() {
           </div>
           
           {isEditing && (
-            <div className="mt-8 flex justify-end gap-3 border-t border-gray-800 pt-6">
+            <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid var(--border-primary)', paddingTop: '24px' }}>
               {hasSavedSettings && (
                 <button 
                   type="button" 

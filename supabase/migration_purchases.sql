@@ -45,6 +45,7 @@ BEGIN
   IF OLD.status = 'pending' AND NEW.status = 'approved' THEN
     UPDATE public.users
     SET 
+      plan = CASE WHEN plan = 'enterprise' THEN 'enterprise' ELSE 'pro' END,
       allowed_channels = allowed_channels + NEW.channels_count,
       monthly_message_limit = CASE 
         WHEN COALESCE(monthly_message_limit, 0) = -1 OR NEW.message_addon = 'unlimited' THEN -1

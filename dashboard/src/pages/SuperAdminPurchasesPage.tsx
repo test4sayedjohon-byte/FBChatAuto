@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { CheckCircle, XCircle, Clock, Search, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { toast } from '../hooks/useToast';
 
 export default function SuperAdminPurchasesPage() {
   const { profile } = useAuth();
@@ -59,7 +60,7 @@ export default function SuperAdminPurchasesPage() {
       .eq('id', targetId);
       
     if (error) {
-      alert('Error updating purchase: ' + error.message);
+      toast.error('Error updating purchase: ' + error.message);
     } else {
       setShowModal(false);
       loadPurchases();
@@ -224,7 +225,7 @@ export default function SuperAdminPurchasesPage() {
                         <div style={{ textAlign: 'right' }}>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Paid:</div>
                           <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--accent-primary)', marginTop: '2px' }}>
-                            {p.currency === 'BDT' ? '৳ ' : '$'}{p.total_amount}
+                            {p.currency === 'BTT' ? 'BTT ' : '$'}{p.total_amount}
                           </div>
                         </div>
                       </div>
@@ -333,7 +334,7 @@ export default function SuperAdminPurchasesPage() {
                         <div style={{ textAlign: 'right' }}>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Paid:</div>
                           <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--accent-primary)', marginTop: '2px' }}>
-                            {p.currency === 'BDT' ? '৳ ' : '$'}{p.total_amount}
+                            {p.currency === 'BTT' ? 'BTT ' : '$'}{p.total_amount}
                           </div>
                         </div>
                       </div>
@@ -409,7 +410,7 @@ export default function SuperAdminPurchasesPage() {
               <textarea
                 id="adminNotes"
                 className="form-input"
-                placeholder="Add notes for the tenant (e.g. 'Payment verified on bKash', 'Incorrect transaction ID')"
+                placeholder="Add notes for the user (e.g. 'Payment verified on bKash', 'Incorrect transaction ID')"
                 rows={3}
                 style={{ resize: 'none', background: 'var(--bg-secondary)', border: '1px solid var(--border-light)', padding: '12px' }}
                 value={adminNotes}

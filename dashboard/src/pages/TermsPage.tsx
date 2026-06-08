@@ -1,4 +1,7 @@
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+
 export default function TermsPage() {
+  useDocumentTitle('Terms & Conditions — AutometaBot', 'Read the terms and conditions for AutometaBot subscription and usage.', 'https://autometabot.com/terms');
   return (
     <div className="card" style={{ maxWidth: '800px', margin: '40px auto', padding: '40px' }}>
       <h1 style={{ marginBottom: '24px' }}>Terms & Conditions</h1>

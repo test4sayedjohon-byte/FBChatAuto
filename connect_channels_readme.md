@@ -91,6 +91,64 @@ Each user creates their own Meta Developer App and connects it to the platform.
 
 ---
 
+## WhatsApp Connection Guide
+
+Connecting WhatsApp Business Cloud API requires setting up the WhatsApp product in your Meta Developer App.
+
+### Step 1: Add WhatsApp to Meta App
+1. Go to the [Meta Developer Portal](https://developers.facebook.com/) and click on your App.
+2. Scroll down on the left sidebar to **Add Product** -> Find **WhatsApp** -> Click **Set Up**.
+3. Meta will automatically link/create a WhatsApp Business Account.
+
+### Step 2: Retrieve IDs & Sandbox Testing
+1. In the sidebar, expand **WhatsApp** and click **Step 1. Try it out**.
+2. **Retrieve Credentials:**
+   - Copy the **Phone Number ID** (e.g., from the text box).
+   - Copy the **WhatsApp Business Account ID** (e.g., from the text box next to it).
+3. **Generate Temporary Token:**
+   - Click the blue **Generate token** button under the **Access token** section. Keep this token handy for testing.
+4. **Sandbox Testing (For Development):**
+   - Under **Send a message from your test number**, select or add your personal number in the **Recipient** field.
+   - Click **Send Message** to verify the sandbox works.
+
+### Step 3: Webhook Configuration
+1. In the sidebar, scroll down to **Webhooks** (under Products in the sidebar menu).
+2. Ensure you have selected **WhatsApp Business Account** in the dropdown at the top.
+3. Under **Webhook**, click **Edit**:
+   - **Callback URL:** Paste your webhook URL: `https://metachat.junoverseai.com/webhook/{USER_ID}`
+   - **Verify Token:** Paste the same Custom Verify Token from Phase 1.
+   - Click **Verify and Save**.
+4. Under **Webhook Fields**, subscribe to **messages**.
+
+### Step 4: Register Production Phone Number (For Going Live)
+1. In the sidebar, go to **WhatsApp > Step 2. Production setup**.
+2. Click **Register your WhatsApp phone number** to open the setup wizard.
+3. Fill in your **Business information** (Business name, website/profile page, country) and click **Next**.
+4. Configure your **WA Business Profile**, enter your phone number, and verify it via SMS or voice call.
+5. Once complete, copy the new production **Phone Number ID** and **WhatsApp Business Account ID** to use in the dashboard.
+
+### Step 5: Generate Permanent System User Access Token
+*Temporary tokens expire in 24 hours. For production, generate a permanent token:*
+1. Go to your [Meta Business Suite Settings](https://business.facebook.com/settings/).
+2. Under **Users**, click **System Users**. Add a system user if you don't have one.
+3. Select the System User and click **Generate New Token**.
+4. Select your Developer App, and select the following permissions:
+   - `whatsapp_business_messaging`
+   - `whatsapp_business_management`
+5. Click **Generate** and copy the long-lived token.
+
+### Step 6: Connect WhatsApp in AutometaBot
+1. Go to AutometaBot Dashboard -> **Meta Channels**.
+2. Click **Connect Channel** -> Select **WhatsApp Business**.
+3. Fill in the fields:
+   - **WhatsApp Display Name:** Enter a label (e.g., "Support Line").
+   - **WhatsApp Phone Number ID:** Paste the production ID from Step 4.
+   - **WhatsApp Business Account ID:** Paste the production ID from Step 4.
+   - **Access Token:** Paste the permanent System User Token from Step 5.
+4. Click **Connect Page** to activate.
+
+---
+
 ## Troubleshooting Guide
 
 - **Webhook fails to verify ("Validation Failed" or 500 / 403 error):** 

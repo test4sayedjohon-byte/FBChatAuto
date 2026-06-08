@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
-import { Save, Loader2, Shield, Copy, Check, Edit2, Lock, X } from 'lucide-react';
+import { Save, Loader2, Shield, Copy, Check, Edit2, Lock, X, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
 
@@ -19,6 +19,8 @@ export default function FacebookAppSettingsPage() {
   
   const [hasSavedSettings, setHasSavedSettings] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [showAppSecret, setShowAppSecret] = useState(false);
+  const [showVerifyToken, setShowVerifyToken] = useState(false);
 
   const webhookUrl = `https://metachat.junoverseai.com/webhook/${user?.id || 'YOUR_USER_ID'}`;
 
@@ -132,30 +134,81 @@ export default function FacebookAppSettingsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <div className="form-group">
               <label className="form-label">Meta App Secret</label>
-              <input 
-                type="password"
-                className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed' : ''}`} 
-                style={!isEditing ? { background: 'var(--bg-tertiary)' } : {}}
-                placeholder={isEditing ? "e.g., f0136a49357de602e36ef1f3f81bc39b" : "••••••••••••••••••••••••••••••••"} 
-                value={appSecret} 
-                onChange={e=>setAppSecret(e.target.value)} 
-                disabled={!isEditing}
-                required 
-              />
+              <div style={{ position: 'relative' }}>
+                <input 
+                  type={showAppSecret ? "text" : "password"}
+                  className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed' : ''}`} 
+                  style={{
+                    ...(!isEditing ? { background: 'var(--bg-tertiary)' } : {}),
+                    paddingRight: '40px'
+                  }}
+                  placeholder={isEditing ? "e.g., f0136a49357de602e36ef1f3f81bc39b" : "••••••••••••••••••••••••••••••••"} 
+                  value={appSecret} 
+                  onChange={e=>setAppSecret(e.target.value)} 
+                  disabled={!isEditing}
+                  required 
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAppSecret(!showAppSecret)}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  {showAppSecret ? <EyeOff size={16} style={{ display: 'block' }} /> : <Eye size={16} style={{ display: 'block' }} />}
+                </button>
+              </div>
               <p className="form-hint">Found in Meta Developer Portal &gt; App Settings &gt; Basic &gt; App Secret.</p>
             </div>
             
             <div className="form-group">
               <label className="form-label">Custom Verify Token</label>
-              <input 
-                className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed' : ''}`} 
-                style={!isEditing ? { background: 'var(--bg-tertiary)' } : {}}
-                placeholder={isEditing ? "Make up a secure password..." : "••••••••••••••••"} 
-                value={verifyToken} 
-                onChange={e=>setVerifyToken(e.target.value)} 
-                disabled={!isEditing}
-                required 
-              />
+              <div style={{ position: 'relative' }}>
+                <input 
+                  type={showVerifyToken ? "text" : "password"}
+                  className={`form-input ${!isEditing ? 'opacity-60 cursor-not-allowed' : ''}`} 
+                  style={{
+                    ...(!isEditing ? { background: 'var(--bg-tertiary)' } : {}),
+                    paddingRight: '40px'
+                  }}
+                  placeholder={isEditing ? "Make up a secure password..." : "••••••••••••••••"} 
+                  value={verifyToken} 
+                  onChange={e=>setVerifyToken(e.target.value)} 
+                  disabled={!isEditing}
+                  required 
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowVerifyToken(!showVerifyToken)}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  {showVerifyToken ? <EyeOff size={16} style={{ display: 'block' }} /> : <Eye size={16} style={{ display: 'block' }} />}
+                </button>
+              </div>
               <p className="form-hint">Create any password here. You will paste this exact password into the "Verify Token" field in Meta when setting up the webhook.</p>
             </div>
           </div>

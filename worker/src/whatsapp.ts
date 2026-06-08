@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env, WhatsAppWebhookEvent, WhatsAppMessage, WhatsAppValue, PageConnection } from './types';
 import { createSupabaseAdmin, getWhatsAppConnection, storeIncomingMessage, acquireSessionLock, releaseSessionLock } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
-import { getReplyDelay } from './facebook';
 
 /**
  * Send a WhatsApp reply using the Meta Cloud API.
@@ -449,12 +448,15 @@ async function handleWhatsAppMessage(
       ` | RAG: ${chatResult.ragUsed}`
     );
 
-    // Apply human-like randomized delay BEFORE sending the WhatsApp message
-    const isVisionCanned = chatResult.provider?.startsWith('vision-') && chatResult.model === 'canned';
-    const extraDelayMs = getReplyDelay(chatResult.reply, isVisionCanned);
+    // Apply short human-like randomized delay BEFORE sending the WhatsApp message.
+    // WhatsApp doesn't support typing indicators, so we keep this under 2 seconds to avoid feeling frozen.
+    let extraDelayMs = 0;
+    if (Math.random() < 0.70) {
+      extraDelayMs = Math.floor(Math.random() * 1500) + 500; // 70% chance of 0.5 to 2 seconds delay
+    }
 
     if (extraDelayMs > 0) {
-      console.log(`[WhatsApp Webhook] ⏳ Adding randomized human-like delay of ${extraDelayMs}ms...`);
+      console.log(`[WhatsApp Webhook] ⏳ Adding short human-like delay of ${extraDelayMs}ms...`);
       await new Promise(resolve => setTimeout(resolve, extraDelayMs));
     }
 

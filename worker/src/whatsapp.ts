@@ -5,6 +5,18 @@ import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
 import { getReplyDelay } from './facebook';
 
 /**
+ * Helper: Delay for ms milliseconds, checking the check() condition every 100ms.
+ * Returns early if check() evaluates to true.
+ */
+async function delayOrFinish(ms: number, check: () => boolean): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    if (check()) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+/**
  * Send a WhatsApp reply using the Meta Cloud API.
  */
 export async function sendWhatsAppReply(
@@ -19,7 +31,7 @@ export async function sendWhatsAppReply(
   const messages = splitMessage(messageText, MAX_LENGTH);
 
   for (const msg of messages) {
-    const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+    const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -64,7 +76,7 @@ export async function sendWhatsAppTypingIndicator(
   accessToken: string,
   messageId: string
 ): Promise<void> {
-  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+  const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -411,7 +423,7 @@ async function handleWhatsAppMessage(
     // Handle Image attachment URLs if it's an image
     if (isImage && message.image) {
       try {
-        const mediaRes = await fetch(`https://graph.facebook.com/v21.0/${message.image.id}`, {
+        const mediaRes = await fetch(`https://graph.facebook.com/v22.0/${message.image.id}`, {
           headers: { 'Authorization': `Bearer ${pageConnection.access_token}` },
         });
         if (mediaRes.ok) {
@@ -476,39 +488,57 @@ async function handleWhatsAppMessage(
       }
     }
 
-    // Show typing indicator on WhatsApp while AI is processing
-    await sendWhatsAppTypingIndicator(phoneNumberId, pageConnection.access_token, messageId);
+    let isProcessing = true;
+    const typingPromise = (async () => {
+      try {
+        while (isProcessing) {
+          await sendWhatsAppTypingIndicator(phoneNumberId, pageConnection.access_token, messageId);
+          // Wait for 5 seconds before refreshing the indicator
+          await delayOrFinish(5000, () => !isProcessing);
+        }
+      } catch (err) {
+        console.error('[WhatsApp] ❌ Error in typing simulation loop:', err);
+      }
+    })();
 
-    // ── Phase 2: Full AI Response Pipeline ──────────────────────
-    const chatResult = await handleChatMessage(
-      supabase,
-      result.sessionId,
-      pageConnection,
-      contentToStore,
-      senderPhoneNumber
-    );
+    let chatResult;
+    try {
+      // ── Phase 2: Full AI Response Pipeline ──────────────────────
+      chatResult = await handleChatMessage(
+        supabase,
+        result.sessionId,
+        pageConnection,
+        contentToStore,
+        senderPhoneNumber
+      );
 
-    console.log(
-      `[WhatsApp Webhook] 🤖 AI response via ${chatResult.provider}/${chatResult.model}` +
-      ` | Tokens: ${chatResult.tokensUsed ?? '?'}` +
-      ` | RAG: ${chatResult.ragUsed}`
-    );
+      console.log(
+        `[WhatsApp Webhook] 🤖 AI response via ${chatResult.provider}/${chatResult.model}` +
+        ` | Tokens: ${chatResult.tokensUsed ?? '?'}` +
+        ` | RAG: ${chatResult.ragUsed}`
+      );
 
-    // Apply human-like randomized delay BEFORE sending the WhatsApp message
-    const isVisionCanned = chatResult.provider?.startsWith('vision-') && chatResult.model === 'canned';
-    const extraDelayMs = getReplyDelay(chatResult.reply, isVisionCanned);
+      // Apply human-like randomized delay BEFORE sending the WhatsApp message
+      const isVisionCanned = chatResult.provider?.startsWith('vision-') && chatResult.model === 'canned';
+      const extraDelayMs = getReplyDelay(chatResult.reply, isVisionCanned);
 
-    if (extraDelayMs > 0) {
-      console.log(`[WhatsApp Webhook] ⏳ Adding randomized human-like delay of ${extraDelayMs}ms...`);
-      await new Promise(resolve => setTimeout(resolve, extraDelayMs));
+      if (extraDelayMs > 0) {
+        console.log(`[WhatsApp Webhook] ⏳ Adding randomized human-like delay of ${extraDelayMs}ms...`);
+        await delayOrFinish(extraDelayMs, () => false);
+      }
+    } finally {
+      isProcessing = false;
+      await typingPromise;
     }
 
-    await sendWhatsAppReply(
-      phoneNumberId,
-      pageConnection.access_token,
-      senderPhoneNumber,
-      chatResult.reply
-    );
+    if (chatResult) {
+      await sendWhatsAppReply(
+        phoneNumberId,
+        pageConnection.access_token,
+        senderPhoneNumber,
+        chatResult.reply
+      );
+    }
 
     // ── Phase 3: Sliding Window Summarization ──────────────────────
     await triggerSlidingWindowSummarization(

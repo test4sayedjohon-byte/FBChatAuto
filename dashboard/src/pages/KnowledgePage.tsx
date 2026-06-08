@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, useMemo, type FormEvent } from 'react';
 import { toast } from '../hooks/useToast';
 import { supabase } from '../lib/supabase';
 import { Plus, Pencil, Trash2, BookOpen, Save, X, Filter, Upload } from 'lucide-react';
@@ -15,6 +15,15 @@ interface KnowledgeField {
   page_id: string | null;
 }
 
+interface GroupedField {
+  field_name: string;
+  field_value: string;
+  category: string;
+  is_active: boolean;
+  page_ids: (string | null)[];
+  ids: string[];
+}
+
 interface PageOption {
   page_id: string;
   page_name: string | null;
@@ -28,7 +37,7 @@ export default function KnowledgePage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [editingField, setEditingField] = useState<KnowledgeField | null>(null);
+  const [editingField, setEditingField] = useState<GroupedField | null>(null);
 
   // Filter state
   const [filterPageId, setFilterPageId] = useState<string>('all');
@@ -38,7 +47,7 @@ export default function KnowledgePage() {
   const [fieldValue, setFieldValue] = useState('');
   const [selectedCategoryOption, setSelectedCategoryOption] = useState('general');
   const [customCategoryValue, setCustomCategoryValue] = useState('');
-  const [assignedPageId, setAssignedPageId] = useState<string>('');
+  const [assignedPageIds, setAssignedPageIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   const PREDEFINED_CATEGORIES = ['general', 'pricing', 'products', 'services', 'policies', 'contact', 'shipping', 'faq'];
@@ -69,12 +78,40 @@ export default function KnowledgePage() {
     setLoading(false);
   }
 
-  // Filter fields based on selected page
-  const visibleFields = fields.filter((f) => {
-    if (filterPageId === 'all') return true;
-    if (filterPageId === 'global') return f.page_id === null;
-    return f.page_id === filterPageId || f.page_id === null;
-  });
+  // Group fields on the fly
+  const groupedFields = useMemo(() => {
+    const groups: Record<string, GroupedField> = {};
+    for (const f of fields) {
+      // Group by field_name + category
+      const key = `${f.field_name.toLowerCase().trim()}::${f.category.toLowerCase().trim()}`;
+      if (!groups[key]) {
+        groups[key] = {
+          field_name: f.field_name,
+          field_value: f.field_value,
+          category: f.category,
+          is_active: f.is_active,
+          page_ids: [f.page_id],
+          ids: [f.id]
+        };
+      } else {
+        if (!groups[key].page_ids.includes(f.page_id)) {
+          groups[key].page_ids.push(f.page_id);
+        }
+        groups[key].ids.push(f.id);
+        if (f.is_active) groups[key].is_active = true;
+      }
+    }
+    return Object.values(groups);
+  }, [fields]);
+
+  // Filter groups based on selected page
+  const visibleFields = useMemo(() => {
+    return groupedFields.filter((g) => {
+      if (filterPageId === 'all') return true;
+      if (filterPageId === 'global') return g.page_ids.includes(null);
+      return g.page_ids.includes(filterPageId) || g.page_ids.includes(null);
+    });
+  }, [groupedFields, filterPageId]);
 
   function openAddModal() {
     setEditingField(null);
@@ -82,11 +119,11 @@ export default function KnowledgePage() {
     setFieldValue('');
     setSelectedCategoryOption('general');
     setCustomCategoryValue('');
-    setAssignedPageId('');
+    setAssignedPageIds([]);
     setShowModal(true);
   }
 
-  function openEditModal(field: KnowledgeField) {
+  function openEditModal(field: GroupedField) {
     setEditingField(field);
     setFieldName(field.field_name);
     setFieldValue(field.field_value);
@@ -97,7 +134,8 @@ export default function KnowledgePage() {
       setSelectedCategoryOption('custom');
       setCustomCategoryValue(field.category);
     }
-    setAssignedPageId(field.page_id ?? '');
+    const pageIds = field.page_ids.filter((id): id is string => id !== null);
+    setAssignedPageIds(pageIds);
     setShowModal(true);
   }
 
@@ -112,29 +150,49 @@ export default function KnowledgePage() {
       ? customCategoryValue.trim().toLowerCase().replace(/\s+/g, '_') || 'general'
       : selectedCategoryOption;
 
-    const payload = {
+    const payloadTemplate = {
       field_name: fieldName,
       field_value: fieldValue,
       category: finalCategory,
-      page_id: assignedPageId || null,
+      user_id: user.id
     };
 
-    if (editingField) {
-      const { error } = await supabase
-        .from('knowledge_fields')
-        .update(payload)
-        .eq('id', editingField.id);
-      if (error) { toast.error('Error: ' + error.message); }
-    } else {
-      const { error } = await supabase
-        .from('knowledge_fields')
-        .insert({ ...payload, user_id: user.id });
-      if (error) { toast.error('Error: ' + error.message); }
-    }
+    try {
+      if (editingField) {
+        // Delete all rows in the editing group
+        const { error: deleteError } = await supabase
+          .from('knowledge_fields')
+          .delete()
+          .in('id', editingField.ids);
+        if (deleteError) throw deleteError;
+      }
 
-    setSaving(false);
-    setShowModal(false);
-    loadAll();
+      // If assignedPageIds is empty, it means Global (page_id: null)
+      if (assignedPageIds.length === 0) {
+        const { error } = await supabase
+          .from('knowledge_fields')
+          .insert({ ...payloadTemplate, page_id: null });
+        if (error) throw error;
+      } else {
+        // Insert a row for each page ID
+        const payloads = assignedPageIds.map(pageId => ({
+          ...payloadTemplate,
+          page_id: pageId
+        }));
+        const { error } = await supabase
+          .from('knowledge_fields')
+          .insert(payloads);
+        if (error) throw error;
+      }
+
+      toast.success(editingField ? 'Quick Answer updated successfully!' : 'Quick Answer added successfully!');
+      setShowModal(false);
+      loadAll();
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleImport(e: FormEvent) {
@@ -187,24 +245,40 @@ export default function KnowledgePage() {
     setImporting(false);
   }
 
-  async function deleteField(id: string) {
-    if (!confirm('Delete this knowledge field?')) return;
-    await supabase.from('knowledge_fields').delete().eq('id', id);
-    loadAll();
+  async function deleteField(ids: string[]) {
+    if (!confirm('Delete this quick answer?')) return;
+    const { error } = await supabase.from('knowledge_fields').delete().in('id', ids);
+    if (error) {
+      toast.error('Error: ' + error.message);
+    } else {
+      toast.success('Quick Answer deleted successfully!');
+      loadAll();
+    }
   }
 
-  async function toggleActive(field: KnowledgeField) {
-    await supabase.from('knowledge_fields').update({ is_active: !field.is_active }).eq('id', field.id);
-    loadAll();
+  async function toggleActive(field: GroupedField) {
+    const nextActive = !field.is_active;
+    const { error } = await supabase
+      .from('knowledge_fields')
+      .update({ is_active: nextActive })
+      .in('id', field.ids);
+      
+    if (error) {
+      toast.error('Error: ' + error.message);
+    } else {
+      loadAll();
+    }
   }
 
   // Sort visible fields by category, then by name
-  const sortedFields = [...visibleFields].sort((a, b) => {
-    const catA = (a.category || 'general').toLowerCase();
-    const catB = (b.category || 'general').toLowerCase();
-    if (catA !== catB) return catA.localeCompare(catB);
-    return a.field_name.localeCompare(b.field_name);
-  });
+  const sortedFields = useMemo(() => {
+    return [...visibleFields].sort((a, b) => {
+      const catA = (a.category || 'general').toLowerCase();
+      const catB = (b.category || 'general').toLowerCase();
+      if (catA !== catB) return catA.localeCompare(catB);
+      return a.field_name.localeCompare(b.field_name);
+    });
+  }, [visibleFields]);
 
   function getPageName(pageId: string | null) {
     if (!pageId) return null;
@@ -301,7 +375,7 @@ export default function KnowledgePage() {
         }}>
           {sortedFields.map((field) => (
             <div
-              key={field.id}
+              key={field.ids.join(',')}
               className="card"
               style={{
                 display: 'flex',
@@ -323,22 +397,26 @@ export default function KnowledgePage() {
                   >
                     📁 {field.category || 'general'}
                   </span>
-                  {field.page_id ? (
-                    <span 
-                      className="badge"
-                      style={{ fontSize: '0.62rem', background: 'var(--accent-primary-glow)', color: 'var(--accent-primary-hover)', textTransform: 'none', padding: '3px 8px', borderRadius: '99px', whiteSpace: 'nowrap' }}
-                      title={getPageName(field.page_id) || ''}
-                    >
-                      📄 {getPageName(field.page_id) || 'Page'}
-                    </span>
-                  ) : (
-                    <span 
-                      className="badge"
-                      style={{ fontSize: '0.62rem', background: 'var(--success-bg)', color: 'var(--success)', textTransform: 'none', padding: '3px 8px', borderRadius: '99px', whiteSpace: 'nowrap' }}
-                    >
-                      🌐 Global
-                    </span>
-                  )}
+                  {field.page_ids.map((pid, idx) => (
+                    pid ? (
+                      <span 
+                        key={idx}
+                        className="badge"
+                        style={{ fontSize: '0.62rem', background: 'var(--accent-primary-glow)', color: 'var(--accent-primary-hover)', textTransform: 'none', padding: '3px 8px', borderRadius: '99px', whiteSpace: 'nowrap' }}
+                        title={getPageName(pid) || ''}
+                      >
+                        📄 {getPageName(pid) || 'Page'}
+                      </span>
+                    ) : (
+                      <span 
+                        key={idx}
+                        className="badge"
+                        style={{ fontSize: '0.62rem', background: 'var(--success-bg)', color: 'var(--success)', textTransform: 'none', padding: '3px 8px', borderRadius: '99px', whiteSpace: 'nowrap' }}
+                      >
+                        🌐 Global
+                      </span>
+                    )
+                  ))}
                 </div>
 
                 {/* Title gets 100% card width - no side squeezing */}
@@ -382,7 +460,7 @@ export default function KnowledgePage() {
                   <button className="btn-ghost btn-icon" onClick={() => openEditModal(field)} title="Edit" style={{ width: '28px', height: '28px' }}>
                     <Pencil size={14} />
                   </button>
-                  <button className="btn-ghost btn-icon" onClick={() => deleteField(field.id)} title="Delete" style={{ width: '28px', height: '28px' }}>
+                  <button className="btn-ghost btn-icon" onClick={() => deleteField(field.ids)} title="Delete" style={{ width: '28px', height: '28px' }}>
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -551,20 +629,42 @@ export default function KnowledgePage() {
                   </div>
                 )}
                 <div className="form-group">
-                  <label className="form-label" htmlFor="kf-page">Assign to Page</label>
-                  <select
-                    id="kf-page"
-                    className="form-select"
-                    value={assignedPageId}
-                    onChange={(e) => setAssignedPageId(e.target.value)}
-                  >
-                    <option value="">🌐 Global (all pages)</option>
+                  <label className="form-label">Assign to Pages</label>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={assignedPageIds.length === 0}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setAssignedPageIds([]); // Empty means Global
+                          }
+                        }}
+                      />
+                      <span>🌐 Global (all pages)</span>
+                    </label>
+
                     {pages.map((p) => (
-                      <option key={p.page_id} value={p.page_id}>{p.page_name || p.page_id}</option>
+                      <label key={p.page_id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', marginLeft: '16px' }}>
+                        <input
+                          type="checkbox"
+                          checked={assignedPageIds.includes(p.page_id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setAssignedPageIds([...assignedPageIds, p.page_id]);
+                            } else {
+                              setAssignedPageIds(assignedPageIds.filter(id => id !== p.page_id));
+                            }
+                          }}
+                        />
+                        <span>📄 {p.page_name || p.page_id}</span>
+                      </label>
                     ))}
-                  </select>
-                  <p className="form-hint">
-                    Global fields are injected for every page. Page-specific fields are only used for that page's bot.
+                  </div>
+
+                  <p className="form-hint" style={{ marginTop: '8px' }}>
+                    Global fields are injected for every page. Check specific pages to restrict this fact to those bots.
                   </p>
                 </div>
               </div>

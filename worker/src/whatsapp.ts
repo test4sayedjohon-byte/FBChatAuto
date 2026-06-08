@@ -2,19 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env, WhatsAppWebhookEvent, WhatsAppMessage, WhatsAppValue, PageConnection } from './types';
 import { createSupabaseAdmin, getWhatsAppConnection, storeIncomingMessage, acquireSessionLock, releaseSessionLock } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
-import { getReplyDelay } from './facebook';
-
-/**
- * Helper: Delay for ms milliseconds, checking the check() condition every 100ms.
- * Returns early if check() evaluates to true.
- */
-async function delayOrFinish(ms: number, check: () => boolean): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < ms) {
-    if (check()) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-}
 
 /**
  * Send a WhatsApp reply using the Meta Cloud API.
@@ -31,7 +18,7 @@ export async function sendWhatsAppReply(
   const messages = splitMessage(messageText, MAX_LENGTH);
 
   for (const msg of messages) {
-    const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+    const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -63,48 +50,6 @@ export async function sendWhatsAppReply(
     } catch (error) {
       console.error('[WhatsApp] ❌ Network error sending reply:', error);
     }
-  }
-}
-
-/**
- * Send WhatsApp Typing Indicator (typing status) using Meta Cloud API.
- * The typing indicator automatically disappears when a message is sent
- * or after 25 seconds of inactivity.
- */
-export async function sendWhatsAppTypingIndicator(
-  phoneNumberId: string,
-  accessToken: string,
-  messageId: string
-): Promise<void> {
-  const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    status: 'read',
-    message_id: messageId,
-    typing_indicator: {
-      type: 'text'
-    }
-  };
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.log(`[WhatsApp] ⚠️ Failed to send typing indicator (${response.status}):`, errorBody);
-    } else {
-      console.log(`[WhatsApp] ✅ Typing indicator sent for message ${messageId}`);
-    }
-  } catch (error) {
-    console.error('[WhatsApp] ❌ Network error sending typing indicator:', error);
   }
 }
 
@@ -423,7 +368,7 @@ async function handleWhatsAppMessage(
     // Handle Image attachment URLs if it's an image
     if (isImage && message.image) {
       try {
-        const mediaRes = await fetch(`https://graph.facebook.com/v22.0/${message.image.id}`, {
+        const mediaRes = await fetch(`https://graph.facebook.com/v21.0/${message.image.id}`, {
           headers: { 'Authorization': `Bearer ${pageConnection.access_token}` },
         });
         if (mediaRes.ok) {
@@ -488,57 +433,39 @@ async function handleWhatsAppMessage(
       }
     }
 
-    let isProcessing = true;
-    const typingPromise = (async () => {
-      try {
-        while (isProcessing) {
-          await sendWhatsAppTypingIndicator(phoneNumberId, pageConnection.access_token, messageId);
-          // Wait for 5 seconds before refreshing the indicator
-          await delayOrFinish(5000, () => !isProcessing);
-        }
-      } catch (err) {
-        console.error('[WhatsApp] ❌ Error in typing simulation loop:', err);
-      }
-    })();
+    // ── Phase 2: Full AI Response Pipeline ──────────────────────
+    const chatResult = await handleChatMessage(
+      supabase,
+      result.sessionId,
+      pageConnection,
+      contentToStore,
+      senderPhoneNumber
+    );
 
-    let chatResult;
-    try {
-      // ── Phase 2: Full AI Response Pipeline ──────────────────────
-      chatResult = await handleChatMessage(
-        supabase,
-        result.sessionId,
-        pageConnection,
-        contentToStore,
-        senderPhoneNumber
-      );
+    console.log(
+      `[WhatsApp Webhook] 🤖 AI response via ${chatResult.provider}/${chatResult.model}` +
+      ` | Tokens: ${chatResult.tokensUsed ?? '?'}` +
+      ` | RAG: ${chatResult.ragUsed}`
+    );
 
-      console.log(
-        `[WhatsApp Webhook] 🤖 AI response via ${chatResult.provider}/${chatResult.model}` +
-        ` | Tokens: ${chatResult.tokensUsed ?? '?'}` +
-        ` | RAG: ${chatResult.ragUsed}`
-      );
-
-      // Apply human-like randomized delay BEFORE sending the WhatsApp message
-      const isVisionCanned = chatResult.provider?.startsWith('vision-') && chatResult.model === 'canned';
-      const extraDelayMs = getReplyDelay(chatResult.reply, isVisionCanned);
-
-      if (extraDelayMs > 0) {
-        console.log(`[WhatsApp Webhook] ⏳ Adding randomized human-like delay of ${extraDelayMs}ms...`);
-        await delayOrFinish(extraDelayMs, () => false);
-      }
-    } finally {
-      isProcessing = false;
-      await typingPromise;
+    // Apply short human-like randomized delay BEFORE sending the WhatsApp message.
+    // WhatsApp doesn't support typing indicators, so we keep this under 2 seconds to avoid feeling frozen.
+    let extraDelayMs = 0;
+    if (Math.random() < 0.70) {
+      extraDelayMs = Math.floor(Math.random() * 1500) + 500; // 70% chance of 0.5 to 2 seconds delay
     }
 
-    if (chatResult) {
-      await sendWhatsAppReply(
-        phoneNumberId,
-        pageConnection.access_token,
-        senderPhoneNumber,
-        chatResult.reply
-      );
+    if (extraDelayMs > 0) {
+      console.log(`[WhatsApp Webhook] ⏳ Adding short human-like delay of ${extraDelayMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, extraDelayMs));
     }
+
+    await sendWhatsAppReply(
+      phoneNumberId,
+      pageConnection.access_token,
+      senderPhoneNumber,
+      chatResult.reply
+    );
 
     // ── Phase 3: Sliding Window Summarization ──────────────────────
     await triggerSlidingWindowSummarization(

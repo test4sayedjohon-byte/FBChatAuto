@@ -45,11 +45,33 @@ export default function SandboxPage() {
   });
 
   useEffect(() => {
-    localStorage.setItem('sandbox_messages', JSON.stringify(messages));
+    try {
+      const sanitized = messages.map(msg => {
+        if (msg.metadata?.attachment_urls) {
+          return {
+            ...msg,
+            metadata: {
+              ...msg.metadata,
+              attachment_urls: msg.metadata.attachment_urls.map(url =>
+                url.startsWith('data:') ? '[Base64 Image Data]' : url
+              )
+            }
+          };
+        }
+        return msg;
+      });
+      localStorage.setItem('sandbox_messages', JSON.stringify(sanitized));
+    } catch (e) {
+      console.error('Failed to save sandbox messages to localStorage:', e);
+    }
   }, [messages]);
 
   useEffect(() => {
-    localStorage.setItem('sandbox_session_id', sessionId);
+    try {
+      localStorage.setItem('sandbox_session_id', sessionId);
+    } catch (e) {
+      console.error('Failed to save sandbox sessionId to localStorage:', e);
+    }
   }, [sessionId]);
   const [globalProviders, setGlobalProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('default');

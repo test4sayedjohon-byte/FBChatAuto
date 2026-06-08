@@ -186,14 +186,14 @@ export async function handleChatMessage(
   // causes the Cloudflare Worker to time out before sending any reply.
   if (needsVision) {
     const humanVisionReplies = [
-      "Thanks for sharing! 🖼️ I can't quite view images directly at the moment. Could you type out a quick description of it for me?",
-      "I see you sent an image! 📷 Unfortunately, I'm unable to analyze images right now. If you have a question about it, please describe it in text!",
-      "Appreciate the image! 🖼️ I'm currently unable to view or process photos. Could you tell me a bit about what's in the image?",
-      "I received your photo! 📸 However, I can't process images at this time. Could you describe what you need help with in writing?",
-      "Nice picture! 🖼️ I'm not able to view attachments right now. Could you please explain what is in the image in text?",
-      "Got your image! 📷 My vision features are currently offline, so I can't view it. Please type out a description of what you'd like me to look at!",
-      "Thanks for sending! 🖼️ I don't have the ability to view photos right now. If you can describe it in text, I'd be happy to help!",
-      "I see the attachment! 📸 I'm only able to read text messages at the moment. Can you tell me what the image shows?"
+      "Hey there! I'm having trouble opening that photo on my screen right now. Mind describing what it shows or typing out the details for me?",
+      "Thanks for sending that! For some reason, the image isn't loading on my end. Could you tell me a bit about what's in the photo?",
+      "I see you sent an attachment, but my chat system is acting up and I can't open it. Can you explain what you need help with in writing?",
+      "Got your image, but it's showing up blank on my device. Could you describe the issue or the text in the image so I can help?",
+      "Hey! I can't seem to load this photo on my phone right now. Could you please type out what it shows or what your question is about?",
+      "Appreciate the picture, but it's not opening for me at the moment. Can you give me a quick description of what's in it?",
+      "I received your photo, but my viewer is having issues opening it today. Mind typing out a quick explanation of what you sent?",
+      "Hey! I'm on a connection that isn't letting me open images right now. Could you describe what's in the photo or copy the text for me?"
     ];
 
     const getRandomVisionReply = () => {

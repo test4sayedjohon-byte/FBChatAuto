@@ -443,14 +443,22 @@ async function handleMessagingEvent(
     );
 
     // Apply human-like randomized delay BEFORE sending the message
-    const rand = Math.random();
+    const isVisionCanned = chatResult.provider?.startsWith('vision-') && chatResult.model === 'canned';
     let extraDelayMs = 0;
-    if (rand < 0.30) {
-      extraDelayMs = 0; // 30% chance: reply instantly
-    } else if (rand < 0.75) {
-      extraDelayMs = Math.floor(Math.random() * 2000) + 1000; // 45% chance: 1-3 seconds
+
+    if (isVisionCanned) {
+      // 10 to 20 seconds
+      extraDelayMs = Math.floor(Math.random() * 10000) + 10000;
+      console.log(`[Webhook] 👁️ Canned vision reply. Adding longer human-like delay of ${extraDelayMs}ms...`);
     } else {
-      extraDelayMs = Math.floor(Math.random() * 3000) + 4000; // 25% chance: 4-7 seconds
+      const rand = Math.random();
+      if (rand < 0.30) {
+        extraDelayMs = 0; // 30% chance: reply instantly
+      } else if (rand < 0.75) {
+        extraDelayMs = Math.floor(Math.random() * 2000) + 1000; // 45% chance: 1-3 seconds
+      } else {
+        extraDelayMs = Math.floor(Math.random() * 3000) + 4000; // 25% chance: 4-7 seconds
+      }
     }
 
     if (extraDelayMs > 0) {

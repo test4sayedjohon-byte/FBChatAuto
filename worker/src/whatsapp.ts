@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env, WhatsAppWebhookEvent, WhatsAppMessage, WhatsAppValue, PageConnection } from './types';
 import { createSupabaseAdmin, getWhatsAppConnection, storeIncomingMessage, acquireSessionLock, releaseSessionLock } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
+import { getReplyDelay } from './facebook';
 
 /**
  * Send a WhatsApp reply using the Meta Cloud API.
@@ -50,6 +51,48 @@ export async function sendWhatsAppReply(
     } catch (error) {
       console.error('[WhatsApp] ❌ Network error sending reply:', error);
     }
+  }
+}
+
+/**
+ * Send WhatsApp Typing Indicator (typing status) using Meta Cloud API.
+ * The typing indicator automatically disappears when a message is sent
+ * or after 25 seconds of inactivity.
+ */
+export async function sendWhatsAppTypingIndicator(
+  phoneNumberId: string,
+  accessToken: string,
+  messageId: string
+): Promise<void> {
+  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    status: 'read',
+    message_id: messageId,
+    typing_indicator: {
+      type: 'text'
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.log(`[WhatsApp] ⚠️ Failed to send typing indicator (${response.status}):`, errorBody);
+    } else {
+      console.log(`[WhatsApp] ✅ Typing indicator sent for message ${messageId}`);
+    }
+  } catch (error) {
+    console.error('[WhatsApp] ❌ Network error sending typing indicator:', error);
   }
 }
 
@@ -433,6 +476,9 @@ async function handleWhatsAppMessage(
       }
     }
 
+    // Show typing indicator on WhatsApp while AI is processing
+    await sendWhatsAppTypingIndicator(phoneNumberId, pageConnection.access_token, messageId);
+
     // ── Phase 2: Full AI Response Pipeline ──────────────────────
     const chatResult = await handleChatMessage(
       supabase,
@@ -448,15 +494,12 @@ async function handleWhatsAppMessage(
       ` | RAG: ${chatResult.ragUsed}`
     );
 
-    // Apply short human-like randomized delay BEFORE sending the WhatsApp message.
-    // WhatsApp doesn't support typing indicators, so we keep this under 2 seconds to avoid feeling frozen.
-    let extraDelayMs = 0;
-    if (Math.random() < 0.70) {
-      extraDelayMs = Math.floor(Math.random() * 1500) + 500; // 70% chance of 0.5 to 2 seconds delay
-    }
+    // Apply human-like randomized delay BEFORE sending the WhatsApp message
+    const isVisionCanned = chatResult.provider?.startsWith('vision-') && chatResult.model === 'canned';
+    const extraDelayMs = getReplyDelay(chatResult.reply, isVisionCanned);
 
     if (extraDelayMs > 0) {
-      console.log(`[WhatsApp Webhook] ⏳ Adding short human-like delay of ${extraDelayMs}ms...`);
+      console.log(`[WhatsApp Webhook] ⏳ Adding randomized human-like delay of ${extraDelayMs}ms...`);
       await new Promise(resolve => setTimeout(resolve, extraDelayMs));
     }
 

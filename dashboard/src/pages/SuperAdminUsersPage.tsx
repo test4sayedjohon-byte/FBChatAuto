@@ -222,176 +222,45 @@ export default function SuperAdminUsersPage() {
     setGiftSubmitting(true);
     try {
       const finalPrice = parseFloat(giftPrice) || 0;
-      const currentMonth = new Date().toISOString().slice(0, 7);
 
+      // Determine the message_addon string based on gift type
+      let addonString = '';
       if (giftType === 'agent_queries') {
-        // 1. Fetch user's current agent limit/extra details
-        const { data: userRecord, error: userErr } = await supabase
-          .from('users')
-          .select('agent_extra_queries, agent_usage_month')
-          .eq('id', giftTargetUser.id)
-          .single();
-
-        if (userErr || !userRecord) {
-          throw new Error("User record not found in database: " + (userErr?.message || ''));
-        }
-
-        let nextExtraQueries = userRecord.agent_extra_queries ?? 0;
-        
-        // If the month has changed, reset extra queries to the gifted amount
-        if (userRecord.agent_usage_month !== currentMonth) {
-          nextExtraQueries = giftAmount;
-        } else {
-          nextExtraQueries += giftAmount;
-        }
-
-        // 2. Update user table
-        const { error: updateErr } = await supabase
-          .from('users')
-          .update({
-            agent_extra_queries: nextExtraQueries,
-            agent_usage_month: currentMonth
-          })
-          .eq('id', giftTargetUser.id);
-
-        if (updateErr) throw updateErr;
-
-        // 3. Log to purchases table for user store visibility
-        const { error: purchaseErr } = await supabase
-          .from('purchases')
-          .insert({
-            user_id: giftTargetUser.id,
-            channels_count: 0,
-            message_addon: `Gift: +${giftAmount} AI Queries`,
-            currency: giftCurrency,
-            total_amount: finalPrice,
-            payment_method: 'gift',
-            status: 'approved',
-            admin_notes: giftNotes || 'Gifted by administrator'
-          });
-
-        if (purchaseErr) {
-          console.error("Purchase log insertion failed:", purchaseErr);
-        }
-
-        // 4. Log to admin audit logs
-        await supabase.from('admin_audit_log').insert({
-          admin_id: currentUser?.id,
-          target_id: giftTargetUser.id,
-          action: 'gift_agent_queries',
-          details: { amount: giftAmount, price: finalPrice, currency: giftCurrency, notes: giftNotes }
-        });
-
-        toast.success(`Successfully gifted +${giftAmount} AI Queries to ${giftTargetUser.email}!`);
+        addonString = `Gift: +${giftAmount} AI Queries`;
       } else if (giftType === 'vision_queries') {
-        // Gifting vision queries
-        const { data: userRecord, error: userErr } = await supabase
-          .from('users')
-          .select('vision_extra_queries, vision_usage_month')
-          .eq('id', giftTargetUser.id)
-          .single();
-
-        if (userErr || !userRecord) {
-          throw new Error("User record not found in database: " + (userErr?.message || ''));
-        }
-
-        let nextExtraQueries = userRecord.vision_extra_queries ?? 0;
-        
-        if (userRecord.vision_usage_month !== currentMonth) {
-          nextExtraQueries = giftAmount;
-        } else {
-          nextExtraQueries += giftAmount;
-        }
-
-        const { error: updateErr } = await supabase
-          .from('users')
-          .update({
-            vision_extra_queries: nextExtraQueries,
-            vision_usage_month: currentMonth
-          })
-          .eq('id', giftTargetUser.id);
-
-        if (updateErr) throw updateErr;
-
-        const { error: purchaseErr } = await supabase
-          .from('purchases')
-          .insert({
-            user_id: giftTargetUser.id,
-            channels_count: 0,
-            message_addon: `Gift: +${giftAmount} Vision Queries`,
-            currency: giftCurrency,
-            total_amount: finalPrice,
-            payment_method: 'gift',
-            status: 'approved',
-            admin_notes: giftNotes || 'Gifted by administrator'
-          });
-
-        if (purchaseErr) {
-          console.error("Purchase log insertion failed:", purchaseErr);
-        }
-
-        await supabase.from('admin_audit_log').insert({
-          admin_id: currentUser?.id,
-          target_id: giftTargetUser.id,
-          action: 'gift_vision_queries',
-          details: { amount: giftAmount, price: finalPrice, currency: giftCurrency, notes: giftNotes }
-        });
-
-        toast.success(`Successfully gifted +${giftAmount} Vision Queries to ${giftTargetUser.email}!`);
+        addonString = `Gift: +${giftAmount} Vision Queries`;
       } else {
-        // Gifting regular messages
-        // 1. Fetch user's current extra message limit
-        const { data: userRecord, error: userErr } = await supabase
-          .from('users')
-          .select('extra_message_limit')
-          .eq('id', giftTargetUser.id)
-          .single();
-
-        if (userErr || !userRecord) {
-          throw new Error("User record not found in database: " + (userErr?.message || ''));
-        }
-
-        const nextExtraMessages = (userRecord.extra_message_limit ?? 0) + giftAmount;
-
-        // 2. Update user table
-        const { error: updateErr } = await supabase
-          .from('users')
-          .update({
-            extra_message_limit: nextExtraMessages
-          })
-          .eq('id', giftTargetUser.id);
-
-        if (updateErr) throw updateErr;
-
-        // 3. Log to purchases table for user store visibility
-        const { error: purchaseErr } = await supabase
-          .from('purchases')
-          .insert({
-            user_id: giftTargetUser.id,
-            channels_count: 0,
-            message_addon: `Gift: +${giftAmount} Messages`,
-            currency: giftCurrency,
-            total_amount: finalPrice,
-            payment_method: 'gift',
-            status: 'approved',
-            admin_notes: giftNotes || 'Gifted by administrator'
-          });
-
-        if (purchaseErr) {
-          console.error("Purchase log insertion failed:", purchaseErr);
-        }
-
-        // 4. Log to admin audit logs
-        await supabase.from('admin_audit_log').insert({
-          admin_id: currentUser?.id,
-          target_id: giftTargetUser.id,
-          action: 'gift_messages',
-          details: { amount: giftAmount, price: finalPrice, currency: giftCurrency, notes: giftNotes }
-        });
-
-        toast.success(`Successfully gifted +${giftAmount} Messages to ${giftTargetUser.email}!`);
+        addonString = `Gift: +${giftAmount} Messages`;
       }
 
+      // Insert into purchases — the DB trigger (trg_purchase_approval) handles
+      // updating all user limits automatically. No direct users update needed here.
+      const { error: purchaseErr } = await supabase
+        .from('purchases')
+        .insert({
+          user_id: giftTargetUser.id,
+          channels_count: 0,
+          message_addon: addonString,
+          currency: giftCurrency,
+          total_amount: finalPrice,
+          payment_method: 'gift',
+          status: 'approved',
+          admin_notes: giftNotes || 'Gifted by administrator'
+        });
+
+      if (purchaseErr) throw purchaseErr;
+
+      // Log to admin audit log
+      await supabase.from('admin_audit_log').insert({
+        admin_id: currentUser?.id,
+        target_id: giftTargetUser.id,
+        action: giftType === 'agent_queries' ? 'gift_agent_queries'
+              : giftType === 'vision_queries' ? 'gift_vision_queries'
+              : 'gift_messages',
+        details: { amount: giftAmount, price: finalPrice, currency: giftCurrency, notes: giftNotes }
+      });
+
+      toast.success(`Successfully gifted ${addonString.replace('Gift: ', '')} to ${giftTargetUser.email}!`);
       setGiftModalOpen(false);
       loadUsers(); // Refresh users list
     } catch (err: any) {

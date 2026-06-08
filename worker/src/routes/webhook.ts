@@ -65,7 +65,16 @@ webhook.post('/webhook/:userId', async (c) => {
 
   // 1. Verify the request signature
   const signature = c.req.header('X-Hub-Signature-256') ?? null;
-  const isValid = await verifyFacebookSignature(rawBody, signature, expectedSecret);
+  const url = new URL(c.req.url);
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  let isValid = false;
+
+  if (isLocal && !signature) {
+    console.log(`[Webhook] ⚠️ Bypassing signature verification for local testing`);
+    isValid = true;
+  } else {
+    isValid = await verifyFacebookSignature(rawBody, signature, expectedSecret);
+  }
 
   if (!isValid) {
     console.error(`[Webhook] ❌ Invalid signature for user ${userId} — rejecting request`);

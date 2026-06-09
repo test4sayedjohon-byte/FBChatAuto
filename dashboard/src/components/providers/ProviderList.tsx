@@ -10,6 +10,7 @@ interface Provider {
   base_url: string;
   api_key: string;
   model_chat: string | null;
+  model_reasoning: string | null;
   model_embedding: string | null;
   is_active_chat: boolean;
   is_active_embedding: boolean;
@@ -55,6 +56,7 @@ export default function ProviderList({ providers, onEdit, onRefresh }: ProviderL
       base_url: p.base_url,
       api_key: p.api_key,
       model_chat: p.model_chat,
+      model_reasoning: p.model_reasoning,
       model_embedding: p.model_embedding,
       is_active_chat: false,
       is_active_embedding: false,

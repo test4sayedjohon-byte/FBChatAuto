@@ -27,6 +27,7 @@ export async function callChatCompletion(
     stream?: boolean;
     tools?: any[]; // AITool[]
     toolChoice?: 'auto' | 'none' | { type: 'function', function: { name: string } };
+    timeoutMs?: number;
   }
 ): Promise<ChatCompletionResponse> {
   const url = `${provider.baseUrl}/chat/completions`;
@@ -66,11 +67,19 @@ export async function callChatCompletion(
 
   console.log(`[AI] Calling ${provider.providerName} (${provider.modelChat}) at ${provider.baseUrl}`);
 
+  // Dynamic timeout: 30s default, 90s for reasoning models
+  const isReasoningModel = provider.modelChat.includes('reason') || 
+                           provider.modelChat.includes('o1') || 
+                           provider.modelChat.includes('o3') || 
+                           provider.modelChat.includes('deepseek-r1') ||
+                           provider.modelChat.includes('thinking');
+  const timeoutMs = options?.timeoutMs ?? (isReasoningModel ? 90_000 : 30_000);
+
   const response = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000), // 30s timeout
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {

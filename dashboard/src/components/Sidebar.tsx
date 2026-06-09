@@ -19,7 +19,8 @@ import {
   Calendar,
   Zap,
   Link2,
-  BarChart3
+  BarChart3,
+  Paperclip
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -111,6 +112,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             <NavLink to="/documents" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Folder className="nav-icon" />
               Knowledge Base
+            </NavLink>
+
+            <NavLink to="/chat-assets" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Paperclip className="nav-icon" />
+              Chat Assets
             </NavLink>
 
             <span className="sidebar-section-label" style={{ marginTop: '16px' }}>Automation</span>

@@ -25,6 +25,7 @@ import ContentPlannerPage from './pages/ContentPlannerPage';
 import AutoModerationPage from './pages/AutoModerationPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import ChatAssetsPage from './pages/ChatAssetsPage';
 
 import type { ReactNode } from 'react';
 
@@ -103,6 +104,7 @@ export default function App() {
               <Route path="/inbox" element={<InboxPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/chat-assets" element={<ChatAssetsPage />} />
               <Route path="/providers" element={<ProvidersPage />} />
               <Route path="/pages" element={<PagesPage />} />
               <Route path="/fb-app" element={<FacebookAppSettingsPage />} />

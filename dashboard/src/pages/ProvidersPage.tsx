@@ -15,6 +15,7 @@ interface Provider {
   base_url: string;
   api_key: string;
   model_chat: string | null;
+  model_reasoning: string | null;
   model_embedding: string | null;
   is_active_chat: boolean;
   is_active_embedding: boolean;

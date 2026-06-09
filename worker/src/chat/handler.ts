@@ -29,7 +29,8 @@ import {
   getUserRecord,
   getSessionContextFallback,
   storeAssistantMessageFallback,
-  updateMessageMetadataFallback
+  updateMessageMetadataFallback,
+  getChatAssetByNameFallback
 } from '../db';
 
 export interface ChatHandlerResult {
@@ -39,6 +40,14 @@ export interface ChatHandlerResult {
   ragUsed: boolean;
   provider: string;
   model: string;
+  attachment?: {
+    id: string;
+    name: string;
+    friendlyName: string;
+    fileUrl: string;
+    fileType: 'image' | 'video' | 'audio' | 'file';
+    facebookMediaId?: string;
+  };
 }
 
 /**
@@ -325,14 +334,32 @@ export async function handleChatMessage(
       const visionMessages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...history];
       const response = await callChatCompletion(visionProvider, visionMessages, { maxTokens: 1024 });
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't analyze the image. Please try again.";
-      await storeMsg('assistant', reply, (response.usage?.total_tokens ?? response.usage?.completion_tokens) ?? null, {
+      
+      const { finalReply, attachment } = await extractDynamicAttachment(reply, userId, supabase, db);
+
+      const msgMetadata: any = {
         provider: visionProvider.providerName,
         model: response.model,
         tokens: response.usage,
         rag_used: false,
-      });
+      };
+
+      if (attachment) {
+        msgMetadata.attachment_types = [attachment.fileType];
+        msgMetadata.attachment_urls = [attachment.fileUrl];
+      }
+
+      await storeMsg('assistant', finalReply, (response.usage?.total_tokens ?? response.usage?.completion_tokens) ?? null, msgMetadata);
       console.log(`[Chat] ✅ Vision response generated via ${visionProvider.providerName}`);
-      return { reply, sessionId, tokensUsed: response.usage?.total_tokens, ragUsed: false, provider: visionProvider.providerName, model: visionProvider.modelChat };
+      return { 
+        reply: finalReply, 
+        sessionId, 
+        tokensUsed: response.usage?.total_tokens, 
+        ragUsed: false, 
+        provider: visionProvider.providerName, 
+        model: visionProvider.modelChat,
+        attachment
+      };
     } catch (err: any) {
       const errMsg = err?.message || String(err);
       console.error(`[Chat] ❌ Vision provider failed:`, errMsg);
@@ -365,7 +392,7 @@ export async function handleChatMessage(
           userId,
           ragQuery,
           pageConnection.page_id,
-          0.4, // Low threshold to ensure short/simple docs are still retrieved
+          0.0, // Set to 0.0 to ensure multilingual / cross-lingual matches are never filtered out
           3     // Top 3 results
         );
 
@@ -397,6 +424,26 @@ export async function handleChatMessage(
     ...history,
   ];
 
+  // 5b. Inject a recency-booster language & formatting reminder to the latest user message
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      const userMsg = messages[i];
+      const reminder = `\n\n[STRICT REMINDER: Detect the language/script of this message. Reply ONLY in that same language/script (Bengali script, Banglish/Latin letters, or English). Reply in strict plain text without markdown (do NOT use **, #, or bullet lists).]`;
+      
+      if (typeof userMsg.content === 'string') {
+        userMsg.content = userMsg.content + reminder;
+      } else if (Array.isArray(userMsg.content)) {
+        const textPart = userMsg.content.find((part: any) => part.type === 'text');
+        if (textPart) {
+          textPart.text = textPart.text + reminder;
+        } else {
+          userMsg.content.push({ type: 'text', text: reminder });
+        }
+      }
+      break;
+    }
+  }
+
   // 6. Iterate through providers until one succeeds
   for (const chatProvider of chatProviders) {
     try {
@@ -420,23 +467,33 @@ export async function handleChatMessage(
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't generate a response. Please try again.";
       const tokensUsed = response.usage?.total_tokens;
 
-      // 7. Store the assistant's reply in the database
-      await storeMsg('assistant', reply, (response.usage?.total_tokens ?? response.usage?.completion_tokens) ?? null, {
+      const { finalReply, attachment } = await extractDynamicAttachment(reply, userId, supabase, db);
+
+      const msgMetadata: any = {
         provider: chatProvider.providerName,
         model: response.model,
         tokens: response.usage,
         rag_used: ragUsed,
-      });
+      };
+
+      if (attachment) {
+        msgMetadata.attachment_types = [attachment.fileType];
+        msgMetadata.attachment_urls = [attachment.fileUrl];
+      }
+
+      // 7. Store the assistant's reply in the database
+      await storeMsg('assistant', finalReply, (response.usage?.total_tokens ?? response.usage?.completion_tokens) ?? null, msgMetadata);
 
       console.log(`[Chat] ✅ AI response generated (${tokensUsed ?? '?'} tokens, RAG: ${ragUsed}) via ${chatProvider.providerName}`);
 
       return {
-        reply,
+        reply: finalReply,
         sessionId,
         tokensUsed,
         ragUsed,
         provider: executionProvider.providerName,
         model: executionProvider.modelChat,
+        attachment
       };
     } catch (error) {
       if (error instanceof AIProviderError) {
@@ -513,26 +570,101 @@ function shouldTriggerRAG(message: string, history: ChatMessage[]): boolean {
 
   // Trigger on knowledge-seeking keywords
   const knowledgeKeywords = [
-    'price', 'pricing', 'cost', 'fee', 'charge', 'rate',
-    'hour', 'hours', 'open', 'close', 'schedule', 'time',
-    'policy', 'policies', 'return', 'refund', 'exchange', 'warranty',
-    'shipping', 'delivery', 'tracking', 'order',
-    'product', 'service', 'feature', 'specification', 'spec',
-    'available', 'availability', 'stock',
-    'location', 'address', 'direction', 'contact',
-    'discount', 'offer', 'deal', 'promotion', 'coupon', 'sale',
-    'payment', 'pay', 'method', 'accept',
-    'size', 'dimension', 'weight', 'material', 'color', 'colour',
+    // Pricing, Payment & Earnings
+    'price', 'pricing', 'cost', 'fee', 'charge', 'rate', 'payment', 'pay', 'method', 'accept',
+    'earn', 'earning', 'earnings', 'income', 'commission', 'profit', 'revenue', 'salary', 'payout', 'withdraw', 'cash',
+    'taka', 'money', 'টাকা', 'আয়', 'কমিশন', 'পেমেন্ট', 'টাকায়', 'দাম', 'ইনকাম', 'আর্নিং', 'কত', 'কতো',
+    
+    // Subscriptions, Plans & Accounts
+    'plan', 'plans', 'subscribe', 'subscription', 'membership', 'member', 'renew',
+    'login', 'account', 'password', 'signup', 'register', 'signin', 'email', 'user',
+    
+    // Business Hours, Policies & Operations
+    'hour', 'hours', 'open', 'close', 'schedule', 'time', 'date',
+    'policy', 'policies', 'return', 'refund', 'exchange', 'warranty', 'guarantee', 'warrenty', 'ওয়ারেন্টি',
+    'original', 'real', 'genuine', 'fake', 'সেটআপ', 'সেটাপ',
+    
+    // Catalog, Features & Availability
+    'product', 'service', 'feature', 'specification', 'spec', 'details', 'detail', 'info', 'সার্ভিস',
+    'available', 'availability', 'stock', 'size', 'dimension', 'weight', 'material', 'color', 'colour',
+    'সাইজ', 'রং', 'কালার', 'পরিমাণ',
+    
+    // Order, Shipping & Logistics
+    'shipping', 'delivery', 'tracking', 'order', 'courier', 'parcel',
+    
+    // Location, Support & Contact
+    'location', 'address', 'direction', 'contact', 'office', 'branch', 'city', 'country', 'dhaka', 'ঢাকা',
+    'support', 'help', 'agent', 'human', 'call', 'phone', 'number', 'mobile', 'whatsapp', 'telegram',
+    'অফিস', 'মোবাইল', 'যোগাযোগ', 'হেল্প', 'এজেন্ট', 'মেইল', 'লগইন',
+    
+    // Booking, Bulk & Promotions
+    'book', 'booking', 'reserve', 'reservation', 'appointment',
+    'bulk', 'wholesale', 'retail', 'discount', 'offer', 'deal', 'promotion', 'coupon', 'promo', 'code', 'অফার'
   ];
 
   if (knowledgeKeywords.some((kw) => normalizedMessage.includes(kw))) {
     return true;
   }
 
-  // For longer messages (>50 chars), assume it might be a detailed question
-  if (normalizedMessage.length > 50) {
+  // For longer messages (>30 chars), assume it might be a detailed question
+  if (normalizedMessage.length > 30) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * Helper to check and extract dynamic file triggers of the format [SendFile: asset_name] from the reply.
+ */
+async function extractDynamicAttachment(
+  reply: string,
+  userId: string,
+  supabase: SupabaseClient,
+  db?: D1Database
+): Promise<{ finalReply: string; attachment?: any }> {
+  let finalReply = reply;
+  let matchedAttachment: any = undefined;
+
+  const sendFileRegex = /\[SendFile:\s*([a-zA-Z0-9_-]+)\s*\]/i;
+  const match = finalReply.match(sendFileRegex);
+  if (match) {
+    const assetName = match[1];
+    console.log(`[Chat] Dynamic file attachment tag detected: ${assetName}`);
+    
+    let asset = null;
+    try {
+      if (db) {
+        asset = await getChatAssetByNameFallback(db, supabase, userId, assetName);
+      } else {
+        const { data } = await supabase
+          .from('chat_assets')
+          .select('id, name, friendly_name, description, file_url, file_type, facebook_media_id')
+          .eq('user_id', userId)
+          .eq('name', assetName)
+          .maybeSingle();
+        asset = data;
+      }
+    } catch (dbErr) {
+      console.error('[Chat] Error querying chat asset details:', dbErr);
+    }
+
+    if (asset) {
+      matchedAttachment = {
+        id: asset.id,
+        name: asset.name,
+        friendlyName: asset.friendly_name,
+        fileUrl: asset.file_url,
+        fileType: asset.file_type,
+        facebookMediaId: asset.facebook_media_id || undefined
+      };
+    } else {
+      console.warn(`[Chat] Dynamic file trigger '${assetName}' did not match any registered asset.`);
+    }
+    
+    // Always strip the tag so the customer doesn't see raw tags
+    finalReply = finalReply.replace(sendFileRegex, '').trim();
+  }
+
+  return { finalReply, attachment: matchedAttachment };
 }

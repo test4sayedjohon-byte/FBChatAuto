@@ -50,21 +50,35 @@ export default function SuperAdminPurchasesPage() {
 
   async function handleStatusUpdateSubmit() {
     setSubmitting(true);
-    const { error } = await supabase
-      .from('purchases')
-      .update({ 
-        status: targetStatus, 
-        admin_notes: adminNotes || null,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', targetId);
+    
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No active session');
+
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8787';
+      const endpoint = `${apiUrl}/api/super-admin/purchases/${targetId}/${targetStatus}`;
       
-    if (error) {
-      toast.error('Error updating purchase: ' + error.message);
-    } else {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ adminNotes })
+      });
+
+      const result = await response.json();
+      if (!response.ok || result.error) {
+        throw new Error(result.error || 'Failed to update purchase');
+      }
+
+      toast.success(`Purchase successfully ${targetStatus}`);
       setShowModal(false);
       loadPurchases();
+    } catch (err: any) {
+      toast.error('Error updating purchase: ' + err.message);
     }
+    
     setSubmitting(false);
   }
 

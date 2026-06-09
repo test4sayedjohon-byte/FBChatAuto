@@ -9,6 +9,7 @@ import { verifyAndDeductCredits } from '../credits';
 import { evaluateCommentRules } from './rules';
 import { sendCommentReply, hideComment, sendPrivateReply } from './meta-api';
 import { triggerLeadSync } from './integrations';
+import { syncOmnichannelIdentity } from './omnichannel-sync';
 
 export async function processCommentChanges(
   changes: any[],
@@ -183,6 +184,16 @@ export async function processCommentChanges(
           aiSentiment: ruleResult.sentiment,
           actionTaken: finalAction,
           replyMessage: replyMessageText || undefined,
+          email: emails?.[0] || undefined,
+          phone: phones?.[0] || undefined,
+        });
+
+        // Trigger Omnichannel Identity Merge
+        await syncOmnichannelIdentity(supabase, {
+          userId,
+          senderId,
+          platform,
+          userName: senderName,
           email: emails?.[0] || undefined,
           phone: phones?.[0] || undefined,
         });

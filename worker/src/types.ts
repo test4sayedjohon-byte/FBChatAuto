@@ -21,6 +21,9 @@ export interface Env {
   // Cloudflare D1 Failover DB
   DB: D1Database;
 
+  // Cloudflare Queues
+  SOCIAL_POSTER_QUEUE: Queue<any>;
+
   // Agent configuration (optional, for highly capable agentic tasks)
   AGENT_API_KEY?: string;
   AGENT_MODEL?: string;

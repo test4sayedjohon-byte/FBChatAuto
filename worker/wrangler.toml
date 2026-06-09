@@ -27,3 +27,15 @@ binding = "DB"
 database_name = "fbchatauto_failover"
 database_id = "a26bad10-48cc-447a-8795-2e5e1896eb4e"
 
+# ──────────────────────────────────────────────
+# Queues (Phase 3: Rate-Limit Backoff & Circuit Breaker)
+# ──────────────────────────────────────────────
+[[queues.producers]]
+binding = "SOCIAL_POSTER_QUEUE"
+queue = "social-poster-queue"
+
+[[queues.consumers]]
+queue = "social-poster-queue"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5

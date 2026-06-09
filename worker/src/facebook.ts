@@ -84,6 +84,59 @@ export async function sendFacebookSenderAction(
 }
 
 /**
+ * Send Facebook Attachment (image, video, audio, or file) via URL or cached media ID.
+ */
+export async function sendFacebookAttachment(
+  accessToken: string,
+  recipientId: string,
+  attachmentType: 'image' | 'video' | 'audio' | 'file',
+  attachmentUrl: string,
+  mediaId?: string,
+  pageId?: string
+): Promise<{ success: boolean; mediaId?: string; error?: string }> {
+  const url = pageId
+    ? `https://graph.facebook.com/v21.0/${pageId}/messages`
+    : 'https://graph.facebook.com/v21.0/me/messages';
+
+  const payload: any = {
+    recipient: { id: recipientId },
+    message: {
+      attachment: {
+        type: attachmentType,
+        payload: mediaId 
+          ? { attachment_id: mediaId }
+          : { url: attachmentUrl, is_reusable: true }
+      }
+    },
+    messaging_type: 'RESPONSE',
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`[Facebook] ❌ Failed to send attachment (${response.status}):`, errorBody);
+      return { success: false, error: errorBody };
+    }
+
+    const result = await response.json() as any;
+    console.log(`[Facebook] ✅ Attachment sent to ${recipientId} (ID: ${result.attachment_id || 'reused'})`);
+    return { success: true, mediaId: result.attachment_id };
+  } catch (error: any) {
+    console.error('[Facebook] ❌ Network error sending attachment:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Helper: Calculate human-like reply delay based on response length.
  * Follows structured length-based logic 75% of the time, and completely
  * randomized copy-paste/arbitrary behavior 25% of the time.

@@ -1,1 +1,2 @@
-export { processDocument } from './pipeline';
+export { processDocument, searchDocuments } from './pipeline';
+

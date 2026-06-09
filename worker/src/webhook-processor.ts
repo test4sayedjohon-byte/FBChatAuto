@@ -3,7 +3,7 @@
 import type { Env, FacebookWebhookEvent, FacebookMessagingEvent, WhatsAppWebhookEvent, PageConnection } from './types';
 import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
-import { sendFacebookReply, sendFacebookSenderAction, getReplyDelay } from './facebook';
+import { sendFacebookReply, sendFacebookSenderAction, getReplyDelay, sendFacebookAttachment } from './facebook';
 import { processWhatsAppWebhookEntries } from './whatsapp';
 import {
   getPageConnectionFallback,
@@ -15,9 +15,12 @@ import {
   releaseSessionLockFallback,
   getChatSessionFallback,
   getLatestMessageRoleFallback,
-  storeAssistantMessageFallback
+  storeAssistantMessageFallback,
+  updateChatAssetMediaIdFallback,
+  incrementChatAssetTimesSentFallback
 } from './db';
 import { processCommentChanges } from './comments';
+import { processFeedChanges } from './feed-processor';
 
 // ─── Helper: Download Facebook Images to Base64 ─────────────────────────────
 // Facebook Messenger webhook image URLs (lookaside.fbsbx.com) are self-authenticating
@@ -154,6 +157,7 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
       console.log(`[Webhook] Detected changes/comments events in entry for page ${pageId}`);
       const platform = event.object === 'instagram' ? 'instagram' : 'facebook';
       await processCommentChanges(entry.changes, pageId, platform, env, expectedUserId);
+      await processFeedChanges(entry.changes, pageId, platform, env);
       continue;
     }
 
@@ -479,6 +483,89 @@ async function handleMessagingEvent(
 
     // Send final reply
     await sendFacebookReply(pageConnection.access_token, senderId, chatResult.reply, pageConnection.page_id);
+
+    // Send attachment if triggered by AI
+    if (chatResult.attachment) {
+      console.log(`[Webhook] Sending attachment '${chatResult.attachment.name}' to ${senderId}...`);
+      const sendAttRes = await sendFacebookAttachment(
+        pageConnection.access_token,
+        senderId,
+        chatResult.attachment.fileType,
+        chatResult.attachment.fileUrl,
+        chatResult.attachment.facebookMediaId,
+        pageConnection.page_id
+      );
+
+      if (sendAttRes.success) {
+        // Cache media ID
+        if (sendAttRes.mediaId && !chatResult.attachment.facebookMediaId) {
+          try {
+            if (env.DB) {
+              await updateChatAssetMediaIdFallback(env.DB, supabase, chatResult.attachment.id, sendAttRes.mediaId);
+            } else {
+              await supabase
+                .from('chat_assets')
+                .update({ facebook_media_id: sendAttRes.mediaId })
+                .eq('id', chatResult.attachment.id);
+            }
+            console.log(`[Webhook] Cached Facebook media ID ${sendAttRes.mediaId} for asset ${chatResult.attachment.name}`);
+          } catch (cacheErr) {
+            console.error('[Webhook] Failed to cache Facebook media ID:', cacheErr);
+          }
+        }
+
+        // Increment times_sent
+        try {
+          if (env.DB) {
+            await incrementChatAssetTimesSentFallback(env.DB, supabase, chatResult.attachment.id);
+          } else {
+            const { data: currentAsset } = await supabase
+              .from('chat_assets')
+              .select('times_sent')
+              .eq('id', chatResult.attachment.id)
+              .maybeSingle();
+            if (currentAsset) {
+              await supabase
+                .from('chat_assets')
+                .update({ times_sent: (currentAsset.times_sent || 0) + 1 })
+                .eq('id', chatResult.attachment.id);
+            }
+          }
+        } catch (sentCountErr) {
+          console.error('[Webhook] Failed to increment times_sent:', sentCountErr);
+        }
+
+        // Save second message row for attachment send (billing & display)
+        const attachmentContent = `[Sent File: ${chatResult.attachment.friendlyName || chatResult.attachment.name}]`;
+        const attMetadata = {
+          is_attachment_response: true,
+          attachment_types: [chatResult.attachment.fileType],
+          attachment_urls: [chatResult.attachment.fileUrl],
+          facebook_media_id: sendAttRes.mediaId || chatResult.attachment.facebookMediaId
+        };
+
+        if (env.DB) {
+          await storeAssistantMessageFallback(
+            env.DB,
+            supabase,
+            result.sessionId,
+            pageConnection.user_id,
+            attachmentContent,
+            null,
+            attMetadata
+          );
+        } else {
+          await supabase.from('chat_messages').insert({
+            session_id: result.sessionId,
+            user_id: pageConnection.user_id,
+            role: 'assistant',
+            content: attachmentContent,
+            token_count: null,
+            metadata: attMetadata
+          });
+        }
+      }
+    }
 
     try {
       await triggerSlidingWindowSummarization(supabase, result.sessionId, pageConnection, senderId);

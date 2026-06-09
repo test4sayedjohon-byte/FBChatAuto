@@ -54,7 +54,9 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         enable_customer_profiling INTEGER,
         whatsapp_phone_number_id TEXT,
         whatsapp_business_account_id TEXT,
-        is_whatsapp_active INTEGER
+        is_whatsapp_active INTEGER,
+        instagram_account_id TEXT,
+        is_instagram_active INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -109,7 +111,8 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         extra_headers TEXT,
         max_tokens INTEGER,
         temperature REAL,
-        context_window INTEGER
+        context_window INTEGER,
+        model_reasoning TEXT
       );
 
       CREATE TABLE IF NOT EXISTS knowledge_fields (
@@ -134,12 +137,56 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         summary TEXT,
         metadata TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS billing_ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        transaction_type TEXT,
+        amount INTEGER,
+        currency TEXT,
+        description TEXT,
+        created_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        action TEXT,
+        resource TEXT,
+        details TEXT,
+        created_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_assets (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        name TEXT,
+        friendly_name TEXT,
+        description TEXT,
+        file_url TEXT,
+        file_type TEXT,
+        facebook_media_id TEXT,
+        ai_auto_send INTEGER DEFAULT 1,
+        times_sent INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+      );
     `;
 
     const statements = sql.split(';').map(s => s.trim()).filter(s => s);
     for (const stmt of statements) {
       await db.exec(stmt.replaceAll(/\n/gm, ' '));
     }
+    // Safely apply migrations for existing D1 databases
+    try {
+      await db.exec(`ALTER TABLE ai_providers ADD COLUMN model_reasoning TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE page_connections ADD COLUMN instagram_account_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE page_connections ADD COLUMN is_instagram_active INTEGER DEFAULT 0;`);
+    } catch (_) {}
     d1Initialized = true;
     console.log('[D1] Database initialized successfully');
   } catch (err) {
@@ -282,6 +329,8 @@ function mapConnectionRow(row: any): PageConnection {
     whatsapp_phone_number_id: row.whatsapp_phone_number_id,
     whatsapp_business_account_id: row.whatsapp_business_account_id,
     is_whatsapp_active: row.is_whatsapp_active === 1 || row.is_whatsapp_active === true,
+    instagram_account_id: row.instagram_account_id,
+    is_instagram_active: row.is_instagram_active === 1 || row.is_instagram_active === true,
   };
 }
 
@@ -290,8 +339,9 @@ async function cachePageConnection(db: D1Database, conn: PageConnection) {
     `INSERT OR REPLACE INTO page_connections (
       id, user_id, page_id, page_name, access_token, is_active, webhook_secret,
       bot_name, custom_system_prompt, ai_model, temperature, ai_provider_id,
-      enable_customer_profiling, whatsapp_phone_number_id, whatsapp_business_account_id, is_whatsapp_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      enable_customer_profiling, whatsapp_phone_number_id, whatsapp_business_account_id, is_whatsapp_active,
+      instagram_account_id, is_instagram_active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       conn.id,
@@ -309,7 +359,9 @@ async function cachePageConnection(db: D1Database, conn: PageConnection) {
       conn.enable_customer_profiling ? 1 : 0,
       conn.whatsapp_phone_number_id ?? null,
       conn.whatsapp_business_account_id ?? null,
-      conn.is_whatsapp_active ? 1 : 0
+      conn.is_whatsapp_active ? 1 : 0,
+      conn.instagram_account_id ?? null,
+      conn.is_instagram_active ? 1 : 0
     )
     .run();
 }
@@ -422,8 +474,8 @@ export async function getAIProvidersFallback(
             id, user_id, provider_name, display_name, base_url, api_key, model_chat, model_embedding,
             is_active_chat, is_active_embedding, is_active_summarization, is_active_agent, is_active_vision, is_global,
             fallback_chat_order, fallback_agent_order, fallback_summarize_order, fallback_vision_order, fallback_embedding_order,
-            extra_headers, max_tokens, temperature, context_window
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            extra_headers, max_tokens, temperature, context_window, model_reasoning
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
           .bind(
             p.id,
@@ -448,7 +500,8 @@ export async function getAIProvidersFallback(
             JSON.stringify(p.extra_headers),
             p.max_tokens ?? null,
             p.temperature ?? null,
-            p.context_window ?? null
+            p.context_window ?? null,
+            p.model_reasoning ?? null
           )
           .run();
       }
@@ -489,6 +542,7 @@ export async function getAIProvidersFallback(
     max_tokens: r.max_tokens,
     temperature: r.temperature,
     context_window: r.context_window,
+    model_reasoning: r.model_reasoning,
   }));
 }
 
@@ -1107,6 +1161,177 @@ export async function updateMessageMetadataFallback(
 
   await db.prepare(`UPDATE chat_messages SET metadata = ? WHERE fb_message_id = ?`)
     .bind(JSON.stringify(metadata), fbMessageId)
+    .run();
+}
+
+// ─── Chat Assets Fallbacks ───────────────────────────────────────────────────
+
+export async function getChatAssetsFallback(
+  db: D1Database,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<any[]> {
+  await ensureD1Initialized(db);
+  try {
+    const { data, error } = await supabase
+      .from('chat_assets')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('ai_auto_send', true);
+
+    if (error) throw error;
+    if (data) {
+      // Replicate on read
+      for (const asset of data) {
+        await db.prepare(
+          `INSERT OR REPLACE INTO chat_assets (
+            id, user_id, name, friendly_name, description, file_url, file_type, facebook_media_id, ai_auto_send, times_sent, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            asset.id,
+            userId,
+            asset.name,
+            asset.friendly_name,
+            asset.description ?? null,
+            asset.file_url,
+            asset.file_type,
+            asset.facebook_media_id ?? null,
+            asset.ai_auto_send ? 1 : 0,
+            asset.times_sent ?? 0,
+            asset.created_at ?? null,
+            asset.updated_at ?? null
+          )
+          .run();
+      }
+      return data;
+    }
+  } catch (err: any) {
+    console.warn(`[Failover] Supabase chat assets query failed: ${err.message}. Trying D1 fallback.`);
+  }
+
+  // Fallback D1
+  const { results } = await db.prepare(
+    `SELECT name, friendly_name, description, file_type FROM chat_assets WHERE user_id = ? AND ai_auto_send = 1`
+  )
+    .bind(userId)
+    .all();
+
+  return results.map(r => ({
+    name: r.name,
+    friendly_name: r.friendly_name,
+    description: r.description,
+    file_type: r.file_type
+  }));
+}
+
+export async function getChatAssetByNameFallback(
+  db: D1Database,
+  supabase: SupabaseClient,
+  userId: string,
+  assetName: string
+): Promise<any | null> {
+  await ensureD1Initialized(db);
+  try {
+    const { data, error } = await supabase
+      .from('chat_assets')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('name', assetName)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) {
+      // Replicate on read
+      await db.prepare(
+        `INSERT OR REPLACE INTO chat_assets (
+          id, user_id, name, friendly_name, description, file_url, file_type, facebook_media_id, ai_auto_send, times_sent, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          data.id,
+          userId,
+          data.name,
+          data.friendly_name,
+          data.description ?? null,
+          data.file_url,
+          data.file_type,
+          data.facebook_media_id ?? null,
+          data.ai_auto_send ? 1 : 0,
+          data.times_sent ?? 0,
+          data.created_at ?? null,
+          data.updated_at ?? null
+        )
+        .run();
+      return data;
+    }
+  } catch (err: any) {
+    console.warn(`[Failover] Supabase single chat asset query failed: ${err.message}. Trying D1 fallback.`);
+  }
+
+  // Fallback D1
+  const row = await db.prepare(
+    `SELECT id, name, friendly_name, description, file_url, file_type, facebook_media_id FROM chat_assets WHERE user_id = ? AND name = ?`
+  )
+    .bind(userId, assetName)
+    .first();
+
+  return row ? {
+    id: row.id,
+    name: row.name,
+    friendly_name: row.friendly_name,
+    description: row.description,
+    file_url: row.file_url,
+    file_type: row.file_type,
+    facebook_media_id: row.facebook_media_id
+  } : null;
+}
+
+export async function updateChatAssetMediaIdFallback(
+  db: D1Database,
+  supabase: SupabaseClient,
+  assetId: string,
+  mediaId: string
+): Promise<void> {
+  await ensureD1Initialized(db);
+  try {
+    await supabase
+      .from('chat_assets')
+      .update({ facebook_media_id: mediaId })
+      .eq('id', assetId);
+  } catch (err: any) {
+    console.warn(`[Failover] Supabase chat asset media ID update failed: ${err.message}. Updating D1 only.`);
+  }
+
+  await db.prepare(`UPDATE chat_assets SET facebook_media_id = ? WHERE id = ?`)
+    .bind(mediaId, assetId)
+    .run();
+}
+
+export async function incrementChatAssetTimesSentFallback(
+  db: D1Database,
+  supabase: SupabaseClient,
+  assetId: string
+): Promise<void> {
+  await ensureD1Initialized(db);
+  try {
+    const { data: currentAsset } = await supabase
+      .from('chat_assets')
+      .select('times_sent')
+      .eq('id', assetId)
+      .maybeSingle();
+    if (currentAsset) {
+      await supabase
+        .from('chat_assets')
+        .update({ times_sent: (currentAsset.times_sent || 0) + 1 })
+        .eq('id', assetId);
+    }
+  } catch (err: any) {
+    console.warn(`[Failover] Supabase chat asset times_sent increment failed: ${err.message}. Updating D1 only.`);
+  }
+
+  await db.prepare(`UPDATE chat_assets SET times_sent = times_sent + 1 WHERE id = ?`)
+    .bind(assetId)
     .run();
 }
 

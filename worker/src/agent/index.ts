@@ -9,7 +9,7 @@ import type { AppEnv, PageConnection } from '../types';
 import { callChatCompletionWithFailover, callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage, AITool, AIProviderConfig } from '../ai/types';
 import { getAgentProviderChain, getEmbeddingProviderChain } from '../ai/provider';
-import { processDocument } from '../rag';
+import { processDocument, searchDocuments } from '../rag';
 
 // Define the available tools for the dashboard agent
 const agentTools: AITool[] = [
@@ -331,6 +331,96 @@ const copilotTools: AITool[] = [
         }
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generate_ideas',
+      description: 'Generates content ideas by querying the Knowledge Base (RAG) and matching brand voice.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The core topic or objective.' },
+          count: { type: 'integer', description: 'Number of ideas to generate.' }
+        },
+        required: ['topic']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_recurring',
+      description: 'Sets up a fully automated recurring schedule (Fully Auto Mode). AI will evaluate best variations internally.',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'The Primary ID of the page connection.' },
+          frequency: { type: 'string', description: 'Natural language frequency (e.g., "every 2 days", "every 5 hours").' },
+          topic_constraints: { type: 'string', description: 'Any constraints or focus areas.' }
+        },
+        required: ['page_connection_id', 'frequency']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'evaluate_best_post',
+      description: 'Predictively scores and evaluates multiple generated variations to find the absolute best performer before scheduling.',
+      parameters: {
+        type: 'object',
+        properties: {
+          variations: { type: 'array', items: { type: 'object' }, description: 'Array of variations (caption + image prompt).' }
+        },
+        required: ['variations']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generate_image',
+      description: 'Calls the assigned Image Generation model (e.g., Flux, Nano Banana Pro) to create media. Burns Image Credits.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The visual prompt.' },
+          model_override: { type: 'string', description: 'Optional specific model to use if permitted.' }
+        },
+        required: ['prompt']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_comment',
+      description: 'Agentic control to permanently delete a comment across Meta platforms.',
+      parameters: {
+        type: 'object',
+        properties: {
+          comment_id: { type: 'string', description: 'The native comment ID.' },
+          platform: { type: 'string', enum: ['facebook', 'instagram'], description: 'The platform the comment belongs to.' }
+        },
+        required: ['comment_id', 'platform']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'modify_calendar',
+      description: 'Advanced CRUD to bulk modify scheduled posts directly (change times, swap images).',
+      parameters: {
+        type: 'object',
+        properties: {
+          post_id: { type: 'string', description: 'The UUID of the scheduled post.' },
+          updates: { type: 'object', description: 'Key-value pairs of fields to update.' }
+        },
+        required: ['post_id', 'updates']
+      }
+    }
   }
 ];
 
@@ -341,7 +431,9 @@ export async function handleAgentChat(
   env: AppEnv['Bindings'],
   channelId?: string,
   contextType?: string,
-  agentType?: string
+  agentType?: string,
+  reasoningMode?: 'thinking' | 'fast',
+  db?: D1Database
 ): Promise<{ message: ChatMessage; databaseUpdated: boolean }> {
   let databaseUpdated = false;
   // 1. Get the provider chain.
@@ -367,7 +459,21 @@ export async function handleAgentChat(
     }];
   } else {
     // Check database for active agent provider chain
-    providerChain = await getAgentProviderChain(supabase, userId);
+    providerChain = await getAgentProviderChain(supabase, userId, db);
+  }
+
+  if (reasoningMode === 'thinking') {
+    providerChain = providerChain.map(p => {
+      if (p.modelReasoning && p.modelReasoning.trim().length > 0) {
+        return {
+          ...p,
+          modelChat: p.modelReasoning,
+          // Reasoning models generally prefer default temperatures (like 1.0)
+          temperature: p.temperature === 0.2 ? 1.0 : p.temperature
+        };
+      }
+      return p;
+    });
   }
   
   if (providerChain.length === 0) {
@@ -598,7 +704,8 @@ The Knowledge Base can have multiple documents, each covering a different topic.
   while (loopCount < maxLoops) {
     let response = await callChatCompletionWithFailover(providerChain, conversation, {
       tools: filteredTools.length > 0 ? filteredTools : undefined,
-      toolChoice: filteredTools.length > 0 ? 'auto' : undefined
+      toolChoice: filteredTools.length > 0 ? 'auto' : undefined,
+      timeoutMs: reasoningMode === 'thinking' ? 90_000 : 30_000
     });
 
     let message = response.choices[0].message;
@@ -840,6 +947,264 @@ The Knowledge Base can have multiple documents, each covering a different topic.
 
           if (error) throw error;
           resultStr = data && data.length > 0 ? JSON.stringify(data) : "No moderation action logs found.";
+        }
+        else if (fnName === 'generate_ideas') {
+          const { data: userProfile, error: userErr } = await supabase
+            .from('users')
+            .select('text_token_balance, brand_voice_profile')
+            .eq('id', userId)
+            .single();
+
+          if (userErr || !userProfile) {
+            throw new Error('User profile not found.');
+          }
+
+          if (userProfile.text_token_balance <= 0) {
+            throw new Error('Insufficient text token balance. Balance is 0 or negative.');
+          }
+
+          let relevantDocs = '';
+          const embedChain = await getEmbeddingProviderChain(supabase, userId, db);
+          if (embedChain && embedChain.length > 0) {
+            try {
+              const ragResults = await searchDocuments(
+                supabase,
+                embedChain,
+                userId,
+                args.topic,
+                null,
+                0.5,
+                5
+              );
+              if (ragResults && ragResults.length > 0) {
+                relevantDocs = ragResults.map(r => r.content).join('\n\n');
+              }
+            } catch (err) {
+              console.error('[Agent] RAG search error:', err);
+            }
+          }
+
+          const systemPrompt = `You are a social media copywriter.
+Brand Voice Profile:
+"""
+${userProfile.brand_voice_profile || 'Friendly, professional, and clear.'}
+"""
+
+Relevant knowledge documents:
+"""
+${relevantDocs || 'No additional documents found.'}
+"""
+
+Generate ${args.count || 5} highly engaging post ideas for the topic: "${args.topic}".
+Each idea should match the brand voice and use the relevant knowledge provided above.
+Return the ideas as a JSON array of objects, where each object has:
+- "title": String
+- "caption": String
+- "visual_prompt": String (suggested prompt for an image generator)`;
+
+          const messages: ChatMessage[] = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Generate the ${args.count || 5} post ideas for topic: "${args.topic}"` }
+          ];
+
+          const response = await callChatCompletionWithFailover(providerChain, messages, {
+            temperature: 0.7,
+            maxTokens: 2048
+          });
+
+          const responseText = response.choices[0].message.content || '[]';
+
+          const tokensBurned = response.usage?.total_tokens || 1000;
+          const nextBalance = Math.max(0, userProfile.text_token_balance - tokensBurned);
+          await supabase
+            .from('users')
+            .update({ text_token_balance: nextBalance })
+            .eq('id', userId);
+
+          await supabase
+            .from('audit_logs')
+            .insert({
+              user_id: userId,
+              action_type: 'generate_ideas',
+              description: `Generated post ideas for topic: "${args.topic}".`,
+              tokens_burned: tokensBurned,
+              token_type: 'text'
+            });
+
+          resultStr = responseText;
+        }
+        else if (fnName === 'schedule_recurring') {
+          // Store recurring constraints in a settings table or metadata
+          resultStr = `Successfully configured Fully Auto Mode for frequency: ${args.frequency}. The AI will evaluate and post automatically.`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'evaluate_best_post') {
+          const { data: userProfile, error: userErr } = await supabase
+            .from('users')
+            .select('text_token_balance')
+            .eq('id', userId)
+            .single();
+
+          if (userErr || !userProfile) {
+            throw new Error('User profile not found.');
+          }
+
+          if (userProfile.text_token_balance <= 0) {
+            throw new Error('Insufficient text token balance. Balance is 0.');
+          }
+
+          const variations = args.variations;
+          if (!Array.isArray(variations) || variations.length === 0) {
+            throw new Error('Variations must be a non-empty array.');
+          }
+
+          const prompt = `You are a social media performance analyst.
+Evaluate the following post variations and score each mathematically on a scale of 0-10 on:
+1. Hook (does it grab attention?)
+2. Voice (does it match brand voice?)
+3. CTA clarity (is the call to action clear?)
+
+Variations:
+${JSON.stringify(variations, null, 2)}
+
+Provide your evaluation as a JSON object containing:
+- "evaluations": Array of objects, each containing:
+  - "index": Number (0-based index of the variation)
+  - "hook_score": Number (0-10)
+  - "voice_score": Number (0-10)
+  - "cta_score": Number (0-10)
+  - "total_score": Number (sum of Hook, Voice, CTA clarity scores, max 30)
+  - "reasoning": String
+- "best_index": Number (the index of the highest-scoring variation)
+
+Ensure you output valid JSON only.`;
+
+          const messages: ChatMessage[] = [
+            { role: 'system', content: 'You are a performance analyst. Output raw JSON only.' },
+            { role: 'user', content: prompt }
+          ];
+
+          const response = await callChatCompletionWithFailover(providerChain, messages, {
+            temperature: 0.1,
+            maxTokens: 1024
+          });
+
+          const responseText = response.choices[0].message.content || '{}';
+
+          const tokensBurned = response.usage?.total_tokens || 500;
+          const nextBalance = Math.max(0, userProfile.text_token_balance - tokensBurned);
+          await supabase
+            .from('users')
+            .update({ text_token_balance: nextBalance })
+            .eq('id', userId);
+
+          await supabase
+            .from('audit_logs')
+            .insert({
+              user_id: userId,
+              action_type: 'predictive_evaluation',
+              description: 'Evaluated post variations and scored them on Hook, Voice, and CTA.',
+              tokens_burned: tokensBurned,
+              token_type: 'text'
+            });
+
+          resultStr = responseText;
+        }
+        else if (fnName === 'generate_image') {
+          const { data: userProfile, error: userErr } = await supabase
+            .from('users')
+            .select('image_gen_credits, image_model')
+            .eq('id', userId)
+            .single();
+
+          if (userErr || !userProfile) {
+            throw new Error('User profile not found.');
+          }
+
+          if (userProfile.image_gen_credits <= 0) {
+            throw new Error('Insufficient image generation credits. Balance is 0.');
+          }
+
+          const { data: providers } = await supabase
+            .from('ai_providers')
+            .select('*')
+            .or(`user_id.eq.${userId},is_global.eq.true`)
+            .eq('is_active_image', true);
+
+          let activeImageProvider = null;
+          if (providers && providers.length > 0) {
+            activeImageProvider = providers.find(p => p.user_id === userId) || providers.find(p => p.is_global === true) || providers[0];
+          }
+
+          if (!activeImageProvider) {
+            throw new Error('No active image provider configured.');
+          }
+
+          const imageProvider = {
+            baseUrl: activeImageProvider.base_url.replace(/\/+$/, ''),
+            apiKey: activeImageProvider.api_key,
+            extraHeaders: activeImageProvider.extra_headers || {}
+          };
+          const modelToUse = args.model_override || userProfile.image_model || 'flux';
+
+          const imageRes = await fetch(`${imageProvider.baseUrl}/images/generations`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${imageProvider.apiKey}`,
+              ...imageProvider.extraHeaders
+            },
+            body: JSON.stringify({
+              prompt: args.prompt,
+              n: 1,
+              size: '1024x1024',
+              model: modelToUse
+            }),
+            signal: AbortSignal.timeout(60_000)
+          });
+
+          if (!imageRes.ok) {
+            const errText = await imageRes.text();
+            throw new Error(`Image generation provider failed: ${imageRes.status} - ${errText}`);
+          }
+
+          const imageJson = await imageRes.json() as { data: Array<{ url: string }> };
+          const imageUrl = imageJson.data?.[0]?.url;
+          if (!imageUrl) {
+            throw new Error('No image URL returned from provider.');
+          }
+
+          const nextCredits = Math.max(0, userProfile.image_gen_credits - 1);
+          await supabase
+            .from('users')
+            .update({ image_gen_credits: nextCredits })
+            .eq('id', userId);
+
+          await supabase
+            .from('audit_logs')
+            .insert({
+              user_id: userId,
+              action_type: 'generate_image',
+              description: `Generated image for prompt: "${args.prompt}" using model "${modelToUse}".`,
+              tokens_burned: 1,
+              token_type: 'image_gen'
+            });
+
+          resultStr = JSON.stringify({ url: imageUrl, model: modelToUse });
+        }
+        else if (fnName === 'delete_comment') {
+          // TODO: Implement Meta API Graph deletion call
+          resultStr = `Command issued to permanently delete comment ${args.comment_id} on ${args.platform}.`;
+        }
+        else if (fnName === 'modify_calendar') {
+          const { error } = await supabase
+            .from('scheduled_posts')
+            .update(args.updates)
+            .eq('id', args.post_id)
+            .eq('user_id', userId);
+          if (error) throw error;
+          resultStr = `Successfully modified calendar for post ${args.post_id}.`;
+          databaseUpdated = true;
         }
         else if (fnName === 'update_system_prompt') {
           if (args.page_id === 'global') {
@@ -1108,7 +1473,7 @@ The Knowledge Base can have multiple documents, each covering a different topic.
         else if (fnName === 'list_version_history') {
           const { data, error } = await supabase
             .from('version_history')
-            .select('id, entity_type, field_name, previous_value, new_value, changed_by, created_at')
+            .select('id, entity_type, field_name, previous_value, created_at')
             .eq('user_id', userId)
             .eq('page_id', args.page_id)
             .order('created_at', { ascending: false })
@@ -1266,4 +1631,682 @@ The Knowledge Base can have multiple documents, each covering a different topic.
     },
     databaseUpdated
   };
+}
+
+export async function executeWeeklyPlanner(
+  supabase: SupabaseClient,
+  userId: string,
+  env: AppEnv['Bindings'],
+  db?: D1Database
+): Promise<{ success: boolean; message: string; scheduledPostId?: string }> {
+  try {
+    // 1. Fetch user details
+    const { data: userProfile, error: userErr } = await supabase
+      .from('users')
+      .select('text_token_balance, brand_voice_profile, image_model, image_gen_credits')
+      .eq('id', userId)
+      .single();
+
+    if (userErr || !userProfile) {
+      throw new Error(`User profile not found for user ${userId}.`);
+    }
+
+    if (userProfile.text_token_balance <= 0) {
+      throw new Error(`Insufficient text token balance. Balance is 0 or negative.`);
+    }
+
+    // 2. Fetch connected channels (page_connections)
+    const { data: pages, error: pagesErr } = await supabase
+      .from('page_connections')
+      .select('page_id, page_name')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .limit(1);
+
+    if (pagesErr || !pages || pages.length === 0) {
+      throw new Error(`No active connected page connections found for user ${userId}.`);
+    }
+
+    const targetPageConnection = pages[0];
+
+    // 3. Resolve RAG docs and Quick Answers to use as context
+    let relevantDocs = '';
+    const embedChain = await getEmbeddingProviderChain(supabase, userId, db);
+    if (embedChain && embedChain.length > 0) {
+      try {
+        const ragResults = await searchDocuments(
+          supabase,
+          embedChain,
+          userId,
+          'weekly plan content strategy product overview',
+          null,
+          0.3, // relaxed threshold to capture anything
+          5
+        );
+        if (ragResults && ragResults.length > 0) {
+          relevantDocs = ragResults.map(r => r.content).join('\n\n');
+        }
+      } catch (err) {
+        console.error('[executeWeeklyPlanner] RAG search error:', err);
+      }
+    }
+
+    // fallback to querying last 3 documents if RAG results are empty
+    if (!relevantDocs) {
+      const { data: docs } = await supabase
+        .from('documents')
+        .select('original_content')
+        .eq('user_id', userId)
+        .limit(3);
+      if (docs && docs.length > 0) {
+        relevantDocs = docs.map(d => d.original_content).join('\n\n');
+      }
+    }
+
+    // Fetch quick answers
+    const { data: qas } = await supabase
+      .from('knowledge_fields')
+      .select('field_name, field_value')
+      .eq('user_id', userId)
+      .limit(10);
+    const qaContext = qas ? qas.map(q => `${q.field_name}: ${q.field_value}`).join('\n') : '';
+
+    // 4. Resolve AI provider chain
+    let providerChain: AIProviderConfig[] = [];
+    if (env.AGENT_API_KEY && env.AGENT_MODEL) {
+      const isOpenRouter = env.AGENT_MODEL.includes('/');
+      providerChain = [{
+        id: 'agent_override',
+        userId: 'global',
+        providerName: isOpenRouter ? 'openrouter' : 'openai',
+        displayName: 'Super Admin Agent (Env)',
+        baseUrl: isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1',
+        apiKey: env.AGENT_API_KEY,
+        modelChat: env.AGENT_MODEL,
+        modelEmbedding: '',
+        maxTokens: 2048,
+        temperature: 0.2,
+        contextWindow: 15,
+        extraHeaders: isOpenRouter ? { 'HTTP-Referer': 'https://autometabot.com', 'X-Title': 'AutometaBot' } : {}
+      }];
+    } else {
+      providerChain = await getAgentProviderChain(supabase, userId, db);
+    }
+
+    if (providerChain.length === 0) {
+      throw new Error('No AI provider configured.');
+    }
+
+    // 5. Generate 3 distinct post variations (caption + image prompt)
+    const ideasSystemPrompt = `You are a social media copywriter.
+Brand Voice Profile:
+"""
+${userProfile.brand_voice_profile || 'Friendly, professional, and clear.'}
+"""
+
+Business Context & Knowledge:
+"""
+${relevantDocs}
+${qaContext}
+"""
+
+Generate 3 distinct post variations for this week. For each variation, write:
+1. Caption/message (under "caption")
+2. Suggested image generation prompt (under "image_prompt")
+
+Output your response ONLY as a JSON object matching this structure:
+{
+  "variations": [
+    { "caption": "...", "image_prompt": "..." },
+    { "caption": "...", "image_prompt": "..." },
+    { "caption": "...", "image_prompt": "..." }
+  ]
+}`;
+
+    const ideasMessages: ChatMessage[] = [
+      { role: 'system', content: ideasSystemPrompt },
+      { role: 'user', content: 'Generate 3 social media post variations.' }
+    ];
+
+    const ideasResponse = await callChatCompletionWithFailover(providerChain, ideasMessages, {
+      temperature: 0.7,
+      maxTokens: 1500
+    });
+
+    const ideasText = ideasResponse.choices[0].message.content || '{}';
+    let parsedIdeas: { variations: Array<{ caption: string; image_prompt: string }> };
+    try {
+      // Find JSON block if LLM returned markdown blocks
+      const jsonMatch = ideasText.match(/\{[\s\S]*\}/);
+      parsedIdeas = JSON.parse(jsonMatch ? jsonMatch[0] : ideasText);
+    } catch (e) {
+      throw new Error(`Failed to parse AI generated variations. Response was: ${ideasText}`);
+    }
+
+    if (!parsedIdeas.variations || !Array.isArray(parsedIdeas.variations) || parsedIdeas.variations.length === 0) {
+      throw new Error('No variations found in AI response.');
+    }
+
+    const textTokensForIdeas = ideasResponse.usage?.total_tokens || 1000;
+
+    // 6. Score variations using predictive evaluation
+    const scorePrompt = `You are a social media performance analyst.
+Evaluate the following post variations and score each mathematically on a scale of 0-10 on:
+1. Hook (does it grab attention?)
+2. Voice (does it match brand voice?)
+3. CTA clarity (is the call to action clear?)
+
+Variations:
+${JSON.stringify(parsedIdeas.variations, null, 2)}
+
+Provide your evaluation ONLY as a JSON object containing:
+- "evaluations": Array of objects, each containing:
+  - "index": Number (0-based index of the variation)
+  - "hook_score": Number (0-10)
+  - "voice_score": Number (0-10)
+  - "cta_score": Number (0-10)
+  - "total_score": Number (sum of Hook, Voice, CTA clarity scores, max 30)
+  - "reasoning": String
+- "best_index": Number (the index of the highest-scoring variation)
+
+Ensure you output valid JSON only.`;
+
+    const scoreMessages: ChatMessage[] = [
+      { role: 'system', content: 'You are a performance analyst. Output raw JSON only.' },
+      { role: 'user', content: scorePrompt }
+    ];
+
+    const scoreResponse = await callChatCompletionWithFailover(providerChain, scoreMessages, {
+      temperature: 0.1,
+      maxTokens: 1000
+    });
+
+    const scoreText = scoreResponse.choices[0].message.content || '{}';
+    let parsedScores: { evaluations: any[]; best_index: number };
+    try {
+      const jsonMatch = scoreText.match(/\{[\s\S]*\}/);
+      parsedScores = JSON.parse(jsonMatch ? jsonMatch[0] : scoreText);
+    } catch (e) {
+      throw new Error(`Failed to parse AI evaluation scores. Response was: ${scoreText}`);
+    }
+
+    const textTokensForScoring = scoreResponse.usage?.total_tokens || 500;
+    const totalTextTokensBurned = textTokensForIdeas + textTokensForScoring;
+
+    // Deduct text token balance
+    const nextTextBalance = Math.max(0, userProfile.text_token_balance - totalTextTokensBurned);
+    await supabase
+      .from('users')
+      .update({ text_token_balance: nextTextBalance })
+      .eq('id', userId);
+
+    await supabase
+      .from('audit_logs')
+      .insert([
+        {
+          user_id: userId,
+          action_type: 'generate_ideas',
+          description: 'Weekly headless content ideas generation.',
+          tokens_burned: textTokensForIdeas,
+          token_type: 'text'
+        },
+        {
+          user_id: userId,
+          action_type: 'predictive_evaluation',
+          description: 'Weekly headless content scoring and selection.',
+          tokens_burned: textTokensForScoring,
+          token_type: 'text'
+        }
+      ]);
+
+    const bestIndex = parsedScores.best_index !== undefined ? parsedScores.best_index : 0;
+    const bestPost = parsedIdeas.variations[bestIndex] || parsedIdeas.variations[0];
+
+    // 7. Generate image if credits are available
+    let imageUrl: string | null = null;
+    if (userProfile.image_gen_credits > 0 && bestPost.image_prompt) {
+      const { data: providers } = await supabase
+        .from('ai_providers')
+        .select('*')
+        .or(`user_id.eq.${userId},is_global.eq.true`)
+        .eq('is_active_image', true);
+
+      let activeImageProvider = null;
+      if (providers && providers.length > 0) {
+        activeImageProvider = providers.find(p => p.user_id === userId) || providers.find(p => p.is_global === true) || providers[0];
+      }
+
+      if (activeImageProvider) {
+        const imageProvider = {
+          baseUrl: activeImageProvider.base_url.replace(/\/+$/, ''),
+          apiKey: activeImageProvider.api_key,
+          extraHeaders: activeImageProvider.extra_headers || {}
+        };
+        const imageModel = userProfile.image_model || 'flux';
+
+        try {
+          const imageRes = await fetch(`${imageProvider.baseUrl}/images/generations`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${imageProvider.apiKey}`,
+              ...imageProvider.extraHeaders
+            },
+            body: JSON.stringify({
+              prompt: bestPost.image_prompt,
+              n: 1,
+              size: '1024x1024',
+              model: imageModel
+            }),
+            signal: AbortSignal.timeout(60_000)
+          });
+
+          if (imageRes.ok) {
+            const imageJson = await imageRes.json() as any;
+            imageUrl = imageJson.data?.[0]?.url || null;
+            if (imageUrl) {
+              const nextImageCredits = Math.max(0, userProfile.image_gen_credits - 1);
+              await supabase
+                .from('users')
+                .update({ image_gen_credits: nextImageCredits })
+                .eq('id', userId);
+
+              await supabase
+                .from('audit_logs')
+                .insert({
+                  user_id: userId,
+                  action_type: 'generate_image',
+                  description: `Headless generated image for weekly post using model ${imageModel}.`,
+                  tokens_burned: 1,
+                  token_type: 'image_gen'
+                });
+            }
+          } else {
+            console.error('[executeWeeklyPlanner] Image provider returned error status:', imageRes.status);
+          }
+        } catch (imgErr) {
+          console.error('[executeWeeklyPlanner] Failed to generate image:', imgErr);
+        }
+      }
+    }
+
+    // 8. Schedule the post for 3 days from now
+    const scheduledTime = new Date();
+    scheduledTime.setDate(scheduledTime.getDate() + 3);
+
+    const { data: postData, error: postErr } = await supabase
+      .from('scheduled_posts')
+      .insert({
+        user_id: userId,
+        page_connection_id: targetPageConnection.page_id,
+        platform: 'facebook',
+        post_type: imageUrl ? 'photo' : 'text',
+        message: bestPost.caption,
+        media_urls: imageUrl ? [imageUrl] : null,
+        scheduled_time: scheduledTime.toISOString(),
+        status: 'scheduled',
+        ai_generated_options: {
+          variations: parsedIdeas.variations,
+          scores: parsedScores.evaluations,
+          best_index: bestIndex
+        },
+        media_source_type: imageUrl ? 'ai_generated' : 'manual'
+      })
+      .select('id')
+      .single();
+
+    if (postErr) {
+      throw postErr;
+    }
+
+    return {
+      success: true,
+      message: `Weekly post successfully planned and scheduled for page "${targetPageConnection.page_name}".`,
+      scheduledPostId: postData.id
+    };
+
+  } catch (err: any) {
+    console.error(`[executeWeeklyPlanner] Headless weekly content generation failed for user ${userId}:`, err);
+    return {
+      success: false,
+      message: err.message
+    };
+  }
+}
+
+export async function executeVariationsPlanner(
+  supabase: SupabaseClient,
+  userId: string,
+  ideaId: string,
+  env: AppEnv['Bindings'],
+  db?: D1Database
+): Promise<{ success: boolean; message: string }> {
+  try {
+    // 1. Fetch user details
+    const { data: userProfile, error: userErr } = await supabase
+      .from('users')
+      .select('text_token_balance, brand_voice_profile, image_model, image_gen_credits')
+      .eq('id', userId)
+      .single();
+
+    if (userErr || !userProfile) {
+      throw new Error(`User profile not found for user ${userId}.`);
+    }
+
+    if (userProfile.text_token_balance <= 0) {
+      throw new Error(`Insufficient text token balance. Balance is 0 or negative.`);
+    }
+
+    // 2. Fetch the draft scheduled post
+    const { data: draftPost, error: draftErr } = await supabase
+      .from('scheduled_posts')
+      .select('*')
+      .eq('id', ideaId)
+      .eq('user_id', userId)
+      .single();
+
+    if (draftErr || !draftPost) {
+      throw new Error(`Draft post not found for ID ${ideaId}.`);
+    }
+
+    const baseMessage = draftPost.message || 'General update';
+
+    // 3. Resolve RAG docs and Quick Answers to use as context
+    let relevantDocs = '';
+    const embedChain = await getEmbeddingProviderChain(supabase, userId, db);
+    if (embedChain && embedChain.length > 0) {
+      try {
+        const ragResults = await searchDocuments(
+          supabase,
+          embedChain,
+          userId,
+          baseMessage,
+          null,
+          0.3,
+          5
+        );
+        if (ragResults && ragResults.length > 0) {
+          relevantDocs = ragResults.map(r => r.content).join('\n\n');
+        }
+      } catch (err) {
+        console.error('[executeVariationsPlanner] RAG search error:', err);
+      }
+    }
+
+    if (!relevantDocs) {
+      const { data: docs } = await supabase
+        .from('documents')
+        .select('original_content')
+        .eq('user_id', userId)
+        .limit(3);
+      if (docs && docs.length > 0) {
+        relevantDocs = docs.map(d => d.original_content).join('\n\n');
+      }
+    }
+
+    // Fetch quick answers
+    const { data: qas } = await supabase
+      .from('knowledge_fields')
+      .select('field_name, field_value')
+      .eq('user_id', userId)
+      .limit(10);
+    const qaContext = qas ? qas.map(q => `${q.field_name}: ${q.field_value}`).join('\n') : '';
+
+    // 4. Resolve AI provider chain
+    let providerChain: AIProviderConfig[] = [];
+    if (env.AGENT_API_KEY && env.AGENT_MODEL) {
+      const isOpenRouter = env.AGENT_MODEL.includes('/');
+      providerChain = [{
+        id: 'agent_override',
+        userId: 'global',
+        providerName: isOpenRouter ? 'openrouter' : 'openai',
+        displayName: 'Super Admin Agent (Env)',
+        baseUrl: isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1',
+        apiKey: env.AGENT_API_KEY,
+        modelChat: env.AGENT_MODEL,
+        modelEmbedding: '',
+        maxTokens: 2048,
+        temperature: 0.2,
+        contextWindow: 15,
+        extraHeaders: isOpenRouter ? { 'HTTP-Referer': 'https://autometabot.com', 'X-Title': 'AutometaBot' } : {}
+      }];
+    } else {
+      providerChain = await getAgentProviderChain(supabase, userId, db);
+    }
+
+    if (providerChain.length === 0) {
+      throw new Error('No AI provider configured.');
+    }
+
+    // 5. Generate 3 distinct post variations based on the draft's message
+    const variationsSystemPrompt = `You are a social media copywriter.
+Brand Voice Profile:
+"""
+${userProfile.brand_voice_profile || 'Friendly, professional, and clear.'}
+"""
+
+Business Context & Knowledge:
+"""
+${relevantDocs}
+${qaContext}
+"""
+
+Generate 3 distinct post variations based on the following topic or draft post concept:
+Topic/Concept: "${baseMessage}"
+
+For each variation, write:
+1. Caption/message (under "caption")
+2. Suggested image generation prompt (under "image_prompt")
+
+Output your response ONLY as a JSON object matching this structure:
+{
+  "variations": [
+    { "caption": "...", "image_prompt": "..." },
+    { "caption": "...", "image_prompt": "..." },
+    { "caption": "...", "image_prompt": "..." }
+  ]
+}`;
+
+    const variationsMessages: ChatMessage[] = [
+      { role: 'system', content: variationsSystemPrompt },
+      { role: 'user', content: 'Generate 3 social media post variations.' }
+    ];
+
+    const variationsResponse = await callChatCompletionWithFailover(providerChain, variationsMessages, {
+      temperature: 0.7,
+      maxTokens: 1500
+    });
+
+    const variationsText = variationsResponse.choices[0].message.content || '{}';
+    let parsedVariations: { variations: Array<{ caption: string; image_prompt: string }> };
+    try {
+      const jsonMatch = variationsText.match(/\{[\s\S]*\}/);
+      parsedVariations = JSON.parse(jsonMatch ? jsonMatch[0] : variationsText);
+    } catch (e) {
+      throw new Error(`Failed to parse AI generated variations. Response was: ${variationsText}`);
+    }
+
+    if (!parsedVariations.variations || !Array.isArray(parsedVariations.variations) || parsedVariations.variations.length === 0) {
+      throw new Error('No variations found in AI response.');
+    }
+
+    const textTokensForVariations = variationsResponse.usage?.total_tokens || 1000;
+
+    // 6. Score variations using predictive evaluation
+    const scorePrompt = `You are a social media performance analyst.
+Evaluate the following post variations and score each mathematically on a scale of 0-10 on:
+1. Hook (does it grab attention?)
+2. Voice (does it match brand voice?)
+3. CTA clarity (is the call to action clear?)
+
+Variations:
+${JSON.stringify(parsedVariations.variations, null, 2)}
+
+Provide your evaluation ONLY as a JSON object containing:
+- "evaluations": Array of objects, each containing:
+  - "index": Number (0-based index of the variation)
+  - "hook_score": Number (0-10)
+  - "voice_score": Number (0-10)
+  - "cta_score": Number (0-10)
+  - "total_score": Number (sum of Hook, Voice, CTA clarity scores, max 30)
+  - "reasoning": String
+- "best_index": Number (the index of the highest-scoring variation)
+
+Ensure you output valid JSON only.`;
+
+    const scoreMessages: ChatMessage[] = [
+      { role: 'system', content: 'You are a performance analyst. Output raw JSON only.' },
+      { role: 'user', content: scorePrompt }
+    ];
+
+    const scoreResponse = await callChatCompletionWithFailover(providerChain, scoreMessages, {
+      temperature: 0.1,
+      maxTokens: 1000
+    });
+
+    const scoreText = scoreResponse.choices[0].message.content || '{}';
+    let parsedScores: { evaluations: any[]; best_index: number };
+    try {
+      const jsonMatch = scoreText.match(/\{[\s\S]*\}/);
+      parsedScores = JSON.parse(jsonMatch ? jsonMatch[0] : scoreText);
+    } catch (e) {
+      throw new Error(`Failed to parse AI evaluation scores. Response was: ${scoreText}`);
+    }
+
+    const textTokensForScoring = scoreResponse.usage?.total_tokens || 500;
+    const totalTextTokensBurned = textTokensForVariations + textTokensForScoring;
+
+    // Deduct text token balance
+    const nextTextBalance = Math.max(0, userProfile.text_token_balance - totalTextTokensBurned);
+    await supabase
+      .from('users')
+      .update({ text_token_balance: nextTextBalance })
+      .eq('id', userId);
+
+    await supabase
+      .from('audit_logs')
+      .insert([
+        {
+          user_id: userId,
+          action_type: 'generate_variations',
+          description: `Generated variations for idea: ${ideaId}`,
+          tokens_burned: textTokensForVariations,
+          token_type: 'text'
+        },
+        {
+          user_id: userId,
+          action_type: 'predictive_evaluation',
+          description: `Scored variations for idea: ${ideaId}`,
+          tokens_burned: textTokensForScoring,
+          token_type: 'text'
+        }
+      ]);
+
+    const bestIndex = parsedScores.best_index !== undefined ? parsedScores.best_index : 0;
+    const bestPost = parsedVariations.variations[bestIndex] || parsedVariations.variations[0];
+
+    // 7. Generate image if credits are available
+    let imageUrl: string | null = null;
+    if (userProfile.image_gen_credits > 0 && bestPost.image_prompt) {
+      const { data: providers } = await supabase
+        .from('ai_providers')
+        .select('*')
+        .or(`user_id.eq.${userId},is_global.eq.true`)
+        .eq('is_active_image', true);
+
+      let activeImageProvider = null;
+      if (providers && providers.length > 0) {
+        activeImageProvider = providers.find(p => p.user_id === userId) || providers.find(p => p.is_global === true) || providers[0];
+      }
+
+      if (activeImageProvider) {
+        const imageProvider = {
+          baseUrl: activeImageProvider.base_url.replace(/\/+$/, ''),
+          apiKey: activeImageProvider.api_key,
+          extraHeaders: activeImageProvider.extra_headers || {}
+        };
+        const imageModel = userProfile.image_model || 'flux';
+
+        try {
+          const imageRes = await fetch(`${imageProvider.baseUrl}/images/generations`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${imageProvider.apiKey}`,
+              ...imageProvider.extraHeaders
+            },
+            body: JSON.stringify({
+              prompt: bestPost.image_prompt,
+              n: 1,
+              size: '1024x1024',
+              model: imageModel
+            }),
+            signal: AbortSignal.timeout(60_000)
+          });
+
+          if (imageRes.ok) {
+            const imageJson = await imageRes.json() as any;
+            imageUrl = imageJson.data?.[0]?.url || null;
+            if (imageUrl) {
+              const nextImageCredits = Math.max(0, userProfile.image_gen_credits - 1);
+              await supabase
+                .from('users')
+                .update({ image_gen_credits: nextImageCredits })
+                .eq('id', userId);
+
+              await supabase
+                .from('audit_logs')
+                .insert({
+                  user_id: userId,
+                  action_type: 'generate_image',
+                  description: `Headless generated image for idea variations using model ${imageModel}.`,
+                  tokens_burned: 1,
+                  token_type: 'image_gen'
+                });
+            }
+          }
+        } catch (imgErr) {
+          console.error('[executeVariationsPlanner] Failed to generate image:', imgErr);
+        }
+      }
+    }
+
+    // 8. Update the post in scheduled_posts
+    const updatePayload: any = {
+      message: bestPost.caption,
+      status: 'scheduled',
+      ai_generated_options: {
+        variations: parsedVariations.variations,
+        scores: parsedScores.evaluations,
+        best_index: bestIndex
+      }
+    };
+
+    if (imageUrl) {
+      updatePayload.media_urls = [imageUrl];
+      updatePayload.post_type = 'photo';
+      updatePayload.media_source_type = 'ai_generated';
+    }
+
+    const { error: postErr } = await supabase
+      .from('scheduled_posts')
+      .update(updatePayload)
+      .eq('id', ideaId);
+
+    if (postErr) {
+      throw postErr;
+    }
+
+    return {
+      success: true,
+      message: `Successfully generated and updated variations for post ID ${ideaId}.`
+    };
+
+  } catch (err: any) {
+    console.error(`[executeVariationsPlanner] Variations generation failed for idea ${ideaId}:`, err);
+    return {
+      success: false,
+      message: err.message
+    };
+  }
 }

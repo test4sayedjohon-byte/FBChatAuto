@@ -21,6 +21,7 @@ interface AIProviderRow {
   base_url: string;
   api_key: string;
   model_chat: string | null;
+  model_reasoning?: string | null;
   model_embedding: string | null;
   is_active_chat: boolean;
   is_active_embedding: boolean;
@@ -381,6 +382,7 @@ function rowToConfig(row: AIProviderRow): AIProviderConfig {
     baseUrl: row.base_url.replace(/\/+$/, ''), // Strip trailing slashes
     apiKey: row.api_key,
     modelChat: row.model_chat ?? '',
+    modelReasoning: row.model_reasoning ?? undefined,
     modelEmbedding: row.model_embedding ?? '',
     maxTokens: row.max_tokens ?? 1024,
     temperature: row.temperature ?? 0.7,
@@ -391,5 +393,10 @@ function rowToConfig(row: AIProviderRow): AIProviderConfig {
     fallbackSummarizeOrder: row.fallback_summarize_order ?? null,
     fallbackVisionOrder: row.fallback_vision_order ?? null,
     fallbackEmbeddingOrder: row.fallback_embedding_order ?? null,
+    is_active_chat: row.is_active_chat === true || (row.is_active_chat as any) === 1,
+    is_active_embedding: row.is_active_embedding === true || (row.is_active_embedding as any) === 1,
+    is_active_summarization: row.is_active_summarization === true || (row.is_active_summarization as any) === 1,
+    is_active_agent: row.is_active_agent === true || (row.is_active_agent as any) === 1,
+    is_active_vision: row.is_active_vision === true || (row.is_active_vision as any) === 1,
   };
 }

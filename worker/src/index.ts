@@ -20,6 +20,7 @@ import {
   syncOfflineMessages
 } from './db';
 import { runSchedulerJobs, runTokenHealthChecks } from './scheduler';
+import { processSocialPosterQueue } from './queue-processor';
 
 // ─── App Setup ──────────────────────────────────────────────────────────────
 
@@ -206,6 +207,11 @@ app.route('', webhookRoutes);
 
 export default {
   fetch: app.fetch,
+  async queue(batch: any, env: AppEnv["Bindings"]): Promise<void> {
+    if (batch.queue === 'social-poster-queue') {
+      await processSocialPosterQueue(batch, env);
+    }
+  },
   async scheduled(event: any, env: AppEnv["Bindings"], ctx: any) {
     const supabase = createSupabaseAdmin(env);
 
@@ -268,6 +274,51 @@ export default {
       await runTokenHealthChecks(supabase);
     } catch (healthErr: any) {
       console.error('[Cron] Token Health check failed:', healthErr.message);
+    }
+
+    // 5. Weekly content generation scheduling (Auto Mode)
+    try {
+      if (env.SOCIAL_POSTER_QUEUE) {
+        const { data: autoUsers, error: userErr } = await supabase
+          .from('users')
+          .select('id, settings')
+          .eq('settings->>auto_mode', 'true');
+
+        if (userErr) {
+          console.error('[Cron] Error fetching auto mode users:', userErr.message);
+        } else if (autoUsers && autoUsers.length > 0) {
+          const now = Date.now();
+          const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+          for (const user of autoUsers) {
+            const settings = (user.settings || {}) as any;
+            const lastGen = settings.last_auto_generation_at ? new Date(settings.last_auto_generation_at).getTime() : 0;
+
+            if (now - lastGen >= sevenDaysMs) {
+              console.log(`[Cron] Queueing weekly auto content generation for user: ${user.id}`);
+              // Queue an auto-planning task for each such user
+              await env.SOCIAL_POSTER_QUEUE.send({
+                task: 'generate_ideas',
+                tenantId: user.id
+              });
+
+              // Update user settings with last_auto_generation_at
+              const updatedSettings = {
+                ...settings,
+                last_auto_generation_at: new Date().toISOString()
+              };
+              await supabase
+                .from('users')
+                .update({ settings: updatedSettings })
+                .eq('id', user.id);
+            }
+          }
+        }
+      } else {
+        console.warn('[Cron] SOCIAL_POSTER_QUEUE binding is not configured.');
+      }
+    } catch (autoErr: any) {
+      console.error('[Cron] Weekly auto generation check failed:', autoErr.message);
     }
   }
 };

@@ -9,7 +9,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PageConnection } from '../types';
-import { getKnowledgeFieldsFallback, getCustomerProfileFallback } from '../db';
+import { getKnowledgeFieldsFallback, getCustomerProfileFallback, getChatAssetsFallback } from '../db';
 
 /**
  * Knowledge field from the database.
@@ -117,6 +117,23 @@ export async function buildSystemPrompt(
     }
   }
 
+  // 1c. Fetch active chat assets for the user/tenant
+  let chatAssets: any[] = [];
+  try {
+    if (db) {
+      chatAssets = await getChatAssetsFallback(db, supabase, userId);
+    } else {
+      const { data } = await supabase
+        .from('chat_assets')
+        .select('name, friendly_name, description, file_type')
+        .eq('user_id', userId)
+        .eq('ai_auto_send', true);
+      chatAssets = data || [];
+    }
+  } catch (err) {
+    console.error('[Prompt] Failed to load chat assets for prompt:', err);
+  }
+
   // 2. Build the base prompt
   const parts: string[] = [];
 
@@ -156,8 +173,8 @@ export async function buildSystemPrompt(
 
   // 2b. Inject Customer Summary
   if (customerSummary) {
-    parts.push('## Customer Profile (Internal Memory)');
-    parts.push('Here is a summary of what you know about this specific customer from past interactions:');
+    parts.push('## Customer Profile (Internal Memory - FOR REFERENCE ONLY)');
+    parts.push('The following summary is in English for internal records only. DO NOT reply in English just because this summary is in English. Always follow the Language Policy.');
     parts.push(customerSummary);
     parts.push('');
   }
@@ -193,6 +210,40 @@ export async function buildSystemPrompt(
     parts.push('Use this context to answer the question if relevant. If the context does not apply, ignore it.');
     parts.push('');
   }
+
+  // 4b. Inject Chat Assets instructions if available
+  if (chatAssets && chatAssets.length > 0) {
+    parts.push('## Sharing Files & Media');
+    parts.push('You have access to the following files/media that you can share with the customer. If they ask for any of these, or if you feel it is highly relevant to answer their query, you MUST append `[SendFile: name]` (exactly in this format, replacing `name` with the asset alias name) at the very end of your response text. Only send the file if they ask for it or if it directly addresses their question.');
+    parts.push('');
+    for (const asset of chatAssets) {
+      parts.push(`- **Alias:** \`${asset.name}\` (Description: ${asset.description || asset.friendly_name})`);
+    }
+    parts.push('');
+  }
+
+  // 5. Strict Language Mirroring Safeguard
+  parts.push('## Language Policy (Strict Mirroring)');
+  parts.push('You MUST detect the language and script/style of the customer\'s message and reply in that EXACT same language and script/style. NEVER default to English if the user writes in Banglish or Bengali.');
+  parts.push('');
+  parts.push('### Examples of Language Mirroring:');
+  parts.push('1. User writes in Bengali Script:');
+  parts.push('   User: ভাই, আপনাদের দোকান কখন খোলা থাকে?');
+  parts.push('   Assistant: আমাদের দোকান প্রতিদিন সকাল ১০টা থেকে রাত ৮টা পর্যন্ত খোলা থাকে। আপনি যেকোনো সময় আসতে পারেন!');
+  parts.push('');
+  parts.push('2. User writes in Banglish (Bengali using Latin/English letters):');
+  parts.push('   User: bhai, delivery charge koto?');
+  parts.push('   Assistant: Bhai, delivery charge hocche dhakar bhitore 60 taka ar dhakar bahire 120 taka.');
+  parts.push('');
+  parts.push('3. User writes in English:');
+  parts.push('   User: Hello, what is the price of this product?');
+  parts.push('   Assistant: Hello! The price of this product is 1,200 BDT. Let me know if you would like to order!');
+  parts.push('');
+
+  // 6. Strict Plain Text Safeguard (No Markdown)
+  parts.push('## Formatting Policy (STRICT PLAIN TEXT)');
+  parts.push('You MUST output your reply in STRICT PLAIN TEXT. Messenger and WhatsApp do not support markdown properly. DO NOT use markdown headers (e.g., #, ##, ###), bold markdown (e.g., **text**), bullet point lists (e.g., - item), numbered lists (e.g., 1. item), or horizontal rules (e.g., ---). Respond in natural human paragraphs and plain sentences, using emojis naturally if needed, as if writing a message on a phone.');
+  parts.push('');
 
   return parts.join('\n');
 }

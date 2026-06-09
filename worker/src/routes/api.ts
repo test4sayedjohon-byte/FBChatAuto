@@ -37,6 +37,77 @@ api.post('/chat/toggle-bot', async (c) => {
   }
 });
 
+// ─── Super Admin Billing/Purchases API ──────────────────────────────────────
+
+api.post('/super-admin/purchases/:id/approve', async (c) => {
+  try {
+    const purchaseId = c.req.param('id');
+    const { adminNotes } = await c.req.json();
+    const user = c.get('authUser');
+    
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin').eq('id', user.id).single();
+    if (!profile?.is_super_admin) return c.json({ error: 'Forbidden' }, 403);
+
+    // Get Purchase
+    const { data: purchase, error: purchaseErr } = await supabase.from('purchases').select('*').eq('id', purchaseId).single();
+    if (purchaseErr || !purchase) return c.json({ error: 'Purchase not found' }, 404);
+    if (purchase.status === 'approved') return c.json({ error: 'Already approved' }, 400);
+
+    // Update Purchase
+    // Note: The trg_purchase_approval Postgres trigger will automatically update user limits when status becomes 'approved'.
+    const { error: updateErr } = await supabase
+      .from('purchases')
+      .update({ status: 'approved', admin_notes: adminNotes, updated_at: new Date().toISOString() })
+      .eq('id', purchaseId);
+    
+    if (updateErr) throw updateErr;
+
+    // Log to Billing Ledger
+    await supabase.from('billing_ledger').insert({
+      id: crypto.randomUUID(),
+      user_id: purchase.user_id,
+      transaction_type: 'purchase_approved',
+      amount: purchase.total_amount,
+      currency: purchase.currency,
+      description: `Purchase ${purchaseId} approved. Channels: +${purchase.channels_count}, Addons: ${purchase.message_addon || ''}`,
+      created_at: new Date().toISOString()
+    });
+
+    return c.json({ success: true, message: 'Purchase approved, trigger updated limits.' });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/super-admin/purchases/:id/reject', async (c) => {
+  try {
+    const purchaseId = c.req.param('id');
+    const { adminNotes } = await c.req.json();
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+    const { data: profile } = await supabase.from('users').select('is_super_admin').eq('id', user.id).single();
+    if (!profile?.is_super_admin) return c.json({ error: 'Forbidden' }, 403);
+
+    const { error: updateErr } = await supabase
+      .from('purchases')
+      .update({ status: 'rejected', admin_notes: adminNotes, updated_at: new Date().toISOString() })
+      .eq('id', purchaseId);
+    
+    if (updateErr) throw updateErr;
+
+    return c.json({ success: true });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
 api.post('/chat/send', async (c) => {
   try {
     const { sessionId, text, pageId, recipientId } = await c.req.json();
@@ -129,7 +200,7 @@ api.post('/documents/process', async (c) => {
 
 api.post('/agent/chat', async (c) => {
   try {
-    const { messages, channelId, contextType, agentType } = await c.req.json();
+    const { messages, channelId, contextType, agentType, reasoningMode } = await c.req.json();
     const user = c.get('authUser');
     
     if (!user || !user.id) {
@@ -179,7 +250,17 @@ api.post('/agent/chat', async (c) => {
     }).eq('id', user.id);
     
     // Process the chat
-    const { message: responseMessage, databaseUpdated } = await handleAgentChat(supabase, user.id, messages, c.env, channelId, contextType, agentType);
+    const { message: responseMessage, databaseUpdated } = await handleAgentChat(
+      supabase,
+      user.id,
+      messages,
+      c.env,
+      channelId,
+      contextType,
+      agentType,
+      reasoningMode,
+      c.env.DB
+    );
     
     return c.json({ message: responseMessage, databaseUpdated });
   } catch (error: any) {

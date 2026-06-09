@@ -93,6 +93,9 @@ export default function FloatingAgentWidget() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [channels, setChannels] = useState<any[]>([]);
+  const [reasoningMode, setReasoningMode] = useState<'thinking' | 'fast'>(() => {
+    return (localStorage.getItem('agent_widget_reasoning_mode') as 'thinking' | 'fast') || 'fast';
+  });
 
   // --- IDE Active Tab State ---
   const [activeEditorTab, setActiveEditorTab] = useState<'system_prompt' | 'quick_answers' | 'knowledge_base'>('system_prompt');
@@ -460,7 +463,8 @@ export default function FloatingAgentWidget() {
       const data = await workerPost('/api/agent/chat', { 
         messages: updatedMessages,
         channelId: selectedChannel,
-        contextType: selectedContext
+        contextType: selectedContext,
+        reasoningMode
       });
       
       if (data.message) {
@@ -1288,15 +1292,16 @@ export default function FloatingAgentWidget() {
                 gap: '8px',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                fontSize: '11.5px'
+                fontSize: '11.5px',
+                flexWrap: 'wrap'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1, minWidth: '95px' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Channel:</span>
                   <select
                     value={selectedChannel}
                     onChange={(e) => handleChannelChange(e.target.value)}
                     className="form-input"
-                    style={{ padding: '2px 6px', fontSize: '11.5px', height: '26px', flex: 1, minWidth: '70px', background: 'var(--surface-primary)', border: '1px solid var(--border-subtle)' }}
+                    style={{ padding: '2px 6px', fontSize: '11px', height: '26px', flex: 1, background: 'var(--surface-primary)', border: '1px solid var(--border-subtle)' }}
                   >
                     <option value="global">Global</option>
                     {channels.map((c) => (
@@ -1307,18 +1312,35 @@ export default function FloatingAgentWidget() {
                   </select>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1, minWidth: '90px' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Scope:</span>
                   <select
                     value={selectedContext}
                     onChange={(e) => handleContextChange(e.target.value)}
                     className="form-input"
-                    style={{ padding: '2px 6px', fontSize: '11.5px', height: '26px', flex: 1, minWidth: '70px', background: 'var(--surface-primary)', border: '1px solid var(--border-subtle)' }}
+                    style={{ padding: '2px 6px', fontSize: '11px', height: '26px', flex: 1, background: 'var(--surface-primary)', border: '1px solid var(--border-subtle)' }}
                   >
                     <option value="global">Global</option>
                     <option value="system_prompt">Sys Prompt</option>
                     <option value="quick_answers">Quick Ans</option>
                     <option value="knowledge_base">Knowledge</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1, minWidth: '95px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Mode:</span>
+                  <select
+                    value={reasoningMode}
+                    onChange={(e) => {
+                      const val = e.target.value as 'thinking' | 'fast';
+                      setReasoningMode(val);
+                      localStorage.setItem('agent_widget_reasoning_mode', val);
+                    }}
+                    className="form-input"
+                    style={{ padding: '2px 6px', fontSize: '11px', height: '26px', flex: 1, background: 'var(--surface-primary)', border: '1px solid var(--border-subtle)' }}
+                  >
+                    <option value="fast">⚡ Fast</option>
+                    <option value="thinking">🧠 Think</option>
                   </select>
                 </div>
               </div>

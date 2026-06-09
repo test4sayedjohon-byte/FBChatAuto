@@ -14,6 +14,7 @@ export interface AIProviderConfig {
   baseUrl: string;            // OpenAI-compatible base URL
   apiKey: string;
   modelChat: string;          // Chat model name
+  modelReasoning?: string;    // Reasoning model name (e.g. deepseek-reasoner, o3-mini)
   modelEmbedding: string;     // Embedding model name
   maxTokens: number;
   temperature: number;
@@ -24,6 +25,11 @@ export interface AIProviderConfig {
   fallbackSummarizeOrder?: number | null;
   fallbackVisionOrder?: number | null;
   fallbackEmbeddingOrder?: number | null;
+  is_active_chat?: boolean;
+  is_active_embedding?: boolean;
+  is_active_summarization?: boolean;
+  is_active_agent?: boolean;
+  is_active_vision?: boolean;
 }
 
 /**

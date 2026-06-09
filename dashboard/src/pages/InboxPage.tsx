@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { workerPost } from '../lib/workerApi';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft } from 'lucide-react';
+import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft, FileText } from 'lucide-react';
 
 function timeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -483,7 +483,71 @@ export default function InboxPage() {
                         color: isNote ? 'black' : 'white',
                         border: isUser || isHumanAgent ? '1px solid var(--border-primary)' : 'none'
                       }}>
-                        {msg.content}
+                        <div>{msg.content}</div>
+                        {msg.metadata?.attachment_urls && msg.metadata.attachment_urls.length > 0 && (
+                          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {msg.metadata.attachment_urls.map((url: string, index: number) => {
+                              const type = msg.metadata.attachment_types?.[index] || 'file';
+                              if (type === 'image') {
+                                return (
+                                  <a key={index} href={url} target="_blank" rel="noreferrer">
+                                    <img 
+                                      src={url} 
+                                      alt="Attachment preview" 
+                                      style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px', border: '1px solid var(--border-light)', display: 'block', cursor: 'zoom-in' }} 
+                                    />
+                                  </a>
+                                );
+                              } else if (type === 'video') {
+                                return (
+                                  <video 
+                                    key={index}
+                                    src={url} 
+                                    controls 
+                                    style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px', border: '1px solid var(--border-light)', display: 'block' }} 
+                                  />
+                                );
+                              } else if (type === 'audio') {
+                                return (
+                                  <audio 
+                                    key={index}
+                                    src={url} 
+                                    controls 
+                                    style={{ maxWidth: '100%', display: 'block' }} 
+                                  />
+                                );
+                              } else {
+                                const fileName = url.substring(url.lastIndexOf('/') + 1).split('?')[0];
+                                return (
+                                  <a 
+                                    key={index}
+                                    href={url} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '8px',
+                                      padding: '8px 12px',
+                                      background: 'rgba(255, 255, 255, 0.1)',
+                                      borderRadius: '8px',
+                                      color: 'white',
+                                      textDecoration: 'none',
+                                      fontSize: '0.8rem',
+                                      fontWeight: '500',
+                                      border: '1px solid rgba(255, 255, 255, 0.2)'
+                                    }}
+                                  >
+                                    <FileText size={14} />
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>
+                                      {fileName || 'Download File'}
+                                    </span>
+                                  </a>
+                                );
+                              }
+                            })}
+                          </div>
+                        )}
                       </div>
                       <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         {isBot && <Bot size={12} />}

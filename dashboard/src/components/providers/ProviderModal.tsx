@@ -11,6 +11,7 @@ interface Provider {
   base_url: string;
   api_key: string;
   model_chat: string | null;
+  model_reasoning: string | null;
   model_embedding: string | null;
   max_tokens: number;
   temperature: number;
@@ -35,11 +36,13 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [modelChat, setModelChat] = useState('');
+  const [modelReasoning, setModelReasoning] = useState('');
   const [modelEmbed, setModelEmbed] = useState('');
   const [maxTokens, setMaxTokens] = useState(1024);
   const [temperature, setTemperature] = useState(0.7);
   const [contextWindow, setContextWindow] = useState(10);
   const [customChatEnabled, setCustomChatEnabled] = useState(false);
+  const [customReasoningEnabled, setCustomReasoningEnabled] = useState(false);
   const [customEmbedEnabled, setCustomEmbedEnabled] = useState(false);
 
   const chatPresets = getPresetChatModels(providerName);
@@ -54,6 +57,7 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
       setBaseUrl(provider.base_url);
       setApiKey(provider.api_key);
       setModelChat(provider.model_chat || '');
+      setModelReasoning(provider.model_reasoning || '');
       setModelEmbed(provider.model_embedding || '');
       setMaxTokens(provider.max_tokens);
       setTemperature(provider.temperature);
@@ -62,6 +66,9 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
       const presets = getPresetChatModels(provider.provider_name);
       const inChatPresets = presets.some(m => m.id === provider.model_chat);
       setCustomChatEnabled(provider.model_chat ? !inChatPresets : false);
+
+      const inReasoningPresets = presets.some(m => m.id === provider.model_reasoning);
+      setCustomReasoningEnabled(provider.model_reasoning ? !inReasoningPresets : false);
 
       const embeds = getPresetEmbeddingModels(provider.provider_name);
       const inEmbedPresets = embeds.some(m => m.id === provider.model_embedding);
@@ -73,11 +80,13 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
       setBaseUrl(preset.baseUrl);
       setApiKey('');
       setModelChat(preset.defaultChatModel);
+      setModelReasoning('');
       setModelEmbed(preset.defaultEmbeddingModel);
       setMaxTokens(1024);
       setTemperature(0.7);
       setContextWindow(10);
       setCustomChatEnabled(false);
+      setCustomReasoningEnabled(false);
       setCustomEmbedEnabled(false);
     }
     setTestingStatus('idle');
@@ -90,9 +99,11 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
     if (preset) {
       setBaseUrl(preset.baseUrl);
       setModelChat(preset.defaultChatModel);
+      setModelReasoning('');
       setModelEmbed(preset.defaultEmbeddingModel);
     }
     setCustomChatEnabled(false);
+    setCustomReasoningEnabled(false);
     setCustomEmbedEnabled(false);
   }
 
@@ -142,6 +153,7 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
       base_url: baseUrl,
       api_key: apiKey,
       model_chat: modelChat || null,
+      model_reasoning: modelReasoning || null,
       model_embedding: modelEmbed || null,
       max_tokens: maxTokens,
       temperature,
@@ -258,6 +270,65 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
                   />
                 )}
               </div>
+              <div className="form-group">
+                <label className="form-label">Reasoning / Thinking Model</label>
+                {chatPresets.length > 0 ? (
+                  <>
+                    <select 
+                      className="form-select" 
+                      value={customReasoningEnabled ? 'custom' : modelReasoning} 
+                      onChange={e => {
+                        if (e.target.value === 'custom') {
+                          setCustomReasoningEnabled(true);
+                          setModelReasoning('');
+                        } else {
+                          setCustomReasoningEnabled(false);
+                          setModelReasoning(e.target.value);
+                        }
+                      }}
+                    >
+                      <option value="">None (Fallback to standard chat model)</option>
+                      {freeChatPresets.length > 0 && (
+                        <optgroup label="Free Models (Quick Access)">
+                          {freeChatPresets.map(m => (
+                            <option key={`free-reason-${m.id}`} value={m.id}>
+                              🎁 [FREE] {m.name} ({m.context}{m.capabilities ? ` - ${m.capabilities}` : ''})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="All Models">
+                        {chatPresets.map(m => (
+                          <option key={`reason-${m.id}`} value={m.id}>
+                            {m.name} ({m.context}{m.capabilities ? ` - ${m.capabilities}` : ''}){m.isFree ? ' [FREE]' : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <option value="custom">Custom (Type model name manually)...</option>
+                    </select>
+                    {customReasoningEnabled && (
+                      <input 
+                        className="form-input" 
+                        style={{ marginTop: '8px' }}
+                        placeholder="Enter custom reasoning model ID" 
+                        value={modelReasoning} 
+                        onChange={e => setModelReasoning(e.target.value)} 
+                      />
+                    )}
+                  </>
+                ) : (
+                  <input 
+                    className="form-input" 
+                    placeholder="e.g., o3-mini or deepseek-reasoner" 
+                    value={modelReasoning} 
+                    onChange={e => setModelReasoning(e.target.value)} 
+                  />
+                )}
+                <p className="form-hint">Used when Reasoning Mode is active. Slow but smart.</p>
+              </div>
+            </div>
+
+            <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Embedding Model</label>
                 {embedPresets.length > 0 ? (

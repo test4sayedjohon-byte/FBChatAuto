@@ -9,6 +9,7 @@ interface Provider {
   base_url: string;
   api_key: string;
   model_chat: string | null;
+  model_reasoning: string | null;
   model_embedding: string | null;
   is_active_chat: boolean;
   is_active_embedding: boolean;
@@ -396,7 +397,7 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
                 >
                   <option value="" disabled>+ Add Backup Provider</option>
                   {availableBackups.map(p => (
-                    <option key={p.id} value={p.id}>{p.display_name}</option>
+                    <option key={p.id} value={p.id}>{p.display_name} ({p.model_chat || p.model_embedding})</option>
                   ))}
                 </select>
               </div>

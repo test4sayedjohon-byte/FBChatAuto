@@ -229,7 +229,7 @@ export async function buildSystemPrompt(
 
   // 5. Strict Language Mirroring Safeguard
   parts.push('## Language Policy (Strict Mirroring)');
-  parts.push('You MUST detect the language and script/style of the customer\'s message and reply in that EXACT same language and script/style. NEVER default to English if the user writes in Banglish or Bengali.');
+  parts.push('You MUST detect the language and script/style of the customer\'s message and reply in that EXACT same language and script/style.');
   parts.push('');
   parts.push('### Examples of Language Mirroring:');
   parts.push('1. User writes in Bengali Script:');

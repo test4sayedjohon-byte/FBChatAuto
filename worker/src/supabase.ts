@@ -35,7 +35,6 @@ export async function getPageConnection(
     .from('page_connections')
     .select('*')
     .or(`page_id.eq.${pageId},instagram_account_id.eq.${pageId},whatsapp_phone_number_id.eq.${pageId}`)
-    .eq('is_active', true)
     .maybeSingle();
 
   if (error || !data) {
@@ -43,7 +42,16 @@ export async function getPageConnection(
     return null;
   }
 
-  return data as PageConnection;
+  const conn = data as PageConnection;
+  if (conn.instagram_account_id === pageId) {
+    if (!conn.is_instagram_active) return null;
+  } else if (conn.whatsapp_phone_number_id === pageId) {
+    if (!conn.is_whatsapp_active) return null;
+  } else {
+    if (!conn.is_active) return null;
+  }
+
+  return conn;
 }
 
 /**
@@ -57,7 +65,6 @@ export async function getWhatsAppConnection(
     .from('page_connections')
     .select('*')
     .eq('whatsapp_phone_number_id', phoneNumberId)
-    .eq('is_active', true)
     .eq('is_whatsapp_active', true)
     .maybeSingle();
 

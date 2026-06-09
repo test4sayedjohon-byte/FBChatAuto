@@ -10,7 +10,7 @@ let d1Initialized = false;
 export async function ensureD1Initialized(db: D1Database): Promise<void> {
   if (d1Initialized) return;
   try {
-    await db.exec(`
+    const sql = `
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         settings TEXT,
@@ -134,7 +134,12 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         summary TEXT,
         metadata TEXT
       );
-    `);
+    `;
+
+    const statements = sql.split(';').map(s => s.trim()).filter(s => s);
+    for (const stmt of statements) {
+      await db.exec(stmt.replaceAll(/\n/gm, ' '));
+    }
     d1Initialized = true;
     console.log('[D1] Database initialized successfully');
   } catch (err) {
@@ -320,12 +325,18 @@ export async function getPageConnectionFallback(
       .from('page_connections')
       .select('*')
       .or(`page_id.eq.${pageId},instagram_account_id.eq.${pageId},whatsapp_phone_number_id.eq.${pageId}`)
-      .eq('is_active', true)
       .maybeSingle();
 
     if (error) throw error;
     if (data) {
       const conn = data as PageConnection;
+      if (conn.instagram_account_id === pageId) {
+        if (!conn.is_instagram_active) return null;
+      } else if (conn.whatsapp_phone_number_id === pageId) {
+        if (!conn.is_whatsapp_active) return null;
+      } else {
+        if (!conn.is_active) return null;
+      }
       await cachePageConnection(db, conn);
       return conn;
     }
@@ -335,12 +346,23 @@ export async function getPageConnectionFallback(
 
   // Fallback to D1
   const row = await db.prepare(
-    `SELECT * FROM page_connections WHERE (page_id = ? OR whatsapp_phone_number_id = ?) AND is_active = 1`
+    `SELECT * FROM page_connections WHERE page_id = ? OR instagram_account_id = ? OR whatsapp_phone_number_id = ?`
   )
-    .bind(pageId, pageId)
+    .bind(pageId, pageId, pageId)
     .first();
 
-  return row ? mapConnectionRow(row) : null;
+  if (row) {
+    const conn = mapConnectionRow(row);
+    if (conn.instagram_account_id === pageId) {
+      if (!conn.is_instagram_active) return null;
+    } else if (conn.whatsapp_phone_number_id === pageId) {
+      if (!conn.is_whatsapp_active) return null;
+    } else {
+      if (!conn.is_active) return null;
+    }
+    return conn;
+  }
+  return null;
 }
 
 export async function getWhatsAppConnectionFallback(
@@ -354,7 +376,6 @@ export async function getWhatsAppConnectionFallback(
       .from('page_connections')
       .select('*')
       .eq('whatsapp_phone_number_id', phoneNumberId)
-      .eq('is_active', true)
       .eq('is_whatsapp_active', true)
       .maybeSingle();
 
@@ -370,7 +391,7 @@ export async function getWhatsAppConnectionFallback(
 
   // Fallback to D1
   const row = await db.prepare(
-    `SELECT * FROM page_connections WHERE whatsapp_phone_number_id = ? AND is_active = 1 AND is_whatsapp_active = 1`
+    `SELECT * FROM page_connections WHERE whatsapp_phone_number_id = ? AND is_whatsapp_active = 1`
   )
     .bind(phoneNumberId)
     .first();

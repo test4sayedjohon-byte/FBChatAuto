@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { Menu, MessageSquare, AlertTriangle, LogOut } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import FloatingAgentWidget from './FloatingAgentWidget';
+import ContentCopilotWidget from './ContentCopilotWidget';
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [impersonating, setImpersonating] = useState<string | null>(null);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const stored = localStorage.getItem('autometabot_admin_session');
@@ -124,7 +126,12 @@ export default function Layout() {
       <main className="app-content animate-fadeIn" style={impersonating ? { paddingTop: 'calc(var(--spacing-xl) + 36px)' } : {}}>
         <Outlet />
       </main>
-      <FloatingAgentWidget />
+
+      {['/planner', '/moderation'].includes(location.pathname) ? (
+        <ContentCopilotWidget />
+      ) : (
+        <FloatingAgentWidget />
+      )}
     </div>
   );
 }

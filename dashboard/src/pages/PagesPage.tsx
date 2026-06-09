@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { toast } from '../hooks/useToast';
 import { supabase } from '../lib/supabase';
-import { Plus, Trash2, X, Save, Loader2 } from 'lucide-react';
+import { Plus, Trash2, X, Save, Loader2, RefreshCw, Check, AlertCircle, Key } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import PricingModal from '../components/PricingModal';
 
@@ -45,6 +45,8 @@ interface PageConn {
   trigger_words?: string[] | null;
   trigger_responses?: string[] | null;
   is_trigger_enabled?: boolean;
+  token_status?: string | null;
+  token_last_checked_at?: string | null;
 }
 
 export default function PagesPage() {
@@ -80,6 +82,21 @@ export default function PagesPage() {
   const [triggerInput, setTriggerInput] = useState('');
   const [triggerResponses, setTriggerResponses] = useState('');
 
+  // Meta Auto-Discovery / Import scanner state
+  const [activeTab, setActiveTab] = useState<'auto' | 'manual'>('auto');
+  const [metaToken, setMetaToken] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [scanStep, setScanStep] = useState<'idle' | 'pages' | 'instagram' | 'whatsapp' | 'completed' | 'error'>('idle');
+  const [scanError, setScanError] = useState('');
+  
+  const [discoveredPages, setDiscoveredPages] = useState<any[]>([]);
+  const [discoveredInstagrams, setDiscoveredInstagrams] = useState<any[]>([]);
+  const [discoveredWhatsApp, setDiscoveredWhatsApp] = useState<any[]>([]);
+  
+  const [selectedPages, setSelectedPages] = useState<string[]>([]);
+  const [selectedInstagrams, setSelectedInstagrams] = useState<string[]>([]);
+  const [selectedWhatsApp, setSelectedWhatsApp] = useState<string[]>([]);
+
   const DEFAULT_PROMPT = `You are a helpful, friendly, and professional AI assistant for this business on Facebook Messenger.
 
 ## Instructions
@@ -89,6 +106,255 @@ export default function PagesPage() {
 - Use the business information below to answer customer questions accurately.
 - If a question is outside your knowledge, suggest the customer contact the business directly.
 - NEVER reveal that you are an AI unless directly asked. Present yourself as a helpful representative.`;
+
+  async function handleScanMeta() {
+    if (!metaToken.trim()) {
+      toast.error('Please enter a valid Meta Access Token.');
+      return;
+    }
+    setScanning(true);
+    setScanError('');
+    setDiscoveredPages([]);
+    setDiscoveredInstagrams([]);
+    setDiscoveredWhatsApp([]);
+    setSelectedPages([]);
+    setSelectedInstagrams([]);
+    setSelectedWhatsApp([]);
+    
+    const token = metaToken.trim();
+    
+    // 1. Scan Facebook Pages
+    setScanStep('pages');
+    let pagesFound: any[] = [];
+    try {
+      const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,category&limit=100&access_token=${token}`);
+      if (!pagesRes.ok) {
+        const err = await pagesRes.json();
+        throw new Error(err.error?.message || 'Failed to fetch Facebook Pages.');
+      }
+      const pagesData = await pagesRes.json();
+      pagesFound = pagesData.data || [];
+      setDiscoveredPages(pagesFound);
+    } catch (e: any) {
+      console.error(e);
+      setScanError(`Error scanning Facebook Pages: ${e.message}`);
+      setScanStep('error');
+      setScanning(false);
+      return;
+    }
+    
+    // 2. Scan Instagram Business Accounts linked to Pages
+    setScanStep('instagram');
+    const igFound: any[] = [];
+    for (const page of pagesFound) {
+      try {
+        const igRes = await fetch(`https://graph.facebook.com/v21.0/${page.id}?fields=instagram_business_account{id,username,name}&access_token=${page.access_token}`);
+        if (igRes.ok) {
+          const igData = await igRes.json();
+          if (igData.instagram_business_account) {
+            igFound.push({
+              id: igData.instagram_business_account.id,
+              username: igData.instagram_business_account.username || igData.instagram_business_account.name || 'Instagram Account',
+              linked_page_id: page.id,
+              linked_page_name: page.name,
+              access_token: page.access_token
+            });
+          }
+        }
+      } catch (e) {
+        console.warn(`Error scanning Instagram for page ${page.id}:`, e);
+      }
+    }
+    setDiscoveredInstagrams(igFound);
+    
+    // 3. Scan WhatsApp Business accounts
+    setScanStep('whatsapp');
+    const waFound: any[] = [];
+    try {
+      const wabaRes = await fetch(`https://graph.facebook.com/v21.0/me/whatsapp_business_accounts?fields=id,name&access_token=${token}`);
+      let wabas: any[] = [];
+      if (wabaRes.ok) {
+        const wabaData = await wabaRes.json();
+        wabas = wabaData.data || [];
+      } else {
+        const bizRes = await fetch(`https://graph.facebook.com/v21.0/me/businesses?access_token=${token}`);
+        if (bizRes.ok) {
+          const bizData = await bizRes.json();
+          const businesses = bizData.data || [];
+          for (const biz of businesses) {
+            const bizWabaRes = await fetch(`https://graph.facebook.com/v21.0/${biz.id}/whatsapp_business_accounts?fields=id,name&access_token=${token}`);
+            if (bizWabaRes.ok) {
+              const bizWabaData = await bizWabaRes.json();
+              wabas = [...wabas, ...(bizWabaData.data || [])];
+            }
+          }
+        }
+      }
+      
+      const uniqueWabas = Array.from(new Map(wabas.map(w => [w.id, w])).values());
+      
+      for (const waba of uniqueWabas) {
+        const phoneRes = await fetch(`https://graph.facebook.com/v21.0/${waba.id}/phone_numbers?fields=id,display_phone_number,verified_name&access_token=${token}`);
+        if (phoneRes.ok) {
+          const phoneData = await phoneRes.json();
+          const phones = phoneData.data || [];
+          for (const phone of phones) {
+            waFound.push({
+              phone_number_id: phone.id,
+              display_phone_number: phone.display_phone_number,
+              verified_name: phone.verified_name || waba.name || 'WhatsApp Business',
+              waba_id: waba.id,
+              access_token: token
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('WhatsApp scanning failed:', e);
+    }
+    setDiscoveredWhatsApp(waFound);
+    
+    setScanStep('completed');
+    setScanning(false);
+  }
+
+  async function upsertPageConnection(payload: any) {
+    const { data: existing } = await supabase
+      .from('page_connections')
+      .select('id')
+      .eq('user_id', payload.user_id)
+      .eq('page_id', payload.page_id)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase
+        .from('page_connections')
+        .update(payload)
+        .eq('id', existing.id);
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from('page_connections')
+        .insert(payload);
+      if (error) throw error;
+    }
+  }
+
+  async function handleImportSelected() {
+    if (!user) return;
+    setSaving(true);
+    let successCount = 0;
+    
+    // Import Pages
+    for (const pageId of selectedPages) {
+      const page = discoveredPages.find(p => p.id === pageId);
+      if (!page) continue;
+      try {
+        await upsertPageConnection({
+          user_id: user.id,
+          page_id: page.id,
+          page_name: page.name,
+          access_token: page.access_token,
+          is_active: true,
+          connected_at: new Date().toISOString()
+        });
+
+        // Automatically subscribe the page to the app (for messages and feed webhooks)
+        try {
+          await fetch(`https://graph.facebook.com/v21.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_echoes,feed&access_token=${page.access_token}`, {
+            method: 'POST'
+          });
+        } catch (subErr) {
+          console.warn('Programmatic FB page subscription failed:', subErr);
+        }
+
+        successCount++;
+      } catch (err: any) {
+        console.error(`Error importing page ${page.name}:`, err.message);
+        toast.error(`Error importing page ${page.name}: ${err.message}`);
+      }
+    }
+    
+    // Import Instagram
+    for (const igId of selectedInstagrams) {
+      const ig = discoveredInstagrams.find(i => i.id === igId);
+      if (!ig) continue;
+      try {
+        const { data: existing } = await supabase
+          .from('page_connections')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('page_id', ig.linked_page_id)
+          .maybeSingle();
+          
+        if (existing) {
+          const { error } = await supabase
+            .from('page_connections')
+            .update({
+              instagram_account_id: ig.id,
+              is_instagram_active: true,
+              is_active: true, // Auto-connect FB side too
+              access_token: ig.access_token
+            })
+            .eq('id', existing.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.from('page_connections').insert({
+            user_id: user.id,
+            page_id: ig.linked_page_id,
+            page_name: ig.username,
+            access_token: ig.access_token,
+            instagram_account_id: ig.id,
+            is_instagram_active: true,
+            is_active: true // Auto-connect FB side too
+          });
+          if (error) throw error;
+        }
+
+        // Automatically subscribe the linked FB page to the app
+        try {
+          await fetch(`https://graph.facebook.com/v21.0/${ig.linked_page_id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_echoes,feed&access_token=${ig.access_token}`, {
+            method: 'POST'
+          });
+        } catch (subErr) {
+          console.warn('Programmatic FB page subscription failed for Instagram:', subErr);
+        }
+
+        successCount++;
+      } catch (err: any) {
+        console.error(`Error importing Instagram ${ig.username}:`, err.message);
+        toast.error(`Error importing Instagram ${ig.username}: ${err.message}`);
+      }
+    }
+    
+    // Import WhatsApp
+    for (const waId of selectedWhatsApp) {
+      const wa = discoveredWhatsApp.find(w => w.phone_number_id === waId);
+      if (!wa) continue;
+      try {
+        await upsertPageConnection({
+          user_id: user.id,
+          page_id: wa.phone_number_id,
+          page_name: wa.verified_name,
+          access_token: wa.access_token,
+          whatsapp_phone_number_id: wa.phone_number_id,
+          whatsapp_business_account_id: wa.waba_id,
+          is_whatsapp_active: true,
+          is_active: true, // Keep it active for general connectivity
+          connected_at: new Date().toISOString()
+        });
+        successCount++;
+      } catch (err: any) {
+        console.error(`Error importing WhatsApp ${wa.verified_name}:`, err.message);
+        toast.error(`Error importing WhatsApp ${wa.verified_name}: ${err.message}`);
+      }
+    }
+    
+    setSaving(false);
+    setShowModal(false);
+    toast.success(`Successfully connected ${successCount} Meta Channels!`);
+    load();
+  }
 
   const location = useLocation();
 
@@ -143,18 +409,21 @@ export default function PagesPage() {
       payload.whatsapp_business_account_id = whatsappBusinessAccountId.trim() || null;
       payload.is_whatsapp_active = isWhatsappActive;
       payload.instagram_account_id = null;
+      payload.is_active = true;
     } else if (selectedPlatform === 'instagram') {
       payload.page_id = pageId.trim();
       payload.instagram_account_id = instagramId.trim();
       payload.is_instagram_active = true;
       payload.whatsapp_phone_number_id = null;
       payload.whatsapp_business_account_id = null;
+      payload.is_active = true;
     } else {
       // Default to Facebook
       payload.page_id = pageId.trim();
       payload.instagram_account_id = null;
       payload.whatsapp_phone_number_id = null;
       payload.whatsapp_business_account_id = null;
+      payload.is_active = true;
     }
 
     if (editMode && editingPageId) {
@@ -173,6 +442,21 @@ export default function PagesPage() {
       }
       const { error } = await supabase.from('page_connections').insert(payload);
       if (error) toast.error('Error: ' + error.message);
+    }
+
+    // Programmatically subscribe the Facebook page to the app if a token is present
+    const finalToken = payload.access_token || accessToken.trim();
+    if (finalToken && selectedPlatform !== 'whatsapp') {
+      const pageIdToSubscribe = pageId.trim();
+      if (pageIdToSubscribe) {
+        try {
+          await fetch(`https://graph.facebook.com/v21.0/${pageIdToSubscribe}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_echoes,feed&access_token=${finalToken}`, {
+            method: 'POST'
+          });
+        } catch (subErr) {
+          console.warn('Programmatic FB page subscription failed in manual setup:', subErr);
+        }
+      }
     }
 
     setSaving(false);
@@ -199,6 +483,17 @@ export default function PagesPage() {
     setIsWhatsappActive(true);
     setSelectedPlatform(null);
     setShowSelectScreen(true);
+    setActiveTab('auto');
+    setMetaToken('');
+    setScanning(false);
+    setScanStep('idle');
+    setScanError('');
+    setDiscoveredPages([]);
+    setDiscoveredInstagrams([]);
+    setDiscoveredWhatsApp([]);
+    setSelectedPages([]);
+    setSelectedInstagrams([]);
+    setSelectedWhatsApp([]);
     setShowModal(true);
   }
 
@@ -233,6 +528,12 @@ export default function PagesPage() {
   async function toggle(p: PageConn) {
     const { error } = await supabase.from('page_connections').update({ is_active: !p.is_active }).eq('id', p.id);
     if (error) toast.error('Error toggling page: ' + error.message);
+    load();
+  }
+
+  async function toggleInstagram(p: PageConn) {
+    const { error } = await supabase.from('page_connections').update({ is_instagram_active: !p.is_instagram_active }).eq('id', p.id);
+    if (error) toast.error('Error toggling Instagram: ' + error.message);
     load();
   }
 
@@ -357,7 +658,7 @@ export default function PagesPage() {
               {platformIcon}
             </div>
             <div className="list-item-content">
-              <div className="list-item-title" style={{display:'flex', alignItems:'center', gap:'8px'}}>
+              <div className="list-item-title" style={{display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap'}}>
                 {p.page_name || (isWhatsApp ? 'WhatsApp Number' : isInstagram ? 'Instagram Account' : 'Facebook Page')}
                 <span className="badge" style={{
                   background: isInstagram ? 'rgba(225,48,108,0.1)' : iconBg, 
@@ -367,6 +668,11 @@ export default function PagesPage() {
                 }}>
                   {platformName}
                 </span>
+                {p.token_status === 'expired' && (
+                  <span className="badge badge-error" style={{ fontSize: '10px', fontWeight: 600, background: 'rgba(239,68,68,0.15)', color: '#EF4444' }}>
+                    Token Expired
+                  </span>
+                )}
               </div>
               <div className="list-item-subtitle" style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>
                 {isWhatsApp ? (
@@ -388,7 +694,7 @@ export default function PagesPage() {
               ) : isInstagram ? (
                 <>
                   <span className={`badge ${p.is_instagram_active ? 'badge-success' : 'badge-error'}`}>{p.is_instagram_active ? 'IG Active' : 'IG Paused'}</span>
-                  <button className={`btn btn-sm ${p.is_instagram_active ? 'btn-secondary' : 'btn-danger'}`} onClick={() => toggle(p)}>{p.is_instagram_active ? 'Disable' : 'Enable'}</button>
+                  <button className={`btn btn-sm ${p.is_instagram_active ? 'btn-secondary' : 'btn-danger'}`} onClick={() => toggleInstagram(p)}>{p.is_instagram_active ? 'Disable' : 'Enable'}</button>
                 </>
               ) : (
                 <>
@@ -397,7 +703,12 @@ export default function PagesPage() {
                 </>
               )}
               
-              <button className="btn btn-sm btn-secondary" onClick={() => openEditPage(p)}>Edit Details</button>
+              <button 
+                className={`btn btn-sm ${p.token_status === 'expired' ? 'btn-danger' : 'btn-secondary'}`} 
+                onClick={() => openEditPage(p)}
+              >
+                {p.token_status === 'expired' ? 'Reconnect Channel' : 'Edit Details'}
+              </button>
               <button className="btn btn-sm btn-secondary" onClick={() => openSettings(p)}>AI Behaviour</button>
               <button className="btn-ghost btn-icon" onClick={() => del(p.id)}><Trash2 size={14}/></button>
             </div>
@@ -407,106 +718,33 @@ export default function PagesPage() {
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth: showSelectScreen ? '500px' : '600px'}}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth: editMode ? '600px' : '650px'}}>
             <div className="modal-header">
               <h2>
                 {editMode 
                   ? `Edit ${selectedPlatform === 'whatsapp' ? 'WhatsApp' : selectedPlatform === 'instagram' ? 'Instagram' : 'Facebook'} Connection` 
-                  : (showSelectScreen ? 'Connect Meta Channel' : `Connect ${selectedPlatform === 'whatsapp' ? 'WhatsApp' : selectedPlatform === 'instagram' ? 'Instagram' : 'Facebook'}`)}
+                  : 'Connect Meta Channels'}
               </h2>
               <button className="btn-ghost btn-icon" onClick={() => setShowModal(false)}><X size={18}/></button>
             </div>
             
-            {showSelectScreen ? (
-              <div className="modal-body" style={{display:'flex', flexDirection:'column', gap:'16px', paddingBottom:'24px'}}>
-                <p style={{color:'var(--text-secondary)', fontSize:'0.85rem', margin: '0 0 8px 0'}}>
-                  Choose the type of connection you want to set up:
-                </p>
-                <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
-                  
-                  {/* Facebook Selection Button */}
-                  <button 
-                    type="button" 
-                    onClick={() => { setSelectedPlatform('facebook'); setShowSelectScreen(false); }}
-                    style={{
-                      display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
-                      border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(24,119,242,0.03)', 
-                      textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
-                    }}
-                  >
-                    <div style={{color:'#1877F2', background:'rgba(24,119,242,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
-                      <FacebookIcon />
-                    </div>
-                    <div>
-                      <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Facebook Page</h4>
-                      <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect a Page to automate Messenger chat.</p>
-                    </div>
-                  </button>
-
-                  {/* Instagram Selection Button */}
-                  <button 
-                    type="button" 
-                    onClick={() => { setSelectedPlatform('instagram'); setShowSelectScreen(false); }}
-                    style={{
-                      display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
-                      border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(225,48,108,0.03)', 
-                      textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
-                    }}
-                  >
-                    <div style={{
-                      background:'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285AEB 90%)', 
-                      color:'#FFFFFF', padding:'10px', borderRadius:'8px', display:'flex'
-                    }}>
-                      <InstagramIcon />
-                    </div>
-                    <div>
-                      <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Instagram Business</h4>
-                      <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Automate Instagram DMs and comments.</p>
-                    </div>
-                  </button>
-
-                  {/* WhatsApp Selection Button */}
-                  <button 
-                    type="button" 
-                    onClick={() => { setSelectedPlatform('whatsapp'); setShowSelectScreen(false); }}
-                    style={{
-                      display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
-                      border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(37,211,102,0.03)', 
-                      textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
-                    }}
-                  >
-                    <div style={{color:'#25D366', background:'rgba(37,211,102,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
-                      <WhatsAppIcon />
-                    </div>
-                    <div>
-                      <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>WhatsApp Business</h4>
-                      <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect a phone number via Meta Cloud API.</p>
-                    </div>
-                  </button>
-
-                </div>
-              </div>
-            ) : (
+            {editMode ? (
               <form onSubmit={handleSubmit}>
                 <div className="modal-body">
-                  
                   {/* WhatsApp Form Inputs */}
                   {selectedPlatform === 'whatsapp' && (
                     <>
                       <div className="form-group">
                         <label className="form-label">WhatsApp Display Name</label>
                         <input className="form-input" placeholder="e.g., Support Number" value={pageName} onChange={e=>setPageName(e.target.value)} />
-                        <p className="form-hint">A label to identify this number in the dashboard.</p>
                       </div>
                       <div className="form-group">
                         <label className="form-label">WhatsApp Phone Number ID</label>
                         <input className="form-input" placeholder="e.g., 106540352242922" value={whatsappPhoneNumberId} onChange={e=>setWhatsappPhoneNumberId(e.target.value)} required />
-                        <p className="form-hint">Found under WhatsApp API Setup in the Meta Developer Console.</p>
                       </div>
                       <div className="form-group">
                         <label className="form-label">WhatsApp Business Account ID</label>
                         <input className="form-input" placeholder="e.g., 102290129340398" value={whatsappBusinessAccountId} onChange={e=>setWhatsappBusinessAccountId(e.target.value)} required />
-                        <p className="form-hint">The parent WABA ID linked to your Business Manager.</p>
                       </div>
                       <div className="form-group" style={{background: 'rgba(37,211,102,0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', marginBottom: '16px'}}>
                         <div style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
@@ -516,7 +754,6 @@ export default function PagesPage() {
                           </label>
                           <div>
                             <h4 style={{margin: 0, fontSize: '0.9rem', fontWeight: 600}}>WhatsApp Bot Active</h4>
-                            <p className="form-hint" style={{margin: '2px 0 0 0', fontSize: '0.75rem'}}>Allow the AI bot to automate replies for this WhatsApp number.</p>
                           </div>
                         </div>
                       </div>
@@ -529,17 +766,14 @@ export default function PagesPage() {
                       <div className="form-group">
                         <label className="form-label">Instagram Profile Name</label>
                         <input className="form-input" placeholder="e.g., My Brand Instagram" value={pageName} onChange={e=>setPageName(e.target.value)} />
-                        <p className="form-hint">A label to identify this account.</p>
                       </div>
                       <div className="form-group">
                         <label className="form-label">Instagram Business Account ID</label>
                         <input className="form-input" placeholder="e.g., 178414..." value={instagramId} onChange={e=>setInstagramId(e.target.value)} required />
-                        <p className="form-hint">The specific Instagram Business Account ID from Meta.</p>
                       </div>
                       <div className="form-group">
                         <label className="form-label">Linked Facebook Page ID</label>
                         <input className="form-input" placeholder="e.g., 123456789" value={pageId} onChange={e=>setPageId(e.target.value)} required />
-                        <p className="form-hint">Instagram accounts must be linked to a Facebook Page to use the Messenger API.</p>
                       </div>
                     </>
                   )}
@@ -554,49 +788,383 @@ export default function PagesPage() {
                       <div className="form-group">
                         <label className="form-label">Facebook Page ID</label>
                         <input className="form-input" placeholder="e.g., 123456789" value={pageId} onChange={e=>setPageId(e.target.value)} required />
-                        <p className="form-hint">Found in your Page Settings or Meta Developer Console.</p>
                       </div>
                     </>
                   )}
 
                   {/* Common Access Token Field */}
                   <div className="form-group">
-                    <label className="form-label">
-                      {selectedPlatform === 'whatsapp' ? 'System User Token / Access Token' : 'Page Access Token'}
-                    </label>
+                    <label className="form-label">Page Access Token</label>
                     <textarea 
                       className="form-textarea" 
-                      placeholder={editMode ? "Leave blank to keep existing token..." : "EAA..."} 
+                      placeholder="Leave blank to keep existing token..." 
                       value={accessToken} 
                       onChange={e=>setAccessToken(e.target.value)} 
-                      required={!editMode} 
                       style={{minHeight:'100px',fontFamily:'monospace',fontSize:'0.75rem'}} 
                     />
-                    <p className="form-hint">
-                      {selectedPlatform === 'whatsapp' 
-                        ? 'Meta system user access token with whatsapp_business_messaging permissions.'
-                        : 'Long-lived access token generated from Facebook Developer Console.'}
-                    </p>
                   </div>
-
                 </div>
-                <div className="modal-footer" style={{display: 'flex', justifyContent: 'space-between'}}>
-                  <div>
-                    {!editMode && (
-                      <button type="button" className="btn btn-secondary" onClick={() => { setShowSelectScreen(true); setSelectedPlatform(null); }}>
-                        Back
-                      </button>
-                    )}
-                  </div>
-                  <div style={{display: 'flex', gap: '8px'}}>
-                    <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                    <button type="submit" className="btn btn-primary" disabled={saving}>
-                      {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Save size={14}/>}
-                      {saving ? 'Saving...' : (editMode ? 'Save Changes' : 'Connect Channel')}
-                    </button>
-                  </div>
+                <div className="modal-footer" style={{display: 'flex', justifyContent: 'flex-end', gap: '8px'}}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-primary" disabled={saving}>
+                    {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Save size={14}/>}
+                    Save Changes
+                  </button>
                 </div>
               </form>
+            ) : (
+              <div className="modal-body" style={{paddingTop: '8px'}}>
+                {/* Custom Tab Selector */}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', marginBottom: '20px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('auto')}
+                    style={{
+                      flex: 1, padding: '12px', textAlign: 'center', border: 'none', background: 'none',
+                      borderBottom: activeTab === 'auto' ? '2px solid var(--accent-primary)' : 'none',
+                      color: activeTab === 'auto' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontWeight: activeTab === 'auto' ? 600 : 400, cursor: 'pointer'
+                    }}
+                  >
+                    ⚡ Automatic Setup (Meta Scan)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('manual')}
+                    style={{
+                      flex: 1, padding: '12px', textAlign: 'center', border: 'none', background: 'none',
+                      borderBottom: activeTab === 'manual' ? '2px solid var(--accent-primary)' : 'none',
+                      color: activeTab === 'manual' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontWeight: activeTab === 'manual' ? 600 : 400, cursor: 'pointer'
+                    }}
+                  >
+                    🛠️ Manual Configuration
+                  </button>
+                </div>
+
+                {activeTab === 'auto' ? (
+                  <div>
+                    <div className="form-group">
+                      <label className="form-label" style={{display:'flex', alignItems:'center', gap:'6px'}}>
+                        <Key size={14} /> Meta System User Access Token / Admin Token
+                      </label>
+                      <div style={{display:'flex', gap:'8px'}}>
+                        <input 
+                          type="password"
+                          className="form-input" 
+                          placeholder="Paste your Meta system user or admin access token..." 
+                          value={metaToken}
+                          onChange={e=>setMetaToken(e.target.value)}
+                          disabled={scanning}
+                        />
+                        <button 
+                          type="button" 
+                          className="btn btn-primary" 
+                          onClick={handleScanMeta}
+                          disabled={scanning || !metaToken.trim()}
+                          style={{whiteSpace: 'nowrap'}}
+                        >
+                          {scanning ? <RefreshCw size={14} style={{animation:'spin 1s linear infinite'}}/> : <RefreshCw size={14} />}
+                          {scanning ? 'Scanning...' : 'Scan Account'}
+                        </button>
+                      </div>
+                      <p className="form-hint">Enter your System User Token with Pages & WhatsApp permissions to auto-discover channels.</p>
+                    </div>
+
+                    {scanning && (
+                      <div style={{background: 'var(--bg-tertiary)', border:'1px solid var(--border-color)', borderRadius:'8px', padding:'16px', display:'flex', flexDirection:'column', gap:'12px', marginBottom:'16px'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:'8px', fontSize:'0.9rem', color:'var(--text-primary)'}}>
+                          <Loader2 size={16} style={{animation:'spin 1s linear infinite', color: 'var(--accent-primary)'}} />
+                          <strong>Scanning Meta Account...</strong>
+                        </div>
+                        <div style={{fontSize: '0.8rem', color: 'var(--text-secondary)', paddingLeft:'24px', display:'flex', flexDirection:'column', gap:'6px'}}>
+                          <div style={{opacity: scanStep === 'pages' ? 1 : 0.6}}>
+                            {scanStep === 'pages' ? '➡️' : '✅'} Discovered Facebook Pages...
+                          </div>
+                          <div style={{opacity: scanStep === 'instagram' ? 1 : (scanStep === 'pages' ? 0.3 : 0.6)}}>
+                            {scanStep === 'instagram' ? '➡️' : (scanStep === 'pages' ? '⏳' : '✅')} Checking linked Instagram Business Accounts...
+                          </div>
+                          <div style={{opacity: scanStep === 'whatsapp' ? 1 : (scanStep === 'completed' ? 0.6 : 0.3)}}>
+                            {scanStep === 'whatsapp' ? '➡️' : (scanStep === 'completed' ? '✅' : '⏳')} Finding WhatsApp Business Numbers...
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {scanError && (
+                      <div style={{background: 'rgba(239,68,68,0.05)', border:'1px solid rgba(239,68,68,0.2)', borderRadius:'8px', padding:'12px', color:'#EF4444', fontSize:'0.85rem', display:'flex', gap:'8px', alignItems:'flex-start', marginBottom:'16px'}}>
+                        <AlertCircle size={16} style={{flexShrink: 0, marginTop: '2px'}} />
+                        <div>{scanError}</div>
+                      </div>
+                    )}
+
+                    {scanStep === 'completed' && (
+                      <div>
+                        {discoveredPages.length === 0 && discoveredInstagrams.length === 0 && discoveredWhatsApp.length === 0 ? (
+                          <div style={{textAlign: 'center', padding: '24px', background: 'var(--bg-tertiary)', border: '1px dashed var(--border-color)', borderRadius: '8px', color: 'var(--text-secondary)'}}>
+                            <AlertCircle size={32} style={{margin: '0 auto 8px auto', opacity: 0.5}} />
+                            <p style={{margin: 0, fontSize: '0.9rem', fontWeight: 500}}>No Channels Discovered</p>
+                            <p style={{margin: '4px 0 0 0', fontSize: '0.75rem'}}>Verify your token permissions (pages_messaging, instagram_basic, whatsapp_business_messaging) and try again.</p>
+                          </div>
+                        ) : (
+                          <div style={{display:'flex', flexDirection:'column', gap:'16px', marginBottom: '20px'}}>
+                            
+                            {/* Facebook Pages List */}
+                            {discoveredPages.length > 0 && (
+                              <div>
+                                <h4 style={{fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px'}}>
+                                  <FacebookIcon /> Facebook Pages ({discoveredPages.length})
+                                </h4>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '6px'}}>
+                                  {discoveredPages.map(page => (
+                                    <label key={page.id} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', borderRadius: '4px', cursor: 'pointer', background: selectedPages.includes(page.id) ? 'rgba(24,119,242,0.05)' : 'transparent', border: '1px solid ' + (selectedPages.includes(page.id) ? 'rgba(24,119,242,0.2)' : 'transparent')}}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={selectedPages.includes(page.id)}
+                                        onChange={e => {
+                                          if (e.target.checked) setSelectedPages(prev => [...prev, page.id]);
+                                          else setSelectedPages(prev => prev.filter(id => id !== page.id));
+                                        }}
+                                      />
+                                      <div style={{flex: 1}}>
+                                        <div style={{fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)'}}>{page.name}</div>
+                                        <div style={{fontSize: '0.7rem', color: 'var(--text-secondary)'}}>Page ID: {page.id} • Category: {page.category}</div>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Instagram Accounts List */}
+                            {discoveredInstagrams.length > 0 && (
+                              <div>
+                                <h4 style={{fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px'}}>
+                                  <InstagramIcon /> Instagram Accounts ({discoveredInstagrams.length})
+                                </h4>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '6px'}}>
+                                  {discoveredInstagrams.map(ig => (
+                                    <label key={ig.id} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', borderRadius: '4px', cursor: 'pointer', background: selectedInstagrams.includes(ig.id) ? 'rgba(225,48,108,0.05)' : 'transparent', border: '1px solid ' + (selectedInstagrams.includes(ig.id) ? 'rgba(225,48,108,0.2)' : 'transparent')}}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={selectedInstagrams.includes(ig.id)}
+                                        onChange={e => {
+                                          if (e.target.checked) setSelectedInstagrams(prev => [...prev, ig.id]);
+                                          else setSelectedInstagrams(prev => prev.filter(id => id !== ig.id));
+                                        }}
+                                      />
+                                      <div style={{flex: 1}}>
+                                        <div style={{fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)'}}>@{ig.username}</div>
+                                        <div style={{fontSize: '0.7rem', color: 'var(--text-secondary)'}}>IG ID: {ig.id} • Linked Page: {ig.linked_page_name}</div>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* WhatsApp Accounts List */}
+                            {discoveredWhatsApp.length > 0 && (
+                              <div>
+                                <h4 style={{fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px'}}>
+                                  <WhatsAppIcon /> WhatsApp Numbers ({discoveredWhatsApp.length})
+                                </h4>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '6px'}}>
+                                  {discoveredWhatsApp.map(wa => (
+                                    <label key={wa.phone_number_id} style={{display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', borderRadius: '4px', cursor: 'pointer', background: selectedWhatsApp.includes(wa.phone_number_id) ? 'rgba(37,211,102,0.05)' : 'transparent', border: '1px solid ' + (selectedWhatsApp.includes(wa.phone_number_id) ? 'rgba(37,211,102,0.2)' : 'transparent')}}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={selectedWhatsApp.includes(wa.phone_number_id)}
+                                        onChange={e => {
+                                          if (e.target.checked) setSelectedWhatsApp(prev => [...prev, wa.phone_number_id]);
+                                          else setSelectedWhatsApp(prev => prev.filter(id => id !== wa.phone_number_id));
+                                        }}
+                                      />
+                                      <div style={{flex: 1}}>
+                                        <div style={{fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)'}}>{wa.verified_name} ({wa.display_phone_number})</div>
+                                        <div style={{fontSize: '0.7rem', color: 'var(--text-secondary)'}}>Phone ID: {wa.phone_number_id} • WABA ID: {wa.waba_id}</div>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="modal-footer" style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
+                      <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                      <button 
+                        type="button" 
+                        className="btn btn-primary" 
+                        onClick={handleImportSelected}
+                        disabled={saving || (selectedPages.length === 0 && selectedInstagrams.length === 0 && selectedWhatsApp.length === 0)}
+                      >
+                        {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Check size={14}/>}
+                        {saving ? 'Importing...' : `Import Selected (${selectedPages.length + selectedInstagrams.length + selectedWhatsApp.length})`}
+                      </button>
+                    </div>
+
+                  </div>
+                ) : (
+                  <div>
+                    {showSelectScreen ? (
+                      <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
+                        <p style={{color:'var(--text-secondary)', fontSize:'0.85rem', marginBottom:'8px'}}>
+                          Choose the type of connection to manually configure:
+                        </p>
+                        {/* Facebook Selection Button */}
+                        <button 
+                          type="button" 
+                          onClick={() => { setSelectedPlatform('facebook'); setShowSelectScreen(false); }}
+                          style={{
+                            display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
+                            border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(24,119,242,0.03)', 
+                            textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                          }}
+                        >
+                          <div style={{color:'#1877F2', background:'rgba(24,119,242,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
+                            <FacebookIcon />
+                          </div>
+                          <div>
+                            <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Facebook Page</h4>
+                            <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect a Page manually.</p>
+                          </div>
+                        </button>
+
+                        {/* Instagram Selection Button */}
+                        <button 
+                          type="button" 
+                          onClick={() => { setSelectedPlatform('instagram'); setShowSelectScreen(false); }}
+                          style={{
+                            display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
+                            border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(225,48,108,0.03)', 
+                            textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                          }}
+                        >
+                          <div style={{
+                            background:'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285AEB 90%)', 
+                            color:'#FFFFFF', padding:'10px', borderRadius:'8px', display:'flex'
+                          }}>
+                            <InstagramIcon />
+                          </div>
+                          <div>
+                            <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Instagram Business</h4>
+                            <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect Instagram manually.</p>
+                          </div>
+                        </button>
+
+                        {/* WhatsApp Selection Button */}
+                        <button 
+                          type="button" 
+                          onClick={() => { setSelectedPlatform('whatsapp'); setShowSelectScreen(false); }}
+                          style={{
+                            display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
+                            border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(37,211,102,0.03)', 
+                            textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                          }}
+                        >
+                          <div style={{color:'#25D366', background:'rgba(37,211,102,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
+                            <WhatsAppIcon />
+                          </div>
+                          <div>
+                            <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>WhatsApp Business</h4>
+                            <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect WhatsApp manually.</p>
+                          </div>
+                        </button>
+                      </div>
+                    ) : (
+                      <form onSubmit={handleSubmit}>
+                        <div>
+                          {selectedPlatform === 'whatsapp' && (
+                            <>
+                              <div className="form-group">
+                                <label className="form-label">WhatsApp Display Name</label>
+                                <input className="form-input" placeholder="e.g., Support Number" value={pageName} onChange={e=>setPageName(e.target.value)} />
+                              </div>
+                              <div className="form-group">
+                                <label className="form-label">WhatsApp Phone Number ID</label>
+                                <input className="form-input" placeholder="e.g., 106540352242922" value={whatsappPhoneNumberId} onChange={e=>setWhatsappPhoneNumberId(e.target.value)} required />
+                              </div>
+                              <div className="form-group">
+                                <label className="form-label">WhatsApp Business Account ID</label>
+                                <input className="form-input" placeholder="e.g., 102290129340398" value={whatsappBusinessAccountId} onChange={e=>setWhatsappBusinessAccountId(e.target.value)} required />
+                              </div>
+                              <div className="form-group" style={{background: 'rgba(37,211,102,0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', marginBottom: '16px'}}>
+                                <div style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
+                                  <label className="toggle-switch">
+                                    <input type="checkbox" checked={isWhatsappActive} onChange={e=>setIsWhatsappActive(e.target.checked)} />
+                                    <span className="slider"></span>
+                                  </label>
+                                  <div>
+                                    <h4 style={{margin: 0, fontSize: '0.9rem', fontWeight: 600}}>WhatsApp Bot Active</h4>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          )}
+
+                          {selectedPlatform === 'instagram' && (
+                            <>
+                              <div className="form-group">
+                                <label className="form-label">Instagram Profile Name</label>
+                                <input className="form-input" placeholder="e.g., My Brand Instagram" value={pageName} onChange={e=>setPageName(e.target.value)} />
+                              </div>
+                              <div className="form-group">
+                                <label className="form-label">Instagram Business Account ID</label>
+                                <input className="form-input" placeholder="e.g., 178414..." value={instagramId} onChange={e=>setInstagramId(e.target.value)} required />
+                              </div>
+                              <div className="form-group">
+                                <label className="form-label">Linked Facebook Page ID</label>
+                                <input className="form-input" placeholder="e.g., 123456789" value={pageId} onChange={e=>setPageId(e.target.value)} required />
+                              </div>
+                            </>
+                          )}
+
+                          {selectedPlatform === 'facebook' && (
+                            <>
+                              <div className="form-group">
+                                <label className="form-label">Page Name</label>
+                                <input className="form-input" placeholder="e.g., My Business Page" value={pageName} onChange={e=>setPageName(e.target.value)} />
+                              </div>
+                              <div className="form-group">
+                                <label className="form-label">Facebook Page ID</label>
+                                <input className="form-input" placeholder="e.g., 123456789" value={pageId} onChange={e=>setPageId(e.target.value)} required />
+                              </div>
+                            </>
+                          )}
+
+                          <div className="form-group">
+                            <label className="form-label">Access Token</label>
+                            <textarea 
+                              className="form-textarea" 
+                              placeholder="EAA..." 
+                              value={accessToken} 
+                              onChange={e=>setAccessToken(e.target.value)} 
+                              required 
+                              style={{minHeight:'100px',fontFamily:'monospace',fontSize:'0.75rem'}} 
+                            />
+                          </div>
+                        </div>
+                        <div className="modal-footer" style={{display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
+                          <button type="button" className="btn btn-secondary" onClick={() => { setShowSelectScreen(true); setSelectedPlatform(null); }}>Back</button>
+                          <div style={{display: 'flex', gap: '8px'}}>
+                            <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                            <button type="submit" className="btn btn-primary" disabled={saving}>
+                              {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Save size={14}/>}
+                              Connect Channel
+                            </button>
+                          </div>
+                        </div>
+                      </form>
+                    )}
+                  </div>
+                )}
+
+              </div>
             )}
           </div>
         </div>

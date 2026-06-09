@@ -15,7 +15,11 @@ import {
   ChevronUp,
   DollarSign,
   Folder,
-  X
+  X,
+  Calendar,
+  Zap,
+  Link2,
+  BarChart3
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -107,6 +111,28 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             <NavLink to="/documents" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Folder className="nav-icon" />
               Knowledge Base
+            </NavLink>
+
+            <span className="sidebar-section-label" style={{ marginTop: '16px' }}>Automation</span>
+
+            <NavLink to="/planner" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Calendar className="nav-icon" />
+              Content Planner
+            </NavLink>
+
+            <NavLink to="/moderation" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Zap className="nav-icon" />
+              Auto-Moderation
+            </NavLink>
+
+            <NavLink to="/integrations" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Link2 className="nav-icon" />
+              Integrations
+            </NavLink>
+
+            <NavLink to="/analytics" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <BarChart3 className="nav-icon" />
+              Analytics
             </NavLink>
           </>
         )}

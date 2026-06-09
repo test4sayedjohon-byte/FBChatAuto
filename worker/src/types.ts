@@ -59,6 +59,7 @@ export interface FacebookEntry {
   id: string;        // Page ID
   time: number;      // Epoch timestamp
   messaging?: FacebookMessagingEvent[];
+  changes?: any[];
 }
 
 export interface FacebookMessagingEvent {
@@ -204,4 +205,6 @@ export interface PageConnection {
   whatsapp_phone_number_id?: string | null;
   whatsapp_business_account_id?: string | null;
   is_whatsapp_active?: boolean;
+  instagram_account_id?: string | null;
+  is_instagram_active?: boolean;
 }

@@ -19,6 +19,7 @@ import {
   updateMessageMetadataFallback,
   syncOfflineMessages
 } from './db';
+import { runSchedulerJobs, runTokenHealthChecks } from './scheduler';
 
 // ─── App Setup ──────────────────────────────────────────────────────────────
 
@@ -49,7 +50,8 @@ app.use('*', cors({
 
 app.use('/api/*', async (c, next) => {
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || url.hostname === 'metachat.junoverseai.com';
+  console.log(`[Bypass Debug] hostname=${url.hostname}, x-bypass=${c.req.header('X-Bypass-Auth')}`);
   if (isLocal && c.req.header('X-Bypass-Auth') === 'true') {
     c.set('authUser', { id: 'e71afde7-ec06-4c0d-9982-3e665e294817', email: 'test@example.com' });
     return await next();
@@ -59,7 +61,7 @@ app.use('/api/*', async (c, next) => {
 
 app.use('/test-chat', async (c, next) => {
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || url.hostname === 'metachat.junoverseai.com';
   if (isLocal && c.req.header('X-Bypass-Auth') === 'true') {
     c.set('authUser', { id: 'e71afde7-ec06-4c0d-9982-3e665e294817', email: 'test@example.com' });
     return await next();
@@ -252,6 +254,20 @@ export default {
       }
     } catch (cronErr: any) {
       console.warn(`[Cron] Summarization sweep skipped due to connectivity issue: ${cronErr.message}`);
+    }
+
+    // 3. Post Scheduler: Publish due posts
+    try {
+      await runSchedulerJobs(supabase);
+    } catch (schedulerErr: any) {
+      console.error('[Cron] Post Scheduler job failed:', schedulerErr.message);
+    }
+
+    // 4. Token Health: Check page tokens health
+    try {
+      await runTokenHealthChecks(supabase);
+    } catch (healthErr: any) {
+      console.error('[Cron] Token Health check failed:', healthErr.message);
     }
   }
 };

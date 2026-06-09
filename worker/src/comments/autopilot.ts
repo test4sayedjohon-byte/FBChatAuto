@@ -1,0 +1,113 @@
+// ============================================================================
+// AI Autopilot Configuration Bot — Chat-to-Rule Engine
+// ============================================================================
+
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getChatProviderChain } from '../ai/provider';
+import { callChatCompletionWithFailover } from '../ai/client';
+
+export async function processAutopilotConfig(
+  supabase: SupabaseClient,
+  userId: string,
+  userMessage: string,
+  db?: any
+): Promise<{ reply: string; dataModified?: boolean }> {
+  // 1. Fetch current active rules to inject as context
+  const { data: rules } = await supabase
+    .from('comment_rules')
+    .select('*')
+    .eq('user_id', userId);
+
+  const rulesContext = rules && rules.length > 0
+    ? rules.map((r, i) => `${i + 1}. ID: ${r.id} | Type: ${r.trigger_type} | Keywords: [${r.keywords?.join(', ') || ''}] | Sentiment Target: ${r.sentiment_target || 'none'} | Action: ${r.action_to_take} | Active: ${r.is_active}`).join('\n')
+    : 'No rules configured yet.';
+
+  // 2. Fetch AI providers
+  const chain = await getChatProviderChain(supabase, userId, db);
+  if (chain.length === 0) {
+    return { reply: 'No active AI providers available to process autopilot request.' };
+  }
+
+  const prompt = `You are the AutometaBot Autopilot Rule Configurator. The user wants to manage their comment moderation rules using natural language.
+Here are the user's current rules:
+${rulesContext}
+
+User command: "${userMessage}"
+
+You can take one of the following JSON actions. Reply ONLY with a valid JSON block containing:
+1. Creating a rule:
+{
+  "action": "create",
+  "trigger_type": "all" | "keywords" | "ai_sentiment",
+  "keywords": ["word1", "word2"],
+  "sentiment_target": "negative" | "positive" | "neutral",
+  "action_to_take": "reply" | "hide" | "trash_queue" | "hide_and_reply" | "dm",
+  "reply_templates": ["canned response variation 1", "variation 2"],
+  "explanation": "Brief human explanation of what you did."
+}
+
+2. Deleting a rule:
+{
+  "action": "delete",
+  "rule_id": "the-uuid-of-the-rule",
+  "explanation": "Brief human explanation of what you did."
+}
+
+3. Answering a question / general chat:
+{
+  "action": "chat",
+  "message": "Human reply answering their question or asking for clarification.",
+  "explanation": "Explanation of the response."
+}
+
+Reply ONLY with the raw JSON object. Do not include markdown code block formatting.`;
+
+  try {
+    const aiResponse = await callChatCompletionWithFailover(chain, [
+      { role: 'user', content: prompt }
+    ], { temperature: 0.1 });
+
+    const rawContent = aiResponse.choices?.[0]?.message?.content?.trim() || '{}';
+    const jsonStr = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(jsonStr);
+
+    let explanation = parsed.explanation || 'Done.';
+    let dataModified = false;
+
+    if (parsed.action === 'create') {
+      // Create new rule
+      const { error } = await supabase
+        .from('comment_rules')
+        .insert({
+          user_id: userId,
+          trigger_type: parsed.trigger_type,
+          keywords: parsed.keywords || null,
+          sentiment_target: parsed.sentiment_target || null,
+          action_to_take: parsed.action_to_take,
+          reply_templates: parsed.reply_templates || null,
+          is_active: true
+        });
+
+      if (error) throw error;
+      dataModified = true;
+      explanation = `Rule created successfully! ${explanation}`;
+    } else if (parsed.action === 'delete') {
+      const { error } = await supabase
+        .from('comment_rules')
+        .delete()
+        .eq('id', parsed.rule_id)
+        .eq('user_id', userId);
+
+      if (error) throw error;
+      dataModified = true;
+      explanation = `Rule deleted successfully! ${explanation}`;
+    } else if (parsed.action === 'chat') {
+      explanation = parsed.message || explanation;
+    }
+
+    return { reply: explanation, dataModified };
+  } catch (err: any) {
+    console.error('[Autopilot] Error processing rule command:', err.message);
+    return { reply: `Sorry, I couldn't parse or process that rule configuration request: ${err.message}` };
+  }
+}

@@ -10,6 +10,23 @@ Each user creates their own Meta Developer App and connects it to the platform.
 - **Verify Token:** A custom string defined by the user in the AutometaBot dashboard.
 - **App Secret:** Sourced from the user's Meta App, saved in the AutometaBot dashboard. This is used by the backend to verify the cryptographic signature (`X-Hub-Signature-256`) of incoming messages to ensure they are legitimately from Facebook.
 
+## Required Token Permissions
+Before connecting your channels, you must ensure that the generated Meta Access Tokens have the correct permissions. Missing permissions will cause posting or messaging automation to fail.
+
+### Facebook & Instagram Pages (Page Access Token)
+Your Page token must be generated with the following scopes:
+* **`pages_read_engagement`** (Required to read page info, test connectivity, and publish posts/comments)
+* **`pages_manage_posts`** (Required to publish scheduled feed posts on your page)
+* **`pages_messaging`** (Required for chatbot automated messaging/DMs)
+* **`pages_show_list`** (Required to discover pages linked to your account)
+
+### WhatsApp Business (System User Access Token)
+Your System User token must be generated in Meta Business Manager with:
+* **`whatsapp_business_messaging`** (Required to send automated WhatsApp messages/templates)
+* **`whatsapp_business_management`** (Required to query phone number and WABA status)
+
+---
+
 ## Step-by-Step Setup Guide
 
 ### Phase 0: Meta Developer Account Registration
@@ -64,14 +81,23 @@ Each user creates their own Meta Developer App and connects it to the platform.
    - `messages` (Required - triggers the AI for incoming customer messages)
    - `messaging_postbacks` (Required - triggers actions for button clicks/quick replies)
    - `message_echoes` (Recommended - alerts our server if you manually reply to a user directly from the Facebook Business Suite/Page Inbox, keeping the chat history synchronized)
+   - `feed` (Required for FB Comment Automation - triggers the AI for page comments and feed posts)
    - `messaging_handovers` (Optional - used if implementing Meta's official Handover protocol between Page Inbox and our Bot)
 7. Click **Confirm** to save the subscriptions.
-8. Click the **Generate** button next to the connected Page to get your **Page Access Token**. Copy this token.
+8. **For Instagram Automation:**
+   - In the Meta Developer Portal, go to the left sidebar, click **Webhooks** (under Products).
+   - In the dropdown list at the top, select **Instagram**.
+   - Click **Subscribe to this object** and subscribe to the `comments` field (for Instagram comment automation) and `messages` / `messaging_postbacks` (for Instagram DMs/chat automation).
+   - Ensure the verify token and webhook URL match what was set up in Messenger.
+9. Click the **Generate** button next to the connected Page to get your **Page Access Token**. Copy this token.
 
 ### Phase 4: Page Connection & Access Tokens
 1. Still in the Meta Developer Portal (under Messenger > Settings > Access Tokens), click **Add or Remove Pages** (or use the Page generation list we configured in Phase 3).
 2. Authenticate with Facebook and select the Facebook/Instagram pages you want the AI to manage.
-3. Once linked, click **Generate Token** next to the connected page. Copy this long Page Access Token.
+3. Once linked, click **Generate Token** next to the connected page. 
+   > [!IMPORTANT]
+   > Ensure the generated token includes **`pages_read_engagement`** and **`pages_manage_posts`** permissions. If these are missing, scheduling posts will fail with error `(#283) Requires pages_read_engagement`.
+   Copy this long Page Access Token.
 4. Copy the **Page ID** (available under the page name).
 5. Go back to the AutometaBot Dashboard -> **Meta Channels** tab in the sidebar.
 6. Click the orange **+ Connect FB/IG** button in the top right.

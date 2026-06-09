@@ -17,6 +17,7 @@ import {
   getLatestMessageRoleFallback,
   storeAssistantMessageFallback
 } from './db';
+import { processCommentChanges } from './comments';
 
 // ─── Helper: Download Facebook Images to Base64 ─────────────────────────────
 // Facebook Messenger webhook image URLs (lookaside.fbsbx.com) are self-authenticating
@@ -149,8 +150,15 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
     const pageId = entry.id;
     console.log(`[Webhook] Processing entry for page: ${pageId}`);
 
+    if (entry.changes && entry.changes.length > 0) {
+      console.log(`[Webhook] Detected changes/comments events in entry for page ${pageId}`);
+      const platform = event.object === 'instagram' ? 'instagram' : 'facebook';
+      await processCommentChanges(entry.changes, pageId, platform, env, expectedUserId);
+      continue;
+    }
+
     if (!entry.messaging || entry.messaging.length === 0) {
-      console.log(`[Webhook] No messaging events in entry for page ${pageId}`);
+      console.log(`[Webhook] No messaging or changes events in entry for page ${pageId}`);
       continue;
     }
 

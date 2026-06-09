@@ -21,6 +21,10 @@ import FacebookAppSettingsPage from './pages/FacebookAppSettingsPage';
 import UsagePage from './pages/UsagePage';
 import StorePage from './pages/StorePage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import ContentPlannerPage from './pages/ContentPlannerPage';
+import AutoModerationPage from './pages/AutoModerationPage';
+import IntegrationsPage from './pages/IntegrationsPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 
 import type { ReactNode } from 'react';
 
@@ -104,6 +108,10 @@ export default function App() {
               <Route path="/fb-app" element={<FacebookAppSettingsPage />} />
               <Route path="/usage" element={<UsagePage />} />
               <Route path="/sandbox" element={<SandboxPage />} />
+              <Route path="/planner" element={<ContentPlannerPage />} />
+              <Route path="/moderation" element={<AutoModerationPage />} />
+              <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/agent" element={<Navigate to="/" replace />} />
               <Route path="/store" element={<StorePage />} />
               {/* Admin routes — accessible by admin AND super_admin */}

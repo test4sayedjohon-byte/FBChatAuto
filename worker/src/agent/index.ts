@@ -196,13 +196,152 @@ const agentTools: AITool[] = [
   }
 ];
 
+const copilotTools: AITool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'list_channels',
+      description: 'Lists the connected Facebook pages and Instagram accounts with their platform names and IDs.',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_scheduled_post',
+      description: 'Schedules a new social media post for a Facebook page or Instagram account.',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'The Primary ID of the page connection.' },
+          message: { type: 'string', description: 'The caption/text of the post.' },
+          scheduled_time: { type: 'string', description: 'ISO-8601 timestamp in UTC (e.g. 2026-06-10T15:30:00Z). Must be at least 10 minutes in the future.' },
+          first_comments: { type: 'array', items: { type: 'string' }, description: 'Optional list of sequential comments to publish immediately after the post goes live.' },
+          media_urls: { type: 'array', items: { type: 'string' }, description: 'Optional list of media URLs (images/videos) to attach.' },
+          platform: { type: 'string', enum: ['facebook', 'instagram'], description: 'Social platform to target (defaults to facebook).' }
+        },
+        required: ['page_connection_id', 'message', 'scheduled_time']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_scheduled_posts',
+      description: 'Lists upcoming scheduled posts, their current status, message content, and scheduled times.',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'Optional Primary ID to filter posts for a specific channel.' },
+          limit: { type: 'integer', description: 'Number of scheduled posts to fetch (default 10).' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_scheduled_post',
+      description: 'Updates details of an existing scheduled post (e.g., changes the message/caption, reschedule time, or first comments).',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The UUID of the scheduled post.' },
+          message: { type: 'string', description: 'The new caption text.' },
+          scheduled_time: { type: 'string', description: 'New ISO-8601 timestamp in UTC.' },
+          first_comments: { type: 'array', items: { type: 'string' }, description: 'New list of sequential auto-comments.' },
+          media_urls: { type: 'array', items: { type: 'string' }, description: 'New list of media URLs.' }
+        },
+        required: ['id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_scheduled_post',
+      description: 'Deletes / cancels an upcoming scheduled post.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The UUID of the scheduled post to delete.' }
+        },
+        required: ['id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_comment_rule',
+      description: 'Creates a new auto-moderation rule for comments (e.g., hide or delete bad comments, auto-reply to keywords or sentiment).',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'The Primary ID of the page connection.' },
+          trigger_type: { type: 'string', enum: ['all', 'keywords', 'ai_sentiment'], description: 'What triggers the rule.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'List of keywords (required if trigger_type is keywords).' },
+          sentiment_target: { type: 'string', enum: ['negative', 'positive', 'neutral'], description: 'Sentiment type (required if trigger_type is ai_sentiment).' },
+          action_to_take: { type: 'string', enum: ['reply', 'hide', 'trash_queue', 'hide_and_reply', 'dm'], description: 'Action to execute when triggered.' },
+          reply_templates: { type: 'array', items: { type: 'string' }, description: 'Text responses to rotate through (required if action replies).' }
+        },
+        required: ['page_connection_id', 'trigger_type', 'action_to_take']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_comment_rules',
+      description: 'Lists all auto-moderation rules configured for the user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'Optional Primary ID to filter rules for a specific channel.' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_comment_rule',
+      description: 'Deletes an auto-moderation rule by its ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The UUID of the moderation rule to delete.' }
+        },
+        required: ['id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_comment_logs',
+      description: 'Retrieves the audit log of recent comment moderation actions (replied, hidden, deleted comments).',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', description: 'Number of logs to fetch (default 20).' }
+        }
+      }
+    }
+  }
+];
+
 export async function handleAgentChat(
   supabase: SupabaseClient,
   userId: string,
   messages: ChatMessage[],
   env: AppEnv['Bindings'],
   channelId?: string,
-  contextType?: string
+  contextType?: string,
+  agentType?: string
 ): Promise<{ message: ChatMessage; databaseUpdated: boolean }> {
   let databaseUpdated = false;
   // 1. Get the provider chain.
@@ -255,174 +394,200 @@ export async function handleAgentChat(
   // Filter tools and build custom context boundary rules
   let extraPrompt = '';
   let filteredTools = [...agentTools];
+  let systemMessage: ChatMessage;
 
-  if (channelId && channelId !== 'global') {
-    const targetPage = pages?.find(p => p.page_id === channelId || p.whatsapp_phone_number_id === channelId);
-    const pageDisplayName = targetPage ? (targetPage.page_name || channelId) : channelId;
-    extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are strictly locked to the channel "${pageDisplayName}" (ID: ${channelId}). For any tool call that requires a \`page_id\`, you MUST use "${channelId}". Do not ask the user for a channel, and do not use any other page ID.`;
+  if (agentType === 'content_copilot') {
+    filteredTools = [...copilotTools];
+    systemMessage = {
+      role: 'system',
+      content: `You are the Autometa Bot Content & Moderation Copilot, a highly capable social media content and auto-moderation assistant. You have full autonomous capability to manage scheduled posts, caption generation, first-comment threads, and auto-moderation rules for the user.
+
+Your goal is to assist the user with drafting post captions, organizing their publishing queue, setting up sequential first-comment threads, creating auto-moderation rules (e.g. hiding negative comments, replying to keywords), and inspecting comment logs.
+
+SCHEDULING RULES (CRITICAL):
+1. Posts must be scheduled at least 10 minutes in the future.
+2. Posts cannot be scheduled more than 30 days in advance.
+3. First-comments on Instagram can only be text (no images/videos due to Instagram API limitations).
+4. If the user doesn't specify a channel, first run list_channels to see their connected channels, ask them which channel/platform they want to target, and guide them.
+
+MODERATION RULES (CRITICAL):
+- Rules can trigger on "all", "keywords", or "ai_sentiment" (e.g. negative sentiment).
+- Actions can be "reply", "hide", "trash_queue" (delete), "hide_and_reply", or "dm".
+- Rotating replies can be specified via \`reply_templates\`.
+
+Be creative, friendly, and structured. Help write engaging captions, hashtags, first comments (e.g. to hide links or hashtags in comments), and set up robust comment safety policies.
+
+${pagesContext}`
+    };
   } else {
-    extraPrompt += `\n\nCONTEXT: You are operating in Global mode (All Channels). If a tool call requires a \`page_id\`, select the appropriate channel from the user's connected channels. If it is ambiguous, ask the user to clarify or switch to a specific channel using the dropdown in their chat settings page.`;
-  }
-
-  if (contextType && contextType !== 'global') {
-    if (contextType === 'system_prompt') {
-      filteredTools = agentTools.filter(t => t.function.name === 'update_system_prompt');
-      extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are in the "System Prompt" context. You can ONLY modify the system prompt (using \`update_system_prompt\`). If the user asks you to modify Quick Answers, Data Sources, or documents, do NOT try to do it. Instead, politely inform them that they must change their Context selection in the dropdown to the appropriate option first.`;
-    } else if (contextType === 'quick_answers') {
-      filteredTools = agentTools.filter(t => [
-        'add_knowledge_field',
-        'update_knowledge_field',
-        'delete_knowledge_field',
-        'search_knowledge'
-      ].includes(t.function.name));
-      extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are in the "Quick Answers" context. You can ONLY manage quick answers (knowledge fields) using the tools provided. If the user asks to modify the system prompt, folders, or documents, do NOT try to do it. Instead, politely inform them that they must change their Context selection in the dropdown to the appropriate option first.`;
-    } else if (contextType === 'knowledge_base') {
-      filteredTools = agentTools.filter(t => [
-        'list_folders',
-        'list_documents',
-        'get_document',
-        'update_document',
-        'create_document'
-      ].includes(t.function.name));
-      extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are in the "Knowledge Base" context. You can ONLY manage Data Sources (folders) and the Knowledge Base (documents). If the user asks to modify the system prompt or quick answers, do NOT try to do it. Instead, politely inform them that they must change their Context selection in the dropdown to the appropriate option first.`;
+    if (channelId && channelId !== 'global') {
+      const targetPage = pages?.find(p => p.page_id === channelId || p.whatsapp_phone_number_id === channelId);
+      const pageDisplayName = targetPage ? (targetPage.page_name || channelId) : channelId;
+      extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are strictly locked to the channel "${pageDisplayName}" (ID: ${channelId}). For any tool call that requires a \`page_id\`, you MUST use "${channelId}". Do not ask the user for a channel, and do not use any other page ID.`;
+    } else {
+      extraPrompt += `\n\nCONTEXT: You are operating in Global mode (All Channels). If a tool call requires a \`page_id\`, select the appropriate channel from the user's connected channels. If it is ambiguous, ask the user to clarify or switch to a specific channel using the dropdown in their chat settings page.`;
     }
-  }
 
-  // Prepend system prompt
-  const systemMessage: ChatMessage = {
-    role: 'system',
-    content: `You are the Autometa Bot System Agent, a highly capable IDE-like AI engineering assistant. You have full autonomous capability to manage, inspect, modify, and optimize the chatbot settings and knowledge base for the user.
+    if (contextType && contextType !== 'global') {
+      if (contextType === 'system_prompt') {
+        filteredTools = agentTools.filter(t => t.function.name === 'update_system_prompt');
+        extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are in the "System Prompt" context. You can ONLY modify the system prompt (using \`update_system_prompt\`). If the user asks you to modify Quick Answers, Data Sources, or documents, do NOT try to do it. Instead, politely inform them that they must change their Context selection in the dropdown to the appropriate option first.`;
+      } else if (contextType === 'quick_answers') {
+        filteredTools = agentTools.filter(t => [
+          'add_knowledge_field',
+          'update_knowledge_field',
+          'delete_knowledge_field',
+          'search_knowledge'
+        ].includes(t.function.name));
+        extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are in the "Quick Answers" context. You can ONLY manage quick answers (knowledge fields) using the tools provided. If the user asks to modify the system prompt, folders, or documents, do NOT try to do it. Instead, politely inform them that they must change their Context selection in the dropdown to the appropriate option first.`;
+      } else if (contextType === 'knowledge_base') {
+        filteredTools = agentTools.filter(t => [
+          'list_folders',
+          'list_documents',
+          'get_document',
+          'update_document',
+          'create_document'
+        ].includes(t.function.name));
+        extraPrompt += `\n\nCRITICAL CONTEXT RESTRICTION: You are in the "Knowledge Base" context. You can ONLY manage Data Sources (folders) and the Knowledge Base (documents). If the user asks to modify the system prompt or quick answers, do NOT try to do it. Instead, politely inform them that they must change their Context selection in the dropdown to the appropriate option first.`;
+      }
+    }
 
+    // Prepend system prompt
+    systemMessage = {
+      role: 'system',
+      content: `You are the Autometa Bot System Agent, a highly capable IDE-like AI engineering assistant. You have full autonomous capability to manage, inspect, modify, and optimize the chatbot settings and knowledge base for the user.
+  
 Your goal is to ensure the user's customer-facing chatbot (running on Facebook/WhatsApp) behaves perfectly according to their business rules, factual details, and guidelines.
-
+  
 HOW THE CUSTOMER-FACING BOT ACTUALLY WORKS (READ THIS CAREFULLY):
 When a real customer sends a message on Facebook/WhatsApp, the bot builds its context in this exact order:
-
+  
   [1] System Prompt → ALWAYS injected, every single message. This is the bot's core personality and hard rules.
   [2] Quick Answers → ALWAYS injected, every single message, as a "Business Information" block. Every field is listed out for the AI to read.
   [3] Knowledge Base (RAG) → ONLY injected when the customer's message triggers a semantic search. The system searches the vector database for relevant document chunks and injects only what matches.
-
+  
 This means:
 - Quick Answers ARE the permanent memory layer. If you put 50+ fields in, they all get injected every time → token bloat → hallucinations.
 - The Knowledge Base is the on-demand retrieval layer. It is searched automatically. You do NOT need to put doc content anywhere else.
 - The System Prompt sets the rules. It must stay short and behavior-only.
-
+  
 TERMINOLOGY & DATABASE ARCHITECTURE:
 - "System Prompt" (custom_system_prompt in page_connections): Behavioral rules, persona, tone, constraints ONLY. Max 800 words. NEVER put facts, prices, emails, hours, or lists here.
 - "Quick Answers" (knowledge_fields table): Short key-value facts always injected into every prompt. Use for instant-recall data: prices, contacts, hours, product names, specs. Each value: 1-3 sentences max. Keep total fields under ~40 to avoid token bloat.
-- "Knowledge Base" (documents table / RAG vector store): Long-form content that gets searched and retrieved on demand. Use for: detailed FAQs, policies, catalogs, how-to guides, anything over 5 sentences. The bot retrieves the relevant parts automatically when a customer asks about it — you do NOT need to copy this content into the prompt or Quick Answers.
+- "Knowledge Base" (documents table / RAG vector store): Long-form content that gets searched and retrieved on demand. Use for: detailed FAQs, policies, catalog, how-to guides, anything over 5 sentences. The bot retrieves the relevant parts automatically when a customer asks about it — you do NOT need to copy this content into the prompt or Quick Answers.
 - "Version History" (version_history table): Logs all changes for undo/revert.
-
+  
 VERSION HISTORY & UNDO PROTOCOL:
 If the user asks you to revert, undo, go back, or restore a setting to its previous state:
 1. Call list_version_history tool to check the recent logs.
 2. Identify the setting they want to revert (e.g. prompt or a quick answer change).
 3. Call revert_to_version with its version_id to restore the exact original content.
 4. Inform the user you have restored the setting.
-
+  
 CONTENT ROUTING — CLASSIFY FIRST, ACT SECOND. ALWAYS.:
 Before writing or saving anything, classify the content into exactly one of these three layers:
-
+  
 LAYER 1 — SYSTEM PROMPT (behavioral rules only):
   Belongs here: Tone, persona, language rules, hard constraints ("never offer refunds"), fallback behavior.
   Does NOT belong here: Any facts, prices, names, emails, hours, product info, or lists.
   Action: Read current prompt first → make ONE surgical edit → save. Never rewrite the whole thing.
-
+  
 LAYER 2 — QUICK ANSWERS (short instant-recall facts):
   Belongs here: Single values the bot must know in every conversation. Price, email, phone, hours, one-liner specs.
   Rule: Each value must fit in 1-3 short sentences. Keep total field count under ~40.
   Action: search_knowledge first → update if exists → add if not. Never add duplicates.
   HARD STOP: If value is longer than 3 sentences → it goes to Layer 3 instead.
-
+  
 LAYER 3 — KNOWLEDGE BASE (on-demand retrieval documents):
   Belongs here: Everything else. Q&A pairs, FAQs, policies, product details, catalogs, guides, anything over 5 sentences.
   How it works: Customers trigger this automatically — the system searches and injects only the relevant parts.
   You do NOT need to copy this content anywhere else. Trust the RAG system.
-
+  
 QUICK DECISION TEST:
   → Rule about bot BEHAVIOR? → Layer 1 (System Prompt)
   → Short single fact, fits in 2 sentences? → Layer 2 (Quick Answer)
   → Everything else? → Layer 3 (Knowledge Base document)
-
+  
 KNOWLEDGE BASE — DOCUMENT CATEGORY MAP:
 The Knowledge Base can have multiple documents, each covering a different topic. When adding content, you must match it to the right document. Use this category map to decide:
-
+  
   CATEGORY: FAQ / General Questions
     Keywords: "if someone asks", "when asked about", "how to answer", "what to say if", Q&A pairs, common questions
     Target document title: "FAQ" or "Frequently Asked Questions"
-
+  
   CATEGORY: Pricing & Plans
     Keywords: price, cost, fee, plan, subscription, package, tier, rate, discount, offer
     Target document title: "Pricing" or "Pricing Sheet"
-
+  
   CATEGORY: Products & Services
     Keywords: product, service, item, model, spec, feature, what we sell, what we offer, catalog
     Target document title: "Products & Services" or "Product Catalog"
-
+  
   CATEGORY: Shipping & Delivery
     Keywords: shipping, delivery, dispatch, courier, tracking, arrive, how long, days
     Target document title: "Shipping & Delivery"
-
+  
   CATEGORY: Returns, Refunds & Policies
     Keywords: return, refund, exchange, policy, guarantee, warranty, cancel, complaint
     Target document title: "Returns & Refund Policy"
-
+  
   CATEGORY: Contact & Support
     Keywords: contact, support, help, reach, call, email, office, team, agent
     Target document title: "Contact & Support"
-
-  CATEGORY: Business Info & About
+  
+  CATEGORY: About Us & Business Info
     Keywords: about, who are we, our story, established, mission, vision, background, company
     Target document title: "About Us"
-
+  
   CATEGORY: Custom / Other
     If content does not clearly fit above categories, create a document with a clear descriptive title matching the topic.
-
-KNOWLEDGE BASE — STRICT DOCUMENT WORKFLOW (follow every step, no shortcuts):
-Step 1 → Call list_folders. Get folder IDs assigned to this page.
-Step 2 → Call list_documents on each folder. Get all existing document titles + IDs.
-Step 3 → Classify what category the new content belongs to (use category map above).
-Step 4 → Search the existing document list for a title that matches that category.
-  MATCH FOUND → Go to Step 5a.
-  NO MATCH → Go to Step 5b.
-Step 5a (Append to existing):
-  → Call get_document(document_id) to read the full current content.
-  → Build the updated content = existing content + a clean separator + the new content.
-  → Format it neatly. Use clear section headings. Do not duplicate existing entries.
-  → Call update_document(document_id, full_updated_content).
-  → Tell the user: "Added to your existing '[Document Title]' document ✓"
-Step 5b (Create new document):
-  → Choose a clear standard title from the category map above.
-  → Format the content cleanly with headings.
-  → Call create_document(title, content, folder_id).
-  → Tell the user: "Created a new '[Document Title]' document ✓"
-
-ABSOLUTE RULES FOR DOCUMENT MANAGEMENT:
-  ✗ NEVER create a new document if a relevant one already exists — always append.
-  ✗ NEVER overwrite or lose existing content — always read first, then combine.
-  ✗ NEVER create vague document titles like "New Document", "Info", or "Data".
-  ✗ NEVER put Q&A pairs, policies, or product details into Quick Answers.
-  ✓ ALWAYS use clean formatting with headers and line breaks inside documents.
-  ✓ ALWAYS re-embed after updating (update_document handles this automatically).
-
-SYSTEM PROMPT HEALTH:
-  - If the current prompt is over 800 words, warn the user and offer to refactor it.
-  - The system prompt = persona brief + behavioral rules. Nothing else.
-  - Surgical edits only — never rewrite unless explicitly asked.
-
-BEHAVIOR DEBUGGING:
-If the bot is misbehaving (e.g., "bot is giving wrong prices"):
-  → Check the system prompt for conflicting rules.
-  → Add a precise hard constraint using update_system_prompt.
-  → Example: "CRITICAL: Never quote a price below $99. Always refer customers to the pricing sheet."
-
-IDE SYNC:
-The user sees a live split-screen editor. When you update the database, their tab flashes green automatically.
-Always tell the user which tab was updated: Prompt tab / Quick Answers tab / Docs tab.
-
-${pagesContext}
-${extraPrompt}`
-  };
+  
+  KNOWLEDGE BASE — STRICT DOCUMENT WORKFLOW (follow every step, no shortcuts):
+  Step 1 → Call list_folders. Get folder IDs assigned to this page.
+  Step 2 → Call list_documents on each folder. Get all existing document titles + IDs.
+  Step 3 → Classify what category the new content belongs to (use category map above).
+  Step 4 → Search the existing document list for a title that matches that category.
+    MATCH FOUND → Go to Step 5a.
+    NO MATCH → Go to Step 5b.
+  Step 5a (Append to existing):
+    → Call get_document(document_id) to read the full current content.
+    → Build the updated content = existing content + a clean separator + the new content.
+    → Format it neatly. Use clear section headings. Do not duplicate existing entries.
+    → Call update_document(document_id, full_updated_content).
+    → Tell the user: "Added to your existing '[Document Title]' document ✓"
+  Step 5b (Create new document):
+    → Choose a clear standard title from the category map above.
+    → Format the content cleanly with headings.
+    → Call create_document(title, content, folder_id).
+    → Tell the user: "Created a new '[Document Title]' document ✓"
+  
+  ABSOLUTE RULES FOR DOCUMENT MANAGEMENT:
+    ✗ NEVER create a new document if a relevant one already exists — always append.
+    ✗ NEVER overwrite or lose existing content — always read first, then combine.
+    ✗ NEVER create vague document titles like "New Document", "Info", or "Data".
+    ✗ NEVER put Q&A pairs, policies, or product details into Quick Answers.
+    ✓ ALWAYS use clean formatting with headers and line breaks inside documents.
+    ✓ ALWAYS re-embed after updating (update_document handles this automatically).
+  
+  SYSTEM PROMPT HEALTH:
+    - If the current prompt is over 800 words, warn the user and offer to refactor it.
+    - The system prompt = persona brief + behavioral rules. Nothing else.
+    - Surgical edits only — never rewrite unless explicitly asked.
+  
+  BEHAVIOR DEBUGGING:
+  If the bot is misbehaving (e.g., "bot is giving wrong prices"):
+    → Check the system prompt for conflicting rules.
+    → Add a precise hard constraint using update_system_prompt.
+    → Example: "CRITICAL: Never quote a price below $99. Always refer customers to the pricing sheet."
+  
+  IDE SYNC:
+  The user sees a live split-screen editor. When you update the database, their tab flashes green automatically.
+  Always tell the user which tab was updated: Prompt tab / Quick Answers tab / Docs tab.
+  
+  ${pagesContext}
+  ${extraPrompt}`
+    };
+  }
 
   let conversation = [systemMessage, ...messages];
 
@@ -462,7 +627,221 @@ ${extraPrompt}`
       try {
         console.log(`[Agent] Executing tool: ${fnName}`, args);
         
-        if (fnName === 'update_system_prompt') {
+        if (fnName === 'list_channels') {
+          const { data: pageConns, error } = await supabase
+            .from('page_connections')
+            .select('page_id, page_name, instagram_account_id')
+            .eq('user_id', userId);
+          if (error) throw error;
+          if (!pageConns || pageConns.length === 0) {
+            resultStr = "No connected channels found.";
+          } else {
+            const channelsList = [];
+            for (const c of pageConns) {
+              channelsList.push({ page_id: c.page_id, page_name: c.page_name || 'Facebook Page', platform: 'facebook' });
+              if (c.instagram_account_id) {
+                channelsList.push({ page_id: c.page_id, page_name: `${c.page_name || 'Facebook Page'} (Instagram)`, platform: 'instagram', instagram_account_id: c.instagram_account_id });
+              }
+            }
+            resultStr = JSON.stringify(channelsList);
+          }
+        }
+        else if (fnName === 'create_scheduled_post') {
+          const { data: conn } = await supabase
+            .from('page_connections')
+            .select('page_id, page_name')
+            .eq('page_id', args.page_connection_id)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (!conn) {
+            resultStr = `Error: Page connection not found or you do not have permission for page_id: ${args.page_connection_id}`;
+          } else {
+            const schedTime = new Date(args.scheduled_time);
+            const minutesDiff = (schedTime.getTime() - Date.now()) / (60 * 1000);
+            if (minutesDiff < 10) {
+              resultStr = `Error: Scheduled time must be at least 10 minutes in the future (requested: ${args.scheduled_time}, which is only ${Math.round(minutesDiff)} minutes away).`;
+            } else if (minutesDiff > 30 * 24 * 60) {
+              resultStr = `Error: Scheduled time cannot be more than 30 days in the future.`;
+            } else {
+              const platform = args.platform || 'facebook';
+              const { data, error } = await supabase
+                .from('scheduled_posts')
+                .insert({
+                  user_id: userId,
+                  page_connection_id: args.page_connection_id,
+                  platform: platform,
+                  post_type: args.media_urls && args.media_urls.length > 0 ? 'photo' : 'text',
+                  message: args.message,
+                  media_urls: args.media_urls || null,
+                  scheduled_time: schedTime.toISOString(),
+                  first_comments: args.first_comments || [],
+                  status: 'scheduled'
+                })
+                .select('id')
+                .single();
+
+              if (error) throw error;
+              resultStr = `Successfully scheduled post for ${platform} on ${args.scheduled_time}. Post ID: ${data.id}.`;
+              databaseUpdated = true;
+            }
+          }
+        }
+        else if (fnName === 'list_scheduled_posts') {
+          let queryBuilder = supabase
+            .from('scheduled_posts')
+            .select('id, page_connection_id, platform, post_type, message, media_urls, scheduled_time, status, first_comments')
+            .eq('user_id', userId)
+            .order('scheduled_time', { ascending: true })
+            .limit(args.limit || 10);
+
+          if (args.page_connection_id) {
+            queryBuilder = queryBuilder.eq('page_connection_id', args.page_connection_id);
+          }
+
+          const { data, error } = await queryBuilder;
+          if (error) throw error;
+          resultStr = data && data.length > 0 ? JSON.stringify(data) : "No scheduled posts found.";
+        }
+        else if (fnName === 'update_scheduled_post') {
+          const { data: post } = await supabase
+            .from('scheduled_posts')
+            .select('id')
+            .eq('id', args.id)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (!post) {
+            resultStr = `Error: Scheduled post not found or you do not have access to it.`;
+          } else {
+            const updates: any = {};
+            if (args.message !== undefined) updates.message = args.message;
+            if (args.scheduled_time !== undefined) {
+              const schedTime = new Date(args.scheduled_time);
+              const minutesDiff = (schedTime.getTime() - Date.now()) / (60 * 1000);
+              if (minutesDiff < 10) {
+                resultStr = `Error: New scheduled time must be at least 10 minutes in the future.`;
+              } else {
+                updates.scheduled_time = schedTime.toISOString();
+              }
+            }
+            if (args.first_comments !== undefined) updates.first_comments = args.first_comments;
+            if (args.media_urls !== undefined) {
+              updates.media_urls = args.media_urls;
+              updates.post_type = args.media_urls && args.media_urls.length > 0 ? 'photo' : 'text';
+            }
+
+            if (!resultStr.startsWith('Error:')) {
+              const { error } = await supabase
+                .from('scheduled_posts')
+                .update(updates)
+                .eq('id', args.id);
+
+              if (error) throw error;
+              resultStr = `Successfully updated scheduled post ${args.id}.`;
+              databaseUpdated = true;
+            }
+          }
+        }
+        else if (fnName === 'delete_scheduled_post') {
+          const { data: post } = await supabase
+            .from('scheduled_posts')
+            .select('id')
+            .eq('id', args.id)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (!post) {
+            resultStr = `Error: Scheduled post not found or you do not have access to it.`;
+          } else {
+            const { error } = await supabase
+              .from('scheduled_posts')
+              .delete()
+              .eq('id', args.id);
+
+            if (error) throw error;
+            resultStr = `Successfully deleted scheduled post ${args.id}.`;
+            databaseUpdated = true;
+          }
+        }
+        else if (fnName === 'create_comment_rule') {
+          const { data: conn } = await supabase
+            .from('page_connections')
+            .select('page_id')
+            .eq('page_id', args.page_connection_id)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (!conn) {
+            resultStr = `Error: Page connection not found or you do not have permission for page_id: ${args.page_connection_id}`;
+          } else {
+            const { data, error } = await supabase
+              .from('comment_rules')
+              .insert({
+                user_id: userId,
+                page_connection_id: args.page_connection_id,
+                trigger_type: args.trigger_type,
+                keywords: args.keywords || null,
+                sentiment_target: args.sentiment_target || null,
+                action_to_take: args.action_to_take,
+                reply_templates: args.reply_templates || null,
+                is_active: true
+              })
+              .select('id')
+              .single();
+
+            if (error) throw error;
+            resultStr = `Successfully created auto-moderation rule. Rule ID: ${data.id}.`;
+            databaseUpdated = true;
+          }
+        }
+        else if (fnName === 'list_comment_rules') {
+          let queryBuilder = supabase
+            .from('comment_rules')
+            .select('id, page_connection_id, trigger_type, keywords, sentiment_target, action_to_take, reply_templates, is_active')
+            .eq('user_id', userId);
+
+          if (args.page_connection_id) {
+            queryBuilder = queryBuilder.eq('page_connection_id', args.page_connection_id);
+          }
+
+          const { data, error } = await queryBuilder;
+          if (error) throw error;
+          resultStr = data && data.length > 0 ? JSON.stringify(data) : "No auto-moderation rules found.";
+        }
+        else if (fnName === 'delete_comment_rule') {
+          const { data: rule } = await supabase
+            .from('comment_rules')
+            .select('id')
+            .eq('id', args.id)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (!rule) {
+            resultStr = `Error: Moderation rule not found or you do not have access to it.`;
+          } else {
+            const { error } = await supabase
+              .from('comment_rules')
+              .delete()
+              .eq('id', args.id);
+
+            if (error) throw error;
+            resultStr = `Successfully deleted moderation rule ${args.id}.`;
+            databaseUpdated = true;
+          }
+        }
+        else if (fnName === 'list_comment_logs') {
+          const { data, error } = await supabase
+            .from('comment_logs')
+            .select('id, platform, post_id, comment_id, user_name, user_message, ai_sentiment, ai_toxicity_score, action_taken, reply_message, created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(args.limit || 20);
+
+          if (error) throw error;
+          resultStr = data && data.length > 0 ? JSON.stringify(data) : "No moderation action logs found.";
+        }
+        else if (fnName === 'update_system_prompt') {
           if (args.page_id === 'global') {
             resultStr = `Error: Cannot update system prompt globally. You must specify a valid Facebook page_id.`;
           } else {

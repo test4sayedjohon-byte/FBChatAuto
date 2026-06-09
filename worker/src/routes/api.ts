@@ -7,6 +7,8 @@ import { sendFacebookReply } from '../facebook';
 import { sendWhatsAppReply } from '../whatsapp';
 import { processDocument } from '../rag';
 import { handleAgentChat } from '../agent';
+import { processAutopilotConfig } from '../comments/autopilot';
+import { runSchedulerJobs } from '../scheduler';
 
 const api = new Hono<AppEnv>();
 
@@ -127,7 +129,7 @@ api.post('/documents/process', async (c) => {
 
 api.post('/agent/chat', async (c) => {
   try {
-    const { messages, channelId, contextType } = await c.req.json();
+    const { messages, channelId, contextType, agentType } = await c.req.json();
     const user = c.get('authUser');
     
     if (!user || !user.id) {
@@ -177,7 +179,7 @@ api.post('/agent/chat', async (c) => {
     }).eq('id', user.id);
     
     // Process the chat
-    const { message: responseMessage, databaseUpdated } = await handleAgentChat(supabase, user.id, messages, c.env, channelId, contextType);
+    const { message: responseMessage, databaseUpdated } = await handleAgentChat(supabase, user.id, messages, c.env, channelId, contextType, agentType);
     
     return c.json({ message: responseMessage, databaseUpdated });
   } catch (error: any) {
@@ -488,6 +490,41 @@ api.post('/admin/impersonate', async (c) => {
     });
   } catch (error: any) {
     console.error('[Impersonate] Error:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/autopilot-config', async (c) => {
+  try {
+    const { userId, message } = await c.req.json();
+    const authUser = c.get('authUser');
+    
+    if (!authUser || !authUser.id) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const tenantId = userId || authUser.id;
+    const supabase = createSupabaseAdmin(c.env);
+    
+    const result = await processAutopilotConfig(supabase, tenantId, message, c.env.DB);
+    return c.json(result);
+  } catch (error: any) {
+    console.error('[Autopilot Route Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/scheduler/run', async (c) => {
+  try {
+    const authUser = c.get('authUser');
+    if (!authUser || !authUser.id) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    const supabase = createSupabaseAdmin(c.env);
+    await runSchedulerJobs(supabase);
+    return c.json({ success: true });
+  } catch (error: any) {
+    console.error('[Scheduler Route Error]:', error);
     return c.json({ error: error.message }, 500);
   }
 });

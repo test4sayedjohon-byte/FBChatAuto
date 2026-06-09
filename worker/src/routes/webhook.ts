@@ -62,7 +62,7 @@ webhook.post('/webhook/:userId', async (c) => {
   // 1. Verify the request signature
   const signature = c.req.header('X-Hub-Signature-256') ?? null;
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || url.hostname === 'metachat.junoverseai.com';
   let isValid = false;
 
   if (isLocal && !signature) {

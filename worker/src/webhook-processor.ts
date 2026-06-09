@@ -369,7 +369,7 @@ async function handleMessagingEvent(
     if (!messageText && hasOnlyUnsupported) {
       const cannedResponse = "Thanks for sending that! I can currently only understand text and images. " +
         "If you have a question, please type it out and I'll be happy to help. 😊";
-      await sendFacebookReply(pageConnection.access_token, senderId, cannedResponse);
+      await sendFacebookReply(pageConnection.access_token, senderId, cannedResponse, pageConnection.page_id);
       await storeAssistantMessageFallback(
         env.DB,
         supabase,
@@ -398,7 +398,7 @@ async function handleMessagingEvent(
           : ["I need to transfer you to a human agent. Please hold on."];
         const randomResponse = responses[Math.floor(Math.random() * responses.length)];
 
-        await sendFacebookReply(pageConnection.access_token, senderId, randomResponse);
+        await sendFacebookReply(pageConnection.access_token, senderId, randomResponse, pageConnection.page_id);
         await storeAssistantMessageFallback(
           env.DB,
           supabase,
@@ -426,19 +426,19 @@ async function handleMessagingEvent(
     }
 
     // Show typing indicator and mark as seen while AI is processing
-    await sendFacebookSenderAction(pageConnection.access_token, senderId, 'mark_seen');
+    await sendFacebookSenderAction(pageConnection.access_token, senderId, 'mark_seen', pageConnection.page_id);
 
     isProcessing = true;
     typingPromise = (async () => {
       try {
         while (isProcessing) {
-          await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_on');
+          await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_on', pageConnection.page_id);
           // Typing for 3 to 6 seconds
           const typingDuration = Math.floor(Math.random() * 3000) + 3000;
           await delayOrFinish(typingDuration, () => !isProcessing);
           if (!isProcessing) break;
 
-          await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_off');
+          await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_off', pageConnection.page_id);
           // Pause for 1 to 2.5 seconds
           const pauseDuration = Math.floor(Math.random() * 1500) + 1000;
           await delayOrFinish(pauseDuration, () => !isProcessing);
@@ -478,7 +478,7 @@ async function handleMessagingEvent(
     await typingPromise;
 
     // Send final reply
-    await sendFacebookReply(pageConnection.access_token, senderId, chatResult.reply);
+    await sendFacebookReply(pageConnection.access_token, senderId, chatResult.reply, pageConnection.page_id);
 
     try {
       await triggerSlidingWindowSummarization(supabase, result.sessionId, pageConnection, senderId);
@@ -489,7 +489,7 @@ async function handleMessagingEvent(
     isProcessing = false;
     await typingPromise;
     // Ensure typing indicator is turned off in case of errors
-    await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_off');
+    await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_off', pageConnection.page_id);
     await releaseSessionLockFallback(env.DB, supabase, result.sessionId);
   }
 }

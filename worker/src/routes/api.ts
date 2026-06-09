@@ -58,7 +58,7 @@ api.post('/chat/send', async (c) => {
     if (pageConnection.whatsapp_phone_number_id && pageConnection.whatsapp_phone_number_id === pageId) {
       await sendWhatsAppReply(pageConnection.whatsapp_phone_number_id, pageConnection.access_token, recipientId, text);
     } else {
-      await sendFacebookReply(pageConnection.access_token, recipientId, text);
+      await sendFacebookReply(pageConnection.access_token, recipientId, text, pageConnection.page_id);
     }
 
     // 3. Save as human agent message

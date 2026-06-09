@@ -3,7 +3,8 @@
 export async function sendFacebookReply(
   accessToken: string,
   recipientId: string,
-  messageText: string
+  messageText: string,
+  pageId?: string
 ): Promise<void> {
   // Facebook Messenger has a 2000 character limit per message.
   // Split long responses into multiple messages.
@@ -11,7 +12,9 @@ export async function sendFacebookReply(
   const messages = splitMessage(messageText, MAX_LENGTH);
 
   for (const msg of messages) {
-    const url = 'https://graph.facebook.com/v21.0/me/messages';
+    const url = pageId
+      ? `https://graph.facebook.com/v21.0/${pageId}/messages`
+      : 'https://graph.facebook.com/v21.0/me/messages';
 
     const payload = {
       recipient: { id: recipientId },
@@ -47,9 +50,12 @@ export async function sendFacebookReply(
 export async function sendFacebookSenderAction(
   accessToken: string,
   recipientId: string,
-  senderAction: 'typing_on' | 'typing_off' | 'mark_seen'
+  senderAction: 'typing_on' | 'typing_off' | 'mark_seen',
+  pageId?: string
 ): Promise<void> {
-  const url = 'https://graph.facebook.com/v21.0/me/messages';
+  const url = pageId
+    ? `https://graph.facebook.com/v21.0/${pageId}/messages`
+    : 'https://graph.facebook.com/v21.0/me/messages';
 
   const payload = {
     recipient: { id: recipientId },

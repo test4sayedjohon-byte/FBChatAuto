@@ -222,6 +222,11 @@ export async function buildSystemPrompt(
     parts.push('');
   }
 
+  // 4c. Factual Guardrails (Strict Truthfulness)
+  parts.push('## Factual Policy (Strict Truthfulness)');
+  parts.push('You MUST only answer using the verified facts provided in the "Business Information" or "Additional Context" sections. DO NOT make up any prices, numbers, contact info, locations, or business details. If a customer asks a question that is not covered by the provided facts, you MUST say that you do not have that information and suggest they contact the business representative directly.');
+  parts.push('');
+
   // 5. Strict Language Mirroring Safeguard
   parts.push('## Language Policy (Strict Mirroring)');
   parts.push('You MUST detect the language and script/style of the customer\'s message and reply in that EXACT same language and script/style. NEVER default to English if the user writes in Banglish or Bengali.');

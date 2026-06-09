@@ -9,6 +9,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PageConnection } from '../types';
+import { getKnowledgeFieldsFallback, getCustomerProfileFallback } from '../db';
 
 /**
  * Knowledge field from the database.
@@ -20,6 +21,7 @@ interface KnowledgeField {
   value_type?: 'string' | 'list' | 'boolean' | 'number';
   display_label?: string | null;
   description?: string | null;
+  page_id?: string | null;
 }
 
 /**
@@ -60,19 +62,26 @@ export async function buildSystemPrompt(
   supabase: SupabaseClient,
   pageConnection: PageConnection,
   senderId: string,
-  ragContext?: string
+  ragContext?: string,
+  db?: D1Database
 ): Promise<string> {
   const userId = pageConnection.user_id;
   const pageId = pageConnection.page_id;
 
   // 1. Fetch the user's knowledge fields (Global or Page-specific)
-  const { data: rawFields } = await supabase
-    .from('knowledge_fields')
-    .select('field_name, field_value, category, value_type, display_label, description, page_id')
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .or(`page_id.eq.${pageId},page_id.is.null`)
-    .order('sort_order', { ascending: true });
+  let rawFields = null;
+  if (db) {
+    rawFields = await getKnowledgeFieldsFallback(db, supabase, userId, pageId);
+  } else {
+    const { data } = await supabase
+      .from('knowledge_fields')
+      .select('field_name, field_value, category, value_type, display_label, description, page_id')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .or(`page_id.eq.${pageId},page_id.is.null`)
+      .order('sort_order', { ascending: true });
+    rawFields = data;
+  }
 
   // Deduplicate: page-specific fields override global (page_id=null) fields
   // with the same field_name to avoid contradictory info in the prompt
@@ -81,7 +90,7 @@ export async function buildSystemPrompt(
     for (const f of rawFields) {
       const existing = fieldMap.get(f.field_name);
       // Keep page-specific (has page_id) over global (page_id=null)
-      if (!existing || (f.page_id && !existing)) {
+      if (!existing || (f.page_id && !existing.page_id)) {
         fieldMap.set(f.field_name, f as KnowledgeField);
       }
     }
@@ -91,15 +100,20 @@ export async function buildSystemPrompt(
   // 1b. Fetch Customer Profile Summary if profiling is enabled
   let customerSummary = null;
   if (pageConnection.enable_customer_profiling) {
-    const { data: profile } = await supabase
-      .from('customer_profiles')
-      .select('summary')
-      .eq('page_id', pageId)
-      .eq('sender_id', senderId)
-      .maybeSingle();
-      
-    if (profile?.summary) {
-      customerSummary = profile.summary;
+    if (db) {
+      const profile = await getCustomerProfileFallback(db, supabase, pageId, senderId);
+      customerSummary = profile?.summary ?? null;
+    } else {
+      const { data: profile } = await supabase
+        .from('customer_profiles')
+        .select('summary')
+        .eq('page_id', pageId)
+        .eq('sender_id', senderId)
+        .maybeSingle();
+        
+      if (profile?.summary) {
+        customerSummary = profile.summary;
+      }
     }
   }
 
@@ -112,9 +126,15 @@ export async function buildSystemPrompt(
     // Replace variable placeholders like {{business_name}}
     if (fields && fields.length > 0) {
       for (const field of fields as KnowledgeField[]) {
-        const placeholder = `{{${field.field_name}}}`;
         const val = formatFieldValueForPrompt(field);
-        customPrompt = customPrompt.replace(new RegExp(escapeRegExp(placeholder), 'g'), val);
+        
+        // Support curly brace format: {{field_name}}
+        const placeholderCurly = `{{${field.field_name}}}`;
+        customPrompt = customPrompt.replace(new RegExp(escapeRegExp(placeholderCurly), 'g'), val);
+
+        // Support bracket format: [field_name]
+        const placeholderBracket = `[${field.field_name}]`;
+        customPrompt = customPrompt.replace(new RegExp(escapeRegExp(placeholderBracket), 'g'), val);
       }
     }
     parts.push(customPrompt);

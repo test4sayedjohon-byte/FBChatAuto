@@ -1,7 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env, WhatsAppWebhookEvent, WhatsAppMessage, WhatsAppValue, PageConnection } from './types';
-import { createSupabaseAdmin, getWhatsAppConnection, storeIncomingMessage, acquireSessionLock, releaseSessionLock } from './supabase';
+import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
+import {
+  getWhatsAppConnectionFallback,
+  getUserRecord,
+  getMonthlyMessageCountFallback,
+  storeIncomingMessageFallback,
+  updateMessageMetadataFallback,
+  acquireSessionLockFallback,
+  releaseSessionLockFallback,
+  getChatSessionFallback,
+  getLatestMessageRoleFallback,
+  storeAssistantMessageFallback,
+  updateSessionSenderNameFallback
+} from './db';
 
 /**
  * Send a WhatsApp reply using the Meta Cloud API.
@@ -162,7 +175,7 @@ export async function processWhatsAppWebhookEntries(
       }
 
       // 1. Look up which tenant owns this WhatsApp number
-      const pageConnection = await getWhatsAppConnection(supabase, phoneNumberId);
+      const pageConnection = await getWhatsAppConnectionFallback(env.DB, supabase, phoneNumberId);
 
       if (!pageConnection) {
         console.warn(
@@ -172,11 +185,7 @@ export async function processWhatsAppWebhookEntries(
       }
 
       // Check tenant limits and status
-      const { data: userRecord } = await supabase
-        .from('users')
-        .select('settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at')
-        .eq('id', pageConnection.user_id)
-        .single();
+      const userRecord = await getUserRecord(env.DB, supabase, pageConnection.user_id);
 
       if (userRecord?.is_suspended) {
         console.log(`[WhatsApp Webhook] 🚫 Tenant ${pageConnection.user_id} is suspended. Ignoring messages.`);
@@ -203,20 +212,22 @@ export async function processWhatsAppWebhookEntries(
           continue;
         }
         
-        const { data: pHistory } = await supabase
-          .from('purchases')
-          .select('created_at, status, payment_method')
-          .eq('user_id', pageConnection.user_id);
+        let pHistory: any[] = [];
+        try {
+          const { data } = await supabase
+            .from('purchases')
+            .select('created_at, status, payment_method')
+            .eq('user_id', pageConnection.user_id);
+          pHistory = data || [];
+        } catch (err: any) {
+          console.warn(`[Failover] Purchases fetch failed for user ${pageConnection.user_id}: ${err.message}. Using default billing anchor.`);
+        }
 
-        const { startDate } = calculateBillingCycle(userRecord.created_at, pHistory || []);
+        const { startDate } = calculateBillingCycle(userRecord.created_at, pHistory);
 
-        const { count: messagesCount, error: countError } = await supabase
-          .from('chat_messages')
-          .select('id', { count: 'exact', head: true })
-          .eq('user_id', pageConnection.user_id)
-          .gte('created_at', startDate.toISOString());
+        const messagesCount = await getMonthlyMessageCountFallback(env.DB, supabase, pageConnection.user_id, startDate.toISOString());
 
-        if (!countError && messagesCount !== null && messagesCount >= allowedLimit) {
+        if (messagesCount >= allowedLimit) {
           console.log(
             `[WhatsApp Webhook] 🚫 Tenant ${pageConnection.user_id} exceeded monthly message limit (${messagesCount}/${allowedLimit}).`
           );
@@ -279,7 +290,8 @@ async function handleWhatsAppMessage(
 
   // Store message and get/create session
   // Note: we pass phoneNumberId as the pageId in session creation to isolate it
-  const result = await storeIncomingMessage(
+  const result = await storeIncomingMessageFallback(
+    env.DB,
     supabase,
     pageConnection.user_id,
     phoneNumberId,
@@ -294,11 +306,7 @@ async function handleWhatsAppMessage(
 
   // Fetch name from contacts profile in the webhook and save to the chat_session if missing
   const contactName = value.contacts?.find(c => c.wa_id === senderPhoneNumber)?.profile?.name || 'WhatsApp User';
-  await supabase
-    .from('chat_sessions')
-    .update({ sender_name: contactName })
-    .eq('id', result.sessionId)
-    .is('sender_name', null);
+  await updateSessionSenderNameFallback(env.DB, supabase, result.sessionId, contactName);
 
   // ── Debounce period ──────────────────────────────────────────────────────
   // Wait 1.5 seconds to let any companion images/texts arrive and write to DB
@@ -311,7 +319,7 @@ async function handleWhatsAppMessage(
   let lockAcquired = false;
 
   for (let attempt = 0; attempt < MAX_LOCK_RETRIES; attempt++) {
-    lockAcquired = await acquireSessionLock(supabase, result.sessionId, 30);
+    lockAcquired = await acquireSessionLockFallback(env.DB, supabase, result.sessionId, 30);
     if (lockAcquired) break;
 
     console.log(`[WhatsApp Webhook] ⏳ Session ${result.sessionId} is locked. Retry ${attempt + 1}/${MAX_LOCK_RETRIES}...`);
@@ -325,24 +333,16 @@ async function handleWhatsAppMessage(
 
   try {
     // ── Check if bot was paused or already responded to ───────────────────
-    const [sessionRes, latestMsgRes] = await Promise.all([
-      supabase.from('chat_sessions').select('bot_paused').eq('id', result.sessionId).single(),
-      supabase
-        .from('chat_messages')
-        .select('role')
-        .eq('session_id', result.sessionId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-    ]);
+    const sessionRes = await getChatSessionFallback(env.DB, supabase, result.sessionId);
+    const latestMsgRole = await getLatestMessageRoleFallback(env.DB, supabase, result.sessionId);
 
-    if (sessionRes.data?.bot_paused) {
+    if (sessionRes?.bot_paused) {
       console.log(`[WhatsApp Webhook] ⏸️ Bot is paused for session ${result.sessionId}. Skipping AI response.`);
       return;
     }
 
-    if (latestMsgRes.data && latestMsgRes.data.role !== 'user') {
-      console.log(`[WhatsApp Webhook] ⏭️ Session ${result.sessionId} was already responded to (latest role: ${latestMsgRes.data.role}). Skipping.`);
+    if (latestMsgRole && latestMsgRole !== 'user') {
+      console.log(`[WhatsApp Webhook] ⏭️ Session ${result.sessionId} was already responded to (latest role: ${latestMsgRole}). Skipping.`);
       return;
     }
 
@@ -356,13 +356,15 @@ async function handleWhatsAppMessage(
 
       await sendWhatsAppReply(phoneNumberId, pageConnection.access_token, senderPhoneNumber, cannedResponse);
 
-      await supabase.from('chat_messages').insert({
-        session_id: result.sessionId,
-        user_id: pageConnection.user_id,
-        role: 'assistant',
-        content: cannedResponse,
-        metadata: { is_attachment_response: true },
-      });
+      await storeAssistantMessageFallback(
+        env.DB,
+        supabase,
+        result.sessionId,
+        pageConnection.user_id,
+        cannedResponse,
+        null,
+        { is_attachment_response: true }
+      );
       return;
     }
     // Handle Image attachment URLs if it's an image
@@ -374,18 +376,15 @@ async function handleWhatsAppMessage(
         if (mediaRes.ok) {
           const mediaData: any = await mediaRes.json();
           if (mediaData.url) {
-            await supabase
-              .from('chat_messages')
-              .update({ 
-                metadata: { 
-                  attachment_types: ['image'], 
-                  attachment_urls: [mediaData.url] 
-                } 
-              })
-              .eq('session_id', result.sessionId)
-              .eq('content', contentToStore)
-              .order('created_at', { ascending: false })
-              .limit(1);
+            await updateMessageMetadataFallback(
+              env.DB,
+              supabase,
+              messageId,
+              { 
+                attachment_types: ['image'], 
+                attachment_urls: [mediaData.url] 
+              }
+            );
           }
         }
       } catch (e) {
@@ -413,21 +412,28 @@ async function handleWhatsAppMessage(
 
         await sendWhatsAppReply(phoneNumberId, pageConnection.access_token, senderPhoneNumber, randomResponse);
 
-        await supabase.from('chat_messages').insert({
-          session_id: result.sessionId,
-          user_id: pageConnection.user_id,
-          role: 'assistant',
-          content: randomResponse,
-          metadata: { is_trigger_response: true }
-        });
+        await storeAssistantMessageFallback(
+          env.DB,
+          supabase,
+          result.sessionId,
+          pageConnection.user_id,
+          randomResponse,
+          null,
+          { is_trigger_response: true }
+        );
 
-        const { data: sessionData } = await supabase.from('chat_sessions').select('metadata').eq('id', result.sessionId).single();
-        const existingMetadata = sessionData?.metadata || {};
-
-        await supabase.from('chat_sessions').update({
-          bot_paused: true,
-          metadata: { ...existingMetadata, has_trigger: true }
-        }).eq('id', result.sessionId);
+        let existingMetadata: any = {};
+        try {
+          const { data } = await supabase.from('chat_sessions').select('metadata').eq('id', result.sessionId).single();
+          existingMetadata = data?.metadata || {};
+          await supabase.from('chat_sessions').update({
+            bot_paused: true,
+            metadata: { ...existingMetadata, has_trigger: true }
+          }).eq('id', result.sessionId);
+        } catch (err: any) {
+          console.warn(`[Failover] Failed to update WA session trigger metadata: ${err.message}`);
+        }
+        await env.DB.prepare(`UPDATE chat_sessions SET bot_paused = 1 WHERE id = ?`).bind(result.sessionId).run();
 
         return; // Stop AI generation
       }
@@ -439,7 +445,8 @@ async function handleWhatsAppMessage(
       result.sessionId,
       pageConnection,
       contentToStore,
-      senderPhoneNumber
+      senderPhoneNumber,
+      env.DB
     );
 
     console.log(
@@ -468,13 +475,17 @@ async function handleWhatsAppMessage(
     );
 
     // ── Phase 3: Sliding Window Summarization ──────────────────────
-    await triggerSlidingWindowSummarization(
-      supabase,
-      result.sessionId,
-      pageConnection,
-      senderPhoneNumber
-    );
+    try {
+      await triggerSlidingWindowSummarization(
+        supabase,
+        result.sessionId,
+        pageConnection,
+        senderPhoneNumber
+      );
+    } catch (err: any) {
+      console.warn(`[Failover] WhatsApp summarization failed or skipped during outage: ${err.message}`);
+    }
   } finally {
-    await releaseSessionLock(supabase, result.sessionId);
+    await releaseSessionLockFallback(env.DB, supabase, result.sessionId);
   }
 }

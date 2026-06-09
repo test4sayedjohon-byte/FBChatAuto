@@ -8,7 +8,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AIProviderConfig } from '../ai/types';
-import { callEmbedding } from '../ai/client';
+import { callEmbedding, callEmbeddingWithFailover } from '../ai/client';
 import { chunkText, type ChunkOptions } from './chunker';
 
 /**
@@ -23,7 +23,7 @@ import { chunkText, type ChunkOptions } from './chunker';
  */
 export async function processDocument(
   supabase: SupabaseClient,
-  provider: AIProviderConfig,
+  provider: AIProviderConfig | AIProviderConfig[],
   userId: string,
   documentId: string,
   text: string,
@@ -47,7 +47,8 @@ export async function processDocument(
     const batch = chunks.slice(i, i + BATCH_SIZE);
     const texts = batch.map((c) => c.content);
 
-    const embeddings = await callEmbedding(provider, texts);
+    const chain = Array.isArray(provider) ? provider : [provider];
+    const embeddings = await callEmbeddingWithFailover(chain, texts);
     allEmbeddings.push(...embeddings);
 
     console.log(`[RAG] Embedded batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(chunks.length / BATCH_SIZE)}`);
@@ -107,7 +108,7 @@ export async function processDocument(
  */
 export async function searchDocuments(
   supabase: SupabaseClient,
-  provider: AIProviderConfig,
+  provider: AIProviderConfig | AIProviderConfig[],
   userId: string,
   query: string,
   pageId: string | null = null,
@@ -117,7 +118,8 @@ export async function searchDocuments(
   console.log(`[RAG] Searching documents for: "${query.substring(0, 80)}..."`);
 
   // 1. Generate embedding for the query
-  const [queryEmbedding] = await callEmbedding(provider, query);
+  const chain = Array.isArray(provider) ? provider : [provider];
+  const [queryEmbedding] = await callEmbeddingWithFailover(chain, query);
 
   // 2. Call the Supabase match_documents function
   const { data, error } = await supabase.rpc('match_documents', {

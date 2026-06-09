@@ -185,7 +185,7 @@ export default function KnowledgePage() {
         if (error) throw error;
       }
 
-      toast.success(editingField ? 'Quick Answer updated successfully!' : 'Quick Answer added successfully!');
+      toast.success(editingField ? `Quick Answer "${fieldName}" updated successfully!` : `Quick Answer "${fieldName}" added successfully!`);
       setShowModal(false);
       loadAll();
     } catch (err: any) {
@@ -247,11 +247,13 @@ export default function KnowledgePage() {
 
   async function deleteField(ids: string[]) {
     if (!confirm('Delete this quick answer?')) return;
+    const firstField = fields.find(f => ids.includes(f.id));
+    const fieldNameForToast = firstField?.field_name || '';
     const { error } = await supabase.from('knowledge_fields').delete().in('id', ids);
     if (error) {
       toast.error('Error: ' + error.message);
     } else {
-      toast.success('Quick Answer deleted successfully!');
+      toast.success(`Quick Answer "${fieldNameForToast}" deleted successfully!`);
       loadAll();
     }
   }
@@ -266,6 +268,7 @@ export default function KnowledgePage() {
     if (error) {
       toast.error('Error: ' + error.message);
     } else {
+      toast.success(`Quick Answer "${field.field_name}" is now ${nextActive ? 'active' : 'inactive'}.`);
       loadAll();
     }
   }

@@ -110,13 +110,13 @@ api.post('/documents/process', async (c) => {
       throw new Error('Document not found, empty, or unauthorized');
     }
 
-    // 2. Get provider
-    const { getActiveEmbeddingProvider } = await import('../ai/provider');
-    const provider = await getActiveEmbeddingProvider(supabase, userId);
-    if (!provider) throw new Error('No embedding provider active for this tenant');
+    // 2. Get provider chain
+    const { getEmbeddingProviderChain } = await import('../ai/provider');
+    const providerChain = await getEmbeddingProviderChain(supabase, userId);
+    if (providerChain.length === 0) throw new Error('No embedding provider active for this tenant');
 
     // 3. Process the document
-    const result = await processDocument(supabase, provider, userId, documentId, doc.original_content);
+    const result = await processDocument(supabase, providerChain, userId, documentId, doc.original_content);
     
     return c.json({ success: true, ...result });
   } catch (error: any) {
@@ -319,10 +319,10 @@ api.post('/agent/revert', async (c) => {
                 .eq('id', entity_id);
                 
               // Re-process embedding
-              const { getActiveEmbeddingProvider } = await import('../ai/provider');
-              const embedProvider = await getActiveEmbeddingProvider(supabase, user.id);
-              if (embedProvider) {
-                await processDocument(supabase, embedProvider, user.id, entity_id, previous_value);
+              const { getEmbeddingProviderChain } = await import('../ai/provider');
+              const embedChain = await getEmbeddingProviderChain(supabase, user.id);
+              if (embedChain.length > 0) {
+                await processDocument(supabase, embedChain, user.id, entity_id, previous_value);
               }
             } else {
               // Re-insert it
@@ -348,10 +348,10 @@ api.post('/agent/revert', async (c) => {
                       source_type: 'text'
                     });
                     
-                  const { getActiveEmbeddingProvider } = await import('../ai/provider');
-                  const embedProvider = await getActiveEmbeddingProvider(supabase, user.id);
-                  if (embedProvider) {
-                    await processDocument(supabase, embedProvider, user.id, entity_id, previous_value);
+                  const { getEmbeddingProviderChain } = await import('../ai/provider');
+                  const embedChain = await getEmbeddingProviderChain(supabase, user.id);
+                  if (embedChain.length > 0) {
+                    await processDocument(supabase, embedChain, user.id, entity_id, previous_value);
                   }
                 }
               } else {
@@ -374,10 +374,10 @@ api.post('/agent/revert', async (c) => {
                       source_type: 'text'
                     });
                     
-                  const { getActiveEmbeddingProvider } = await import('../ai/provider');
-                  const embedProvider = await getActiveEmbeddingProvider(supabase, user.id);
-                  if (embedProvider) {
-                    await processDocument(supabase, embedProvider, user.id, entity_id, previous_value);
+                  const { getEmbeddingProviderChain } = await import('../ai/provider');
+                  const embedChain = await getEmbeddingProviderChain(supabase, user.id);
+                  if (embedChain.length > 0) {
+                    await processDocument(supabase, embedChain, user.id, entity_id, previous_value);
                   }
                 }
               }

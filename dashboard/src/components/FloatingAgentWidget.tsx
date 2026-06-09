@@ -188,6 +188,7 @@ export default function FloatingAgentWidget() {
 
   const widgetRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
 
   // --- Handle Window Sizing & Drag Boundaries ---
@@ -412,6 +413,25 @@ export default function FloatingAgentWidget() {
     window.addEventListener('agent-data-updated', handleReload);
     return () => window.removeEventListener('agent-data-updated', handleReload);
   }, [selectedContext, selectedChannel, user]);
+
+  // Auto-resize chat textarea based on input text
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = '34px';
+      const scrollHeight = textareaRef.current.scrollHeight;
+      const maxHeight = 110; // ~5 lines max height
+      if (scrollHeight > 34) {
+        textareaRef.current.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
+      }
+    }
+  }, [input]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
 
   // --- Chat Handlers ---
   const handleSend = async (e?: React.FormEvent) => {
@@ -757,7 +777,7 @@ export default function FloatingAgentWidget() {
         })
         .eq('id', id);
       if (error) throw error;
-      toast.success('Quick Answer updated.');
+      toast.success(`Quick Answer "${qaFieldName}" updated.`);
       setQaEditingId(null);
       loadQuickAnswers();
       window.dispatchEvent(new Event('agent-data-updated'));
@@ -768,13 +788,15 @@ export default function FloatingAgentWidget() {
 
   const handleDeleteQA = async (id: string) => {
     if (!confirm('Are you sure you want to delete this Quick Answer?')) return;
+    const qa = quickAnswers.find(q => q.id === id);
+    const qaNameForToast = qa?.field_name || '';
     try {
       const { error } = await supabase
         .from('knowledge_fields')
         .delete()
         .eq('id', id);
       if (error) throw error;
-      toast.success('Quick Answer deleted.');
+      toast.success(`Quick Answer "${qaNameForToast}" deleted.`);
       loadQuickAnswers();
       window.dispatchEvent(new Event('agent-data-updated'));
     } catch (err: any) {
@@ -799,7 +821,7 @@ export default function FloatingAgentWidget() {
           is_active: true
         });
       if (error) throw error;
-      toast.success('Quick Answer added.');
+      toast.success(`Quick Answer "${qaFieldName}" added.`);
       setQaIsAdding(false);
       setQaFieldName('');
       setQaFieldValue('');
@@ -833,7 +855,7 @@ export default function FloatingAgentWidget() {
         console.error('Embedding error:', embErr);
       }
 
-      toast.success('Document updated & re-embedded.');
+      toast.success(`Document "${activeDocTitle}" updated & re-embedded.`);
       setActiveDoc(null);
       loadDocsData();
       window.dispatchEvent(new Event('agent-data-updated'));
@@ -875,7 +897,7 @@ export default function FloatingAgentWidget() {
         }
       }
 
-      toast.success('Document created & embedded.');
+      toast.success(`Document "${newDocTitle}" created & embedded.`);
       setIsCreatingDoc(false);
       setNewDocTitle('');
       setNewDocContent('');
@@ -1354,8 +1376,8 @@ export default function FloatingAgentWidget() {
                         {m.content}
                       </div>
 
-                      {/* Undo / Revert action */}
-                      <div className="message-actions">
+                      {/* Undo / Revert action — only for user messages */}
+                      {m.role === 'user' && <div className="message-actions">
                         <button
                           onClick={() => handleRevertToMessage(m, i)}
                           disabled={isReverting}
@@ -1380,7 +1402,7 @@ export default function FloatingAgentWidget() {
                           )}
                           <span style={{ fontSize: '10.5px' }}>Undo</span>
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   ))
                 )}
@@ -1430,21 +1452,37 @@ export default function FloatingAgentWidget() {
                     </div>
                   );
                 })()}
-                <form onSubmit={handleSend} style={{ display: 'flex', gap: '6px' }}>
-                  <input
-                    type="text"
+                <form onSubmit={handleSend} style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+                  <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
                     placeholder={`Ask me in ${getContextLabel(selectedContext)}...`}
-                    className="input-field"
-                    style={{ flex: 1, padding: '6px 12px', fontSize: '12.5px', borderRadius: '8px', height: '34px' }}
+                    className="form-textarea"
+                    style={{ 
+                      flex: 1, 
+                      padding: '7px 12px', 
+                      fontSize: '12.5px', 
+                      borderRadius: '8px', 
+                      height: '34px', 
+                      minHeight: '34px', 
+                      maxHeight: '110px', 
+                      resize: 'none', 
+                      overflowY: 'auto', 
+                      lineHeight: '1.4',
+                      background: 'var(--surface-primary)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-primary)',
+                      outline: 'none'
+                    }}
                     disabled={isLoading}
                   />
                   <button 
                     type="submit" 
                     className="btn-primary" 
                     disabled={!input.trim() || isLoading}
-                    style={{ width: '34px', height: '34px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
+                    style={{ width: '34px', height: '34px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', border: 'none', cursor: 'pointer', flexShrink: 0 }}
                   >
                     <Send size={13} />
                   </button>

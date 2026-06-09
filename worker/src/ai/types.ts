@@ -19,6 +19,11 @@ export interface AIProviderConfig {
   temperature: number;
   contextWindow: number;      // Number of recent messages to include
   extraHeaders: Record<string, string>;
+  fallbackChatOrder?: number | null;
+  fallbackAgentOrder?: number | null;
+  fallbackSummarizeOrder?: number | null;
+  fallbackVisionOrder?: number | null;
+  fallbackEmbeddingOrder?: number | null;
 }
 
 /**

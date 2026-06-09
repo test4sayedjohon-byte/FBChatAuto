@@ -9,10 +9,16 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import type { AppEnv } from './types';
 import { requireAuth } from './middleware/auth';
-import { createSupabaseAdmin, getPageConnection, storeIncomingMessage } from './supabase';
+import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
 import apiRoutes from './routes/api';
 import webhookRoutes from './routes/webhook';
+import {
+  getPageConnectionFallback,
+  storeIncomingMessageFallback,
+  updateMessageMetadataFallback,
+  syncOfflineMessages
+} from './db';
 
 // ─── App Setup ──────────────────────────────────────────────────────────────
 
@@ -93,7 +99,7 @@ app.get('/', (c) => {
     
     if (pageId) {
       // Fetch the real page connection to use its specific bot name, system prompt, and knowledge base
-      pageConnection = await getPageConnection(supabase, pageId);
+      pageConnection = await getPageConnectionFallback(c.env.DB, supabase, pageId);
       if (!pageConnection) {
         return c.json({ error: 'Page connection not found' }, 404);
       }
@@ -126,7 +132,8 @@ app.get('/', (c) => {
     const senderId = `sandbox_${activeSessionId}`;
 
     // Store the message to ensure it appears in the session history
-    const result = await storeIncomingMessage(
+    const result = await storeIncomingMessageFallback(
+      c.env.DB,
       supabase,
       userId,
       pageConnection.page_id,
@@ -139,15 +146,15 @@ app.get('/', (c) => {
     const actualSessionId = result ? result.sessionId : activeSessionId;
 
     if (result && attachmentUrls && attachmentUrls.length > 0) {
-      await supabase
-        .from('chat_messages')
-        .update({
-          metadata: {
-            attachment_types: attachmentUrls.map(() => 'image'),
-            attachment_urls: attachmentUrls
-          }
-        })
-        .eq('fb_message_id', fbMessageId);
+      await updateMessageMetadataFallback(
+        c.env.DB,
+        supabase,
+        fbMessageId,
+        {
+          attachment_types: attachmentUrls.map(() => 'image'),
+          attachment_urls: attachmentUrls
+        }
+      );
     }
 
     const chatResult = await handleChatMessage(
@@ -155,17 +162,24 @@ app.get('/', (c) => {
       actualSessionId,
       pageConnection,
       contentToStore,
-      senderId
+      senderId,
+      c.env.DB
     );
     
     // Trigger background summarization for sandbox testing as well
     c.executionCtx.waitUntil(
-      triggerSlidingWindowSummarization(
-        supabase,
-        actualSessionId,
-        pageConnection,
-        'sandbox_user'
-      )
+      (async () => {
+        try {
+          await triggerSlidingWindowSummarization(
+            supabase,
+            actualSessionId,
+            pageConnection,
+            'sandbox_user'
+          );
+        } catch (err: any) {
+          console.warn(`[Failover] Summarization skipped in test-chat: ${err.message}`);
+        }
+      })()
     );
     
     return c.json({
@@ -192,38 +206,52 @@ export default {
   fetch: app.fetch,
   async scheduled(event: any, env: AppEnv["Bindings"], ctx: any) {
     const supabase = createSupabaseAdmin(env);
+
+    // 1. Sync any unsynced offline messages from D1 to Supabase
+    try {
+      if (env.DB) {
+        await syncOfflineMessages(env.DB, supabase);
+      }
+    } catch (syncErr: any) {
+      console.error('[Cron] Offline message sync failed:', syncErr.message);
+    }
     
-    // We want sessions where last activity was > 2 hours ago, 
-    // but < 4 hours ago (so we don't sweep the whole database every time)
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-    
-    // Find candidate sessions
-    const { data: sessions } = await supabase
-      .from('chat_sessions')
-      .select('id, page_id, sender_id, user_id, last_message_at')
-      .lt('last_message_at', twoHoursAgo)
-      .gt('last_message_at', fourHoursAgo);
+    // 2. Sweeper: Summarize leftover messages (wrapped to handle outages safely)
+    try {
+      // We want sessions where last activity was > 2 hours ago, 
+      // but < 4 hours ago (so we don't sweep the whole database every time)
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+      
+      // Find candidate sessions
+      const { data: sessions } = await supabase
+        .from('chat_sessions')
+        .select('id, page_id, sender_id, user_id, last_message_at')
+        .lt('last_message_at', twoHoursAgo)
+        .gt('last_message_at', fourHoursAgo);
 
-    if (!sessions || sessions.length === 0) return;
+      if (!sessions || sessions.length === 0) return;
 
-    for (const session of sessions) {
-      // get pageConnection
-      const pageConnection = await getPageConnection(supabase, session.page_id);
-      if (!pageConnection || !pageConnection.enable_customer_profiling) continue;
+      for (const session of sessions) {
+        // get pageConnection
+        const pageConnection = await getPageConnectionFallback(env.DB, supabase, session.page_id);
+        if (!pageConnection || !pageConnection.enable_customer_profiling) continue;
 
-      // check message count
-      const { count } = await supabase
-        .from('chat_messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('session_id', session.id);
+        // check message count
+        const { count } = await supabase
+          .from('chat_messages')
+          .select('*', { count: 'exact', head: true })
+          .eq('session_id', session.id);
 
-      // If perfectly summarized or 0, skip
-      if (!count || count % 10 === 0) continue; 
+        // If perfectly summarized or 0, skip
+        if (!count || count % 10 === 0) continue; 
 
-      console.log(`[Cron] Summarizing leftover messages for session ${session.id}`);
-      // Summarize leftover
-      await triggerSlidingWindowSummarization(supabase, session.id, pageConnection, session.sender_id, true);
+        console.log(`[Cron] Summarizing leftover messages for session ${session.id}`);
+        // Summarize leftover
+        await triggerSlidingWindowSummarization(supabase, session.id, pageConnection, session.sender_id, true);
+      }
+    } catch (cronErr: any) {
+      console.warn(`[Cron] Summarization sweep skipped due to connectivity issue: ${cronErr.message}`);
     }
   }
 };

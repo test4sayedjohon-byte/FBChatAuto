@@ -1,10 +1,22 @@
 // ─── Async Message Processing ──────────────────────────────────────────────
 
-import type { Env, FacebookWebhookEvent, FacebookMessagingEvent, WhatsAppWebhookEvent } from './types';
-import { createSupabaseAdmin, getPageConnection, storeIncomingMessage, acquireSessionLock, releaseSessionLock } from './supabase';
+import type { Env, FacebookWebhookEvent, FacebookMessagingEvent, WhatsAppWebhookEvent, PageConnection } from './types';
+import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
 import { sendFacebookReply, sendFacebookSenderAction, getReplyDelay } from './facebook';
 import { processWhatsAppWebhookEntries } from './whatsapp';
+import {
+  getPageConnectionFallback,
+  getUserRecord,
+  getMonthlyMessageCountFallback,
+  storeIncomingMessageFallback,
+  updateMessageMetadataFallback,
+  acquireSessionLockFallback,
+  releaseSessionLockFallback,
+  getChatSessionFallback,
+  getLatestMessageRoleFallback,
+  storeAssistantMessageFallback
+} from './db';
 
 // ─── Helper: Download Facebook Images to Base64 ─────────────────────────────
 // Facebook Messenger webhook image URLs (lookaside.fbsbx.com) are self-authenticating
@@ -142,18 +154,14 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
       continue;
     }
 
-    const pageConnection = await getPageConnection(supabase, pageId);
+    const pageConnection = await getPageConnectionFallback(env.DB, supabase, pageId);
 
     if (!pageConnection) {
       console.warn(`[Webhook] ⚠️ No active page connection found for page ${pageId} — ignoring`);
       continue;
     }
     
-    const { data: userRecord } = await supabase
-      .from('users')
-      .select('settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at')
-      .eq('id', pageConnection.user_id)
-      .single();
+    const userRecord = await getUserRecord(env.DB, supabase, pageConnection.user_id);
       
     if (userRecord?.is_suspended) {
       console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} is suspended. Ignoring messages.`);
@@ -179,20 +187,22 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
          continue;
       }
       
-      const { data: pHistory } = await supabase
-        .from('purchases')
-        .select('created_at, status, payment_method')
-        .eq('user_id', pageConnection.user_id);
+      let pHistory: any[] = [];
+      try {
+        const { data } = await supabase
+          .from('purchases')
+          .select('created_at, status, payment_method')
+          .eq('user_id', pageConnection.user_id);
+        pHistory = data || [];
+      } catch (err: any) {
+        console.warn(`[Failover] Purchases fetch failed for user ${pageConnection.user_id}: ${err.message}. Using default billing anchor.`);
+      }
 
-      const { startDate } = calculateBillingCycle(userRecord.created_at, pHistory || []);
+      const { startDate } = calculateBillingCycle(userRecord.created_at, pHistory);
 
-      const { count: messagesCount, error: countError } = await supabase
-        .from('chat_messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', pageConnection.user_id)
-        .gte('created_at', startDate.toISOString());
+      const messagesCount = await getMonthlyMessageCountFallback(env.DB, supabase, pageConnection.user_id, startDate.toISOString());
 
-      if (!countError && messagesCount !== null && messagesCount >= allowedLimit) {
+      if (messagesCount >= allowedLimit) {
         console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} exceeded monthly message limit (${messagesCount}/${allowedLimit}).`);
         continue;
       }
@@ -211,7 +221,7 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
 async function handleMessagingEvent(
   supabase: ReturnType<typeof createSupabaseAdmin>,
   env: Env,
-  pageConnection: NonNullable<Awaited<ReturnType<typeof getPageConnection>>>,
+  pageConnection: PageConnection,
   event: FacebookMessagingEvent
 ): Promise<void> {
   const senderId = event.sender.id;
@@ -277,7 +287,8 @@ async function handleMessagingEvent(
 
   console.log(`[Webhook] 💬 Message from ${senderId}: "${contentToStore.substring(0, 100)}..." (Images: ${imageUrls.length}, Links: ${sharedLinks.length})`);
 
-  const result = await storeIncomingMessage(
+  const result = await storeIncomingMessageFallback(
+    env.DB,
     supabase,
     pageConnection.user_id,
     pageId,
@@ -296,15 +307,15 @@ async function handleMessagingEvent(
   if (imageUrls.length > 0 && fbMessageId) {
     console.log(`[Webhook] 📥 Downloading ${imageUrls.length} Facebook image(s) for inline vision delivery...`);
     const accessibleUrls = await downloadFacebookImages(imageUrls);
-    await supabase
-      .from('chat_messages')
-      .update({
-        metadata: {
-          attachment_types: accessibleUrls.map(() => 'image'),
-          attachment_urls: accessibleUrls,
-        }
-      })
-      .eq('fb_message_id', fbMessageId);
+    await updateMessageMetadataFallback(
+      env.DB,
+      supabase,
+      fbMessageId,
+      {
+        attachment_types: accessibleUrls.map(() => 'image'),
+        attachment_urls: accessibleUrls,
+      }
+    );
     console.log(`[Webhook] ✅ Image metadata saved for message ${fbMessageId}`);
   }
 
@@ -318,7 +329,7 @@ async function handleMessagingEvent(
   let lockAcquired = false;
 
   for (let attempt = 0; attempt < MAX_LOCK_RETRIES; attempt++) {
-    lockAcquired = await acquireSessionLock(supabase, result.sessionId, 30);
+    lockAcquired = await acquireSessionLockFallback(env.DB, supabase, result.sessionId, 30);
     if (lockAcquired) break;
     console.log(`[Webhook] ⏳ Session ${result.sessionId} is locked. Retry ${attempt + 1}/${MAX_LOCK_RETRIES}...`);
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -334,24 +345,16 @@ async function handleMessagingEvent(
 
   try {
     // ── Check if bot was paused or already responded to ───────────────────
-    const [sessionRes, latestMsgRes] = await Promise.all([
-      supabase.from('chat_sessions').select('bot_paused').eq('id', result.sessionId).single(),
-      supabase
-        .from('chat_messages')
-        .select('role')
-        .eq('session_id', result.sessionId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-    ]);
+    const sessionRes = await getChatSessionFallback(env.DB, supabase, result.sessionId);
+    const latestMsgRole = await getLatestMessageRoleFallback(env.DB, supabase, result.sessionId);
 
-    if (sessionRes.data?.bot_paused) {
+    if (sessionRes?.bot_paused) {
       console.log(`[Webhook] ⏸️ Bot is paused for session ${result.sessionId}. Skipping AI response.`);
       return;
     }
 
-    if (latestMsgRes.data && latestMsgRes.data.role !== 'user') {
-      console.log(`[Webhook] ⏭️ Session ${result.sessionId} was already responded to (latest role: ${latestMsgRes.data.role}). Skipping.`);
+    if (latestMsgRole && latestMsgRole !== 'user') {
+      console.log(`[Webhook] ⏭️ Session ${result.sessionId} was already responded to (latest role: ${latestMsgRole}). Skipping.`);
       return;
     }
 
@@ -359,13 +362,15 @@ async function handleMessagingEvent(
       const cannedResponse = "Thanks for sending that! I can currently only understand text and images. " +
         "If you have a question, please type it out and I'll be happy to help. 😊";
       await sendFacebookReply(pageConnection.access_token, senderId, cannedResponse);
-      await supabase.from('chat_messages').insert({
-        session_id: result.sessionId,
-        user_id: pageConnection.user_id,
-        role: 'assistant',
-        content: cannedResponse,
-        metadata: { is_attachment_response: true },
-      });
+      await storeAssistantMessageFallback(
+        env.DB,
+        supabase,
+        result.sessionId,
+        pageConnection.user_id,
+        cannedResponse,
+        null,
+        { is_attachment_response: true }
+      );
       return;
     }
     // ── Trigger Word Detection ──────────────────────────────────────────────
@@ -386,19 +391,28 @@ async function handleMessagingEvent(
         const randomResponse = responses[Math.floor(Math.random() * responses.length)];
 
         await sendFacebookReply(pageConnection.access_token, senderId, randomResponse);
-        await supabase.from('chat_messages').insert({
-          session_id: result.sessionId,
-          user_id: pageConnection.user_id,
-          role: 'assistant',
-          content: randomResponse,
-          metadata: { is_trigger_response: true }
-        });
-        const { data: sessionData } = await supabase.from('chat_sessions').select('metadata').eq('id', result.sessionId).single();
-        const existingMetadata = sessionData?.metadata || {};
-        await supabase.from('chat_sessions').update({ 
-          bot_paused: true,
-          metadata: { ...existingMetadata, has_trigger: true }
-        }).eq('id', result.sessionId);
+        await storeAssistantMessageFallback(
+          env.DB,
+          supabase,
+          result.sessionId,
+          pageConnection.user_id,
+          randomResponse,
+          null,
+          { is_trigger_response: true }
+        );
+
+        let existingMetadata: any = {};
+        try {
+          const { data } = await supabase.from('chat_sessions').select('metadata').eq('id', result.sessionId).single();
+          existingMetadata = data?.metadata || {};
+          await supabase.from('chat_sessions').update({ 
+            bot_paused: true,
+            metadata: { ...existingMetadata, has_trigger: true }
+          }).eq('id', result.sessionId);
+        } catch (err: any) {
+          console.warn(`[Failover] Failed to update session trigger meta on Supabase: ${err.message}`);
+        }
+        await env.DB.prepare(`UPDATE chat_sessions SET bot_paused = 1 WHERE id = ?`).bind(result.sessionId).run();
         return;
       }
     }
@@ -432,7 +446,8 @@ async function handleMessagingEvent(
       result.sessionId,
       pageConnection,
       contentToStore,
-      senderId
+      senderId,
+      env.DB
     );
 
     console.log(
@@ -457,12 +472,16 @@ async function handleMessagingEvent(
     // Send final reply
     await sendFacebookReply(pageConnection.access_token, senderId, chatResult.reply);
 
-    await triggerSlidingWindowSummarization(supabase, result.sessionId, pageConnection, senderId);
+    try {
+      await triggerSlidingWindowSummarization(supabase, result.sessionId, pageConnection, senderId);
+    } catch (err: any) {
+      console.warn(`[Failover] Summarization failed or skipped during outage: ${err.message}`);
+    }
   } finally {
     isProcessing = false;
     await typingPromise;
     // Ensure typing indicator is turned off in case of errors
     await sendFacebookSenderAction(pageConnection.access_token, senderId, 'typing_off');
-    await releaseSessionLock(supabase, result.sessionId);
+    await releaseSessionLockFallback(env.DB, supabase, result.sessionId);
   }
 }

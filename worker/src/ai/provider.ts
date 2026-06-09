@@ -1,12 +1,14 @@
 // ============================================================================
 // AI Provider Loader
 // ============================================================================
-// Loads the active AI provider configuration from Supabase for a given tenant.
-// Converts the DB row into a normalized AIProviderConfig for the AI client.
+// Loads the active AI provider configurations from Supabase for a given tenant.
+// Converts the DB rows into normalized AIProviderConfig objects and builds
+// failover chains for each AI role.
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AIProviderConfig } from './types';
+import { getAIProvidersFallback, getUserRecord } from '../db';
 
 /**
  * Database row shape for the ai_providers table.
@@ -27,6 +29,11 @@ interface AIProviderRow {
   is_active_vision?: boolean;
   is_global?: boolean;
   fallback_order?: number;
+  fallback_chat_order?: number | null;
+  fallback_agent_order?: number | null;
+  fallback_summarize_order?: number | null;
+  fallback_vision_order?: number | null;
+  fallback_embedding_order?: number | null;
   extra_headers: Record<string, string>;
   max_tokens: number | null;
   temperature: number | null;
@@ -34,292 +41,263 @@ interface AIProviderRow {
 }
 
 /**
+ * Unified provider chain resolver for any given role.
+ * Resolves priority: user-assigned primary -> user active -> global active -> ordered fallbacks.
+ */
+async function getProviderChainForRole(
+  supabase: SupabaseClient,
+  userId: string,
+  role: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision',
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  const activeField = role === 'summarization' ? 'is_active_summarization' : `is_active_${role}`;
+  const configOrderField = `fallback${
+    role === 'summarization'
+      ? 'Summarize'
+      : role.charAt(0).toUpperCase() + role.slice(1)
+  }Order`;
+
+  // Fetch all providers for the user (including global ones)
+  let rows: any[];
+  if (db) {
+    rows = await getAIProvidersFallback(db, supabase, userId);
+  } else {
+    const { data, error } = await supabase
+      .from('ai_providers')
+      .select('*')
+      .or(`user_id.eq.${userId},is_global.eq.true`);
+
+    if (error || !data) {
+      console.error(`[AI] Failed to load provider chain for ${role}:`, error?.message);
+      return [];
+    }
+    rows = data;
+  }
+
+  // Convert to config format
+  const configs = (rows as AIProviderRow[]).map(rowToConfig);
+
+  // 1. Identify the Primary provider
+  let primaryId: string | null = null;
+  
+  // Resolve assigned provider from users table
+  const userAssignedFields: Record<string, string> = {
+    chat: 'assigned_chat_provider_id',
+    agent: 'assigned_agent_provider_id',
+    summarization: 'assigned_summarization_provider_id',
+    embedding: 'assigned_embedding_provider_id',
+    vision: 'assigned_vision_provider_id'
+  };
+
+  const assignedCol = userAssignedFields[role];
+  if (assignedCol) {
+    let userRecord = null;
+    if (db) {
+      userRecord = await getUserRecord(db, supabase, userId);
+    } else {
+      const { data } = await supabase
+        .from('users')
+        .select(assignedCol)
+        .eq('id', userId)
+        .maybeSingle();
+      userRecord = data;
+    }
+    
+    if (userRecord && (userRecord as any)[assignedCol]) {
+      primaryId = (userRecord as any)[assignedCol];
+    }
+  }
+
+  let primary: AIProviderConfig | null = null;
+  if (primaryId) {
+    primary = configs.find(c => c.id === primaryId) || null;
+  }
+
+  // If no admin-assigned provider, look for tenant active provider
+  if (!primary) {
+    primary = configs.find(c => c.userId === userId && (c as any)[activeField] === true) || null;
+  }
+
+  // If still no tenant active provider, look for global active provider
+  if (!primary) {
+    primary = configs.find(c => c.userId === 'global' && (c as any)[activeField] === true) || null;
+  }
+
+  // 2. Identify Fallback providers
+  // Filter for providers that have fallbackOrder > 0 for this role and are not primary
+  const fallbacks = configs.filter(c => {
+    const order = (c as any)[configOrderField];
+    return order !== null && order > 0 && c.id !== primary?.id;
+  });
+
+  // Sort fallbacks by fallback order ascending, preferring user-specific over global if order is same
+  fallbacks.sort((a, b) => {
+    const orderA = (a as any)[configOrderField] || 999;
+    const orderB = (b as any)[configOrderField] || 999;
+    if (orderA !== orderB) return orderA - orderB;
+    if (a.userId !== 'global' && b.userId === 'global') return -1;
+    if (a.userId === 'global' && b.userId !== 'global') return 1;
+    return 0;
+  });
+
+  const chain: AIProviderConfig[] = [];
+  if (primary) {
+    chain.push(primary);
+  }
+  chain.push(...fallbacks);
+
+  return chain;
+}
+
+/**
+ * Load the active chat completion provider chain.
+ */
+/**
+ * Load the active chat completion provider chain.
+ */
+export async function getChatProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  return getProviderChainForRole(supabase, userId, 'chat', db);
+}
+
+/**
  * Load the active chat completion provider for a tenant.
- * Returns null if no active provider is configured.
  */
 export async function getActiveChatProvider(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  db?: D1Database
 ): Promise<AIProviderConfig | null> {
-  // First, check if the tenant has a specific active chat provider assigned directly in their own providers
-  const { data: tenantData } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_active_chat', true)
-    .maybeSingle();
-
-  if (tenantData) {
-    return rowToConfig(tenantData as AIProviderRow);
-  }
-
-  // Second, check if the super admin explicitly assigned a global provider to this user
-  const { data: userRecord, error: uErr } = await supabase
-    .from('users')
-    .select('assigned_chat_provider_id')
-    .eq('id', userId)
-    .maybeSingle();
-
-  console.log(`[AI] userRecord for ${userId}:`, userRecord, 'err:', uErr);
-
-  if (userRecord?.assigned_chat_provider_id) {
-    const { data: assignedProvider, error: pErr } = await supabase
-      .from('ai_providers')
-      .select('*')
-      .eq('id', userRecord.assigned_chat_provider_id)
-      .maybeSingle();
-      
-    console.log(`[AI] assignedProvider ${userRecord.assigned_chat_provider_id}:`, !!assignedProvider, 'err:', pErr);
-      
-    if (assignedProvider) {
-      return rowToConfig(assignedProvider as AIProviderRow);
-    }
-  }
-
-  // Fallback to the default global active chat provider
-  const { data: globalData } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('is_global', true)
-    .eq('is_active_chat', true)
-    .maybeSingle();
-
-  if (globalData) {
-    return rowToConfig(globalData as AIProviderRow);
-  }
-
-  console.error(`[AI] No active chat provider (tenant, assigned, or global) for user ${userId}`);
-  return null;
+  const chain = await getChatProviderChain(supabase, userId, db);
+  return chain[0] || null;
 }
 
 /**
- * Load all available chat completion providers for a tenant, ordered by priority.
- * Uses a single DB RPC that returns providers in priority order:
- *   assigned primary → assigned fallback → tenant active → tenant fallbacks →
- *   tenant others → global active → global fallbacks → global others
+ * Load the agent provider chain.
  */
-export async function getAllChatProviders(
+export async function getAgentProviderChain(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  db?: D1Database
 ): Promise<AIProviderConfig[]> {
-  const { data, error } = await supabase.rpc('get_all_chat_providers', {
-    p_user_id: userId,
-  });
-
-  if (error) {
-    console.error(`[AI] Failed to load chat providers for user ${userId}:`, error.message);
-    return [];
-  }
-
-  if (!data || data.length === 0) {
-    console.error(`[AI] No chat providers found for user ${userId}`);
-    return [];
-  }
-
-  // Deduplicate by ID (RPC handles ordering, but CROSS JOIN may produce duplicates
-  // when a provider matches multiple conditions)
-  const seen = new Set<string>();
-  const providers: AIProviderConfig[] = [];
-
-  for (const row of data) {
-    if (!seen.has(row.id)) {
-      seen.add(row.id);
-      providers.push(rowToConfig(row as AIProviderRow));
-    }
-  }
-
-  return providers;
-}
-
-/**
- * Load the active embedding provider for a tenant.
- * Falls back to the chat provider if no dedicated embedding provider is set.
- */
-export async function getActiveEmbeddingProvider(
-  supabase: SupabaseClient,
-  userId: string
-): Promise<AIProviderConfig | null> {
-  // First try dedicated embedding provider for the tenant
-  const { data: tenantEmbedding } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_active_embedding', true)
-    .maybeSingle();
-
-  if (tenantEmbedding) {
-    return rowToConfig(tenantEmbedding as AIProviderRow);
-  }
-
-  // Second check if super admin assigned an embedding provider
-  const { data: userRecord } = await supabase
-    .from('users')
-    .select('assigned_embedding_provider_id')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (userRecord?.assigned_embedding_provider_id) {
-    const { data: assignedProvider } = await supabase
-      .from('ai_providers')
-      .select('*')
-      .eq('id', userRecord.assigned_embedding_provider_id)
-      .maybeSingle();
-      
-    if (assignedProvider) {
-      return rowToConfig(assignedProvider as AIProviderRow);
-    }
-  }
-
-  // Third, Fallback to active chat provider for the tenant if it has an embedding model
-  const { data: tenantChat } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_active_chat', true)
-    .maybeSingle();
-
-  if (tenantChat && (tenantChat as AIProviderRow).model_embedding) {
-    return rowToConfig(tenantChat as AIProviderRow);
-  }
-
-  // Fourth, Fallback to global dedicated embedding provider
-  const { data: globalEmbedding } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('is_global', true)
-    .eq('is_active_embedding', true)
-    .maybeSingle();
-
-  if (globalEmbedding) {
-    return rowToConfig(globalEmbedding as AIProviderRow);
-  }
-
-  // Fifth, Fallback to global active chat provider if it has an embedding model
-  const { data: globalChat } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('is_global', true)
-    .eq('is_active_chat', true)
-    .maybeSingle();
-
-  if (globalChat && (globalChat as AIProviderRow).model_embedding) {
-    return rowToConfig(globalChat as AIProviderRow);
-  }
-
-  console.error(`[AI] No embedding provider available (tenant, assigned, or global) for user ${userId}`);
-  return null;
+  return getProviderChainForRole(supabase, userId, 'agent', db);
 }
 
 /**
  * Load the active agent provider.
- * Resolution: assigned per-user → global active agent → chat provider fallback.
  */
 export async function getActiveAgentProvider(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  db?: D1Database
 ): Promise<AIProviderConfig | null> {
-  // 1. Check if super admin assigned a specific agent provider to this user
-  const { data: userRecord } = await supabase
-    .from('users')
-    .select('assigned_agent_provider_id')
-    .eq('id', userId)
-    .maybeSingle();
+  const chain = await getAgentProviderChain(supabase, userId, db);
+  return chain[0] || null;
+}
 
-  if (userRecord?.assigned_agent_provider_id) {
-    const { data: assignedProvider } = await supabase
-      .from('ai_providers')
-      .select('*')
-      .eq('id', userRecord.assigned_agent_provider_id)
-      .maybeSingle();
+/**
+ * Load the embedding provider chain.
+ */
+export async function getEmbeddingProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  const chain = await getProviderChainForRole(supabase, userId, 'embedding', db);
+  
+  // Fallback to chat provider chain if no dedicated embedding provider is configured
+  if (chain.length === 0) {
+    const chatChain = await getChatProviderChain(supabase, userId, db);
+    return chatChain.filter(c => c.modelEmbedding && c.modelEmbedding.trim().length > 0);
+  }
+  return chain;
+}
 
-    if (assignedProvider) {
-      return rowToConfig(assignedProvider as AIProviderRow);
-    }
+/**
+ * Load the active embedding provider.
+ */
+export async function getActiveEmbeddingProvider(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig | null> {
+  const chain = await getEmbeddingProviderChain(supabase, userId, db);
+  return chain[0] || null;
+}
+
+/**
+ * Load the summarization provider chain.
+ */
+export async function getSummarizationProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  const chain = await getProviderChainForRole(supabase, userId, 'summarization', db);
+  
+  // Fallback to chat provider chain if no summarization provider is configured
+  if (chain.length === 0) {
+    return getChatProviderChain(supabase, userId, db);
+  }
+  return chain;
+}
+
+/**
+ * Load the vision provider chain.
+ */
+export async function getVisionProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  // Check if vision is allowed
+  let allowVision = false;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    allowVision = userRecord?.allow_vision === 1 || userRecord?.allow_vision === true;
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_vision')
+        .eq('id', userId)
+        .maybeSingle();
+      allowVision = userRecord?.allow_vision || false;
+    } catch (_) {}
   }
 
-  // 2. Check global active agent provider
-  const { data: globalAgent } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('is_global', true)
-    .eq('is_active_agent', true)
-    .maybeSingle();
-
-  if (globalAgent) {
-    return rowToConfig(globalAgent as AIProviderRow);
+  if (!allowVision) {
+    console.warn(`[AI] ⚠️ Vision is disabled for user ${userId}. Returning empty chain.`);
+    return [];
   }
 
-  // 3. Fallback to the active chat provider if no specific agent provider is set
-  return getActiveChatProvider(supabase, userId);
+  return getProviderChainForRole(supabase, userId, 'vision', db);
 }
 
 /**
  * Load the active vision provider for processing images.
- * Resolution: assigned per-user → tenant active vision → global active vision → null.
- *
- * IMPORTANT: This function returns null if no dedicated vision-capable provider is
- * configured. It does NOT fall back to the chat provider, because sending image
- * payloads to text-only models causes errors. The caller is responsible for
- * detecting null and sending a graceful canned reply.
  */
 export async function getActiveVisionProvider(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  db?: D1Database
 ): Promise<AIProviderConfig | null> {
-  // 1. Check if vision is enabled for this user
-  const { data: userRecord } = await supabase
-    .from('users')
-    .select('allow_vision, assigned_vision_provider_id')
-    .eq('id', userId)
-    .maybeSingle();
+  const chain = await getVisionProviderChain(supabase, userId, db);
+  return chain[0] || null;
+}
 
-  if (!userRecord || !userRecord.allow_vision) {
-    console.warn(`[AI] ⚠️ Vision is disabled for user ${userId}. Returning null (canned reply).`);
-    return null;
-  }
-
-  if (userRecord?.assigned_vision_provider_id) {
-    const { data: assignedProvider } = await supabase
-      .from('ai_providers')
-      .select('*')
-      .eq('id', userRecord.assigned_vision_provider_id)
-      .maybeSingle();
-
-    if (assignedProvider) {
-      console.log(`[AI] 👁️ Vision provider resolved via admin assignment: ${(assignedProvider as AIProviderRow).provider_name}`);
-      return rowToConfig(assignedProvider as AIProviderRow);
-    }
-  }
-
-  // 2. Check if the tenant has their own vision-enabled provider
-  const { data: tenantVision } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_active_vision', true)
-    .maybeSingle();
-
-  if (tenantVision) {
-    console.log(`[AI] 👁️ Vision provider resolved via tenant config: ${(tenantVision as AIProviderRow).provider_name}`);
-    return rowToConfig(tenantVision as AIProviderRow);
-  }
-
-  // 3. Check global active vision provider
-  const { data: globalVision } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('is_global', true)
-    .eq('is_active_vision', true)
-    .maybeSingle();
-
-  if (globalVision) {
-    console.log(`[AI] 👁️ Vision provider resolved via global config: ${(globalVision as AIProviderRow).provider_name}`);
-    return rowToConfig(globalVision as AIProviderRow);
-  }
-
-  // 4. No dedicated vision provider found — return null so the caller can handle gracefully
-  console.warn(`[AI] ⚠️ No dedicated vision provider configured for user ${userId}. Image processing will be skipped.`);
-  return null;
+/**
+ * Kept for backward compatibility with components calling getAllChatProviders.
+ */
+export async function getAllChatProviders(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  return getChatProviderChain(supabase, userId, db);
 }
 
 /**
@@ -327,8 +305,14 @@ export async function getActiveVisionProvider(
  */
 export async function listProviders(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  db?: D1Database
 ): Promise<AIProviderConfig[]> {
+  if (db) {
+    const providers = await getAIProvidersFallback(db, supabase, userId);
+    return providers.filter(p => p.userId === userId);
+  }
+
   const { data, error } = await supabase
     .from('ai_providers')
     .select('*')
@@ -347,15 +331,38 @@ export async function listProviders(
  */
 export async function getProviderById(
   supabase: SupabaseClient,
-  id: string
+  id: string,
+  db?: D1Database
 ): Promise<AIProviderConfig | null> {
-  const { data, error } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('id', id)
-    .maybeSingle();
+  let data;
+  try {
+    const { data: dbData, error } = await supabase
+      .from('ai_providers')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (!error && dbData) {
+      data = dbData;
+    }
+  } catch (_) {}
 
-  if (error || !data) {
+  if (!data && db) {
+    const row = await db.prepare(`SELECT * FROM ai_providers WHERE id = ?`).bind(id).first();
+    if (row) {
+      data = {
+        ...row,
+        is_active_chat: row.is_active_chat === 1,
+        is_active_embedding: row.is_active_embedding === 1,
+        is_active_summarization: row.is_active_summarization === 1,
+        is_active_agent: row.is_active_agent === 1,
+        is_active_vision: row.is_active_vision === 1,
+        is_global: row.is_global === 1,
+        extra_headers: typeof row.extra_headers === 'string' ? JSON.parse(row.extra_headers) : row.extra_headers
+      };
+    }
+  }
+
+  if (!data) {
     return null;
   }
 
@@ -379,5 +386,10 @@ function rowToConfig(row: AIProviderRow): AIProviderConfig {
     temperature: row.temperature ?? 0.7,
     contextWindow: row.context_window ?? 10,
     extraHeaders: row.extra_headers ?? {},
+    fallbackChatOrder: row.fallback_chat_order ?? null,
+    fallbackAgentOrder: row.fallback_agent_order ?? null,
+    fallbackSummarizeOrder: row.fallback_summarize_order ?? null,
+    fallbackVisionOrder: row.fallback_vision_order ?? null,
+    fallbackEmbeddingOrder: row.fallback_embedding_order ?? null,
   };
 }

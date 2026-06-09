@@ -157,7 +157,7 @@ export default function DocumentsPage() {
         if (assignError) throw assignError;
       }
 
-      toast.success(editingFolder ? 'Folder updated successfully' : 'Folder created successfully');
+      toast.success(editingFolder ? `Folder "${folderName}" updated successfully.` : `Folder "${folderName}" created successfully.`);
       setShowFolderModal(false);
       loadAll();
     } catch (err: any) {
@@ -168,11 +168,13 @@ export default function DocumentsPage() {
 
   async function deleteFolder(id: string) {
     if (!confirm('Are you sure you want to delete this folder? Documents inside may be orphaned or deleted.')) return;
+    const folder = folders.find(f => f.id === id);
+    const folderNameForToast = folder?.name || '';
     try {
       await supabase.from('folder_page_assignments').delete().eq('folder_id', id);
       const { error } = await supabase.from('document_folders').delete().eq('id', id);
       if (error) throw error;
-      toast.success('Folder deleted');
+      toast.success(`Folder "${folderNameForToast}" deleted successfully.`);
       if (activeFolderId === id) setActiveFolderId(null);
       loadAll();
     } catch (err: any) {
@@ -223,6 +225,7 @@ export default function DocumentsPage() {
     }
 
     let targetDocId = editingDocId;
+    let embeddingSuccess = true;
 
     try {
       if (editingDocId) {
@@ -251,7 +254,12 @@ export default function DocumentsPage() {
           userId: user.id,
         });
       } catch (err: any) {
+        embeddingSuccess = false;
         toast.warning('Document saved, but embedding failed. ' + err.message);
+      }
+
+      if (embeddingSuccess) {
+        toast.success(editingDocId ? `Document "${docTitle}" updated and embedded successfully.` : `Document "${docTitle}" created and embedded successfully.`);
       }
 
       setShowDocModal(false);
@@ -264,13 +272,28 @@ export default function DocumentsPage() {
 
   async function deleteDoc(id: string) {
     if (!confirm('Delete this document?')) return;
-    await supabase.from('documents').delete().eq('id', id);
-    loadAll();
+    const doc = docs.find(d => d.id === id);
+    const docTitleForToast = doc?.title || '';
+    try {
+      const { error } = await supabase.from('documents').delete().eq('id', id);
+      if (error) throw error;
+      toast.success(`Document "${docTitleForToast}" deleted successfully.`);
+      loadAll();
+    } catch (err: any) {
+      toast.error('Error deleting document: ' + err.message);
+    }
   }
 
   async function toggleDocStatus(d: Doc) {
-    await supabase.from('documents').update({ is_active: !d.is_active }).eq('id', d.id);
-    loadAll();
+    const nextActive = !d.is_active;
+    try {
+      const { error } = await supabase.from('documents').update({ is_active: nextActive }).eq('id', d.id);
+      if (error) throw error;
+      toast.success(`Document "${d.title}" is now ${nextActive ? 'active' : 'inactive'}.`);
+      loadAll();
+    } catch (err: any) {
+      toast.error('Error updating status: ' + err.message);
+    }
   }
 
   return (

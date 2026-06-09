@@ -19,12 +19,18 @@
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getAllChatProviders, getActiveEmbeddingProvider, getProviderById, getActiveVisionProvider } from '../ai/provider';
+import { getAllChatProviders, getEmbeddingProviderChain, getProviderById, getActiveVisionProvider } from '../ai/provider';
 import { callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage } from '../ai/types';
 import { searchDocuments } from '../rag/pipeline';
 import { buildSystemPrompt } from './prompt';
 import type { PageConnection } from '../types';
+import {
+  getUserRecord,
+  getSessionContextFallback,
+  storeAssistantMessageFallback,
+  updateMessageMetadataFallback
+} from '../db';
 
 export interface ChatHandlerResult {
   reply: string;
@@ -48,17 +54,18 @@ export async function handleChatMessage(
   sessionId: string,
   pageConnection: PageConnection,
   userMessage: string,
-  senderId: string
+  senderId: string,
+  db?: D1Database
 ): Promise<ChatHandlerResult> {
   const userId = pageConnection.user_id;
 
   // 1. Load all available chat providers for fallback
-  let chatProviders = await getAllChatProviders(supabase, userId);
+  let chatProviders = await getAllChatProviders(supabase, userId, db);
 
   // If this specific page has a dedicated AI provider assigned, fetch it and prepend it
   if (pageConnection.ai_provider_id) {
     try {
-      const pageProvider = await getProviderById(supabase, pageConnection.ai_provider_id);
+      const pageProvider = await getProviderById(supabase, pageConnection.ai_provider_id, db);
       if (pageProvider) {
         chatProviders = [
           pageProvider,
@@ -87,22 +94,33 @@ export async function handleChatMessage(
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    const { data: userData } = await supabase
-      .from('users')
-      .select('monthly_token_limit, strict_token_enforcement')
-      .eq('id', userId)
-      .maybeSingle();
+    const userData = db
+      ? await getUserRecord(db, supabase, userId)
+      : (await supabase
+          .from('users')
+          .select('monthly_token_limit, strict_token_enforcement')
+          .eq('id', userId)
+          .maybeSingle()).data;
 
     const monthlyLimit = userData?.monthly_token_limit ?? 500000;
     const strictEnforcement = userData?.strict_token_enforcement ?? true;
 
-    // Get total token usage for the month via DB-side SUM (uses composite index)
-    const { data: usageResult } = await supabase.rpc('get_monthly_token_usage', {
-      p_user_id: userId,
-      p_month_start: startOfMonth.toISOString(),
-    });
-
-    const currentUsage = typeof usageResult === 'number' ? usageResult : 0;
+    // Get total token usage for the month
+    let currentUsage = 0;
+    if (db) {
+      const row = await db.prepare(
+        `SELECT SUM(token_count) as total FROM chat_messages WHERE user_id = ? AND role = 'assistant' AND created_at >= ?`
+      )
+        .bind(userId, startOfMonth.toISOString())
+        .first();
+      currentUsage = (row?.total as number) ?? 0;
+    } else {
+      const { data: usageResult } = await supabase.rpc('get_monthly_token_usage', {
+        p_user_id: userId,
+        p_month_start: startOfMonth.toISOString(),
+      });
+      currentUsage = typeof usageResult === 'number' ? usageResult : 0;
+    }
 
     if (currentUsage >= monthlyLimit) {
       console.warn(`[Chat] Tenant ${userId} has exceeded monthly token limit: ${currentUsage} >= ${monthlyLimit}`);
@@ -122,12 +140,16 @@ export async function handleChatMessage(
   }
 
   // 2. Retrieve conversation history (context window)
-  const { data: historyRows } = await supabase.rpc('get_session_context', {
-    p_session_id: sessionId,
-    p_limit: chatProviders[0].contextWindow,
-  });
-
-  const rows = historyRows ?? [];
+  let rows: any[] = [];
+  if (db) {
+    rows = await getSessionContextFallback(db, supabase, sessionId, chatProviders[0].contextWindow);
+  } else {
+    const { data: historyRows } = await supabase.rpc('get_session_context', {
+      p_session_id: sessionId,
+      p_limit: chatProviders[0].contextWindow,
+    });
+    rows = historyRows ?? [];
+  }
 
   // Determine if vision is needed: check if any user message since the last assistant/human reply has attachments
   let needsVision = false;
@@ -179,6 +201,22 @@ export async function handleChatMessage(
       };
     });
 
+  // Helper to store messages fallback-safely
+  const storeMsg = async (role: 'assistant', content: string, tokenCount: number | null, metadata: any) => {
+    if (db) {
+      await storeAssistantMessageFallback(db, supabase, sessionId, userId, content, tokenCount, metadata);
+    } else {
+      await supabase.from('chat_messages').insert({
+        session_id: sessionId,
+        user_id: userId,
+        role,
+        content,
+        token_count: tokenCount,
+        metadata,
+      });
+    }
+  };
+
   // If vision is needed for the current message, find a dedicated vision provider.
   // IMPORTANT: When needsVision=true, we ONLY try the vision provider.
   // Do NOT fall back through text-only providers — each has a 30s timeout, and
@@ -201,40 +239,34 @@ export async function handleChatMessage(
       return humanVisionReplies[idx];
     };
 
-    const visionProvider = await getActiveVisionProvider(supabase, userId);
+    const visionProvider = await getActiveVisionProvider(supabase, userId, db);
 
     const visionCannedReply = async (reason: string): Promise<ChatHandlerResult> => {
       const msg = getRandomVisionReply();
       console.warn(`[Chat] ⚠️ Vision failed: ${reason}. Returning canned reply.`);
-      await supabase.from('chat_messages').insert({
-        session_id: sessionId,
-        user_id: userId,
-        role: 'assistant',
-        content: msg,
-        metadata: { provider: 'vision-failed', model: 'canned', rag_used: false, reason },
-      });
+      await storeMsg('assistant', msg, null, { provider: 'vision-failed', model: 'canned', rag_used: false, reason });
       return { reply: msg, sessionId, ragUsed: false, provider: 'vision-failed', model: 'canned' };
     };
 
     if (!visionProvider) {
       const noConfigMsg = getRandomVisionReply();
-      await supabase.from('chat_messages').insert({
-        session_id: sessionId,
-        user_id: userId,
-        role: 'assistant',
-        content: noConfigMsg,
-        metadata: { provider: 'vision-not-configured', model: 'canned', rag_used: false },
-      });
+      await storeMsg('assistant', noConfigMsg, null, { provider: 'vision-not-configured', model: 'canned', rag_used: false });
       return { reply: noConfigMsg, sessionId, ragUsed: false, provider: 'vision-not-configured', model: 'canned' };
     }
 
     // Check vision quota limits
     try {
-      const { data: userProfile } = await supabase
-        .from('users')
-        .select('vision_monthly_limit, vision_queries_used, vision_extra_queries, vision_usage_month')
-        .eq('id', userId)
-        .maybeSingle();
+      let userProfile = null;
+      if (db) {
+        userProfile = await getUserRecord(db, supabase, userId);
+      } else {
+        const { data } = await supabase
+          .from('users')
+          .select('vision_monthly_limit, vision_queries_used, vision_extra_queries, vision_usage_month')
+          .eq('id', userId)
+          .maybeSingle();
+        userProfile = data;
+      }
 
       const currentMonth = new Date().toISOString().slice(0, 7);
       let {
@@ -261,25 +293,27 @@ export async function handleChatMessage(
 
       if (!hasQuota) {
         const quotaMsg = getRandomVisionReply();
-        await supabase.from('chat_messages').insert({
-          session_id: sessionId,
-          user_id: userId,
-          role: 'assistant',
-          content: quotaMsg,
-          metadata: { provider: 'vision-limit-exceeded', model: 'canned', rag_used: false },
-        });
+        await storeMsg('assistant', quotaMsg, null, { provider: 'vision-limit-exceeded', model: 'canned', rag_used: false });
         return { reply: quotaMsg, sessionId, ragUsed: false, provider: 'vision-limit-exceeded', model: 'canned' };
       }
 
       // Update vision usage in database
-      await supabase
-        .from('users')
-        .update({
-          vision_queries_used,
-          vision_extra_queries,
-          vision_usage_month
-        })
-        .eq('id', userId);
+      if (db) {
+        await db.prepare(
+          `UPDATE users SET vision_queries_used = ?, vision_extra_queries = ?, vision_usage_month = ? WHERE id = ?`
+        )
+          .bind(vision_queries_used, vision_extra_queries, vision_usage_month, userId)
+          .run();
+      } else {
+        await supabase
+          .from('users')
+          .update({
+            vision_queries_used,
+            vision_extra_queries,
+            vision_usage_month
+          })
+          .eq('id', userId);
+      }
     } catch (quotaErr) {
       console.error('[Chat] Failed checking vision quota limits, continuing execution:', quotaErr);
     }
@@ -287,17 +321,15 @@ export async function handleChatMessage(
     // Try ONLY the vision provider — fail fast instead of cascading through text providers
     console.log(`[Chat] 👁️ Vision required. Using: ${visionProvider.providerName} (${visionProvider.modelChat})`);
     try {
-      const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, undefined);
+      const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, undefined, db);
       const visionMessages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...history];
       const response = await callChatCompletion(visionProvider, visionMessages, { maxTokens: 1024 });
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't analyze the image. Please try again.";
-      await supabase.from('chat_messages').insert({
-        session_id: sessionId,
-        user_id: userId,
-        role: 'assistant',
-        content: reply,
-        token_count: response.usage?.total_tokens ?? response.usage?.completion_tokens,
-        metadata: { provider: visionProvider.providerName, model: response.model, tokens: response.usage, rag_used: false },
+      await storeMsg('assistant', reply, (response.usage?.total_tokens ?? response.usage?.completion_tokens) ?? null, {
+        provider: visionProvider.providerName,
+        model: response.model,
+        tokens: response.usage,
+        rag_used: false,
       });
       console.log(`[Chat] ✅ Vision response generated via ${visionProvider.providerName}`);
       return { reply, sessionId, tokensUsed: response.usage?.total_tokens, ragUsed: false, provider: visionProvider.providerName, model: visionProvider.modelChat };
@@ -323,13 +355,13 @@ export async function handleChatMessage(
   if (ragQuery && shouldTriggerRAG(ragQuery, history)) {
     console.log('[Chat] RAG triggered — searching knowledge base');
 
-    const embeddingProvider = await getActiveEmbeddingProvider(supabase, userId);
+    const embeddingChain = await getEmbeddingProviderChain(supabase, userId, db);
 
-    if (embeddingProvider && embeddingProvider.modelEmbedding) {
+    if (embeddingChain.length > 0) {
       try {
         const ragResults = await searchDocuments(
           supabase,
-          embeddingProvider,
+          embeddingChain,
           userId,
           ragQuery,
           pageConnection.page_id,
@@ -357,7 +389,7 @@ export async function handleChatMessage(
   }
 
   // 4. Build the system prompt
-  const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, ragContext);
+  const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, ragContext, db);
 
   // 5. Construct the final messages array
   const messages: ChatMessage[] = [
@@ -389,18 +421,11 @@ export async function handleChatMessage(
       const tokensUsed = response.usage?.total_tokens;
 
       // 7. Store the assistant's reply in the database
-      await supabase.from('chat_messages').insert({
-        session_id: sessionId,
-        user_id: userId,
-        role: 'assistant',
-        content: reply,
-        token_count: response.usage?.total_tokens ?? response.usage?.completion_tokens,
-        metadata: {
-          provider: chatProvider.providerName,
-          model: response.model,
-          tokens: response.usage,
-          rag_used: ragUsed,
-        },
+      await storeMsg('assistant', reply, (response.usage?.total_tokens ?? response.usage?.completion_tokens) ?? null, {
+        provider: chatProvider.providerName,
+        model: response.model,
+        tokens: response.usage,
+        rag_used: ragUsed,
       });
 
       console.log(`[Chat] ✅ AI response generated (${tokensUsed ?? '?'} tokens, RAG: ${ragUsed}) via ${chatProvider.providerName}`);

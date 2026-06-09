@@ -53,14 +53,21 @@ export default function ToastContainer() {
             </span>
             <span style={{ flex: 1, lineHeight: '1.4' }}>{t.message}</span>
             <button
-              onClick={() => removeToast(t.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                removeToast(t.id);
+              }}
+              className="toast-close-btn"
               style={{
                 background: 'none',
                 border: 'none',
-                color: 'rgba(255,255,255,0.5)',
                 cursor: 'pointer',
-                padding: '0',
+                padding: '8px',
+                margin: '-8px -8px -8px -4px',
                 flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
               <X size={14} />
@@ -72,6 +79,14 @@ export default function ToastContainer() {
         @keyframes slideIn {
           from { transform: translateX(100%); opacity: 0; }
           to { transform: translateX(0); opacity: 1; }
+        }
+        .toast-close-btn {
+          color: rgba(255,255,255,0.5);
+          transition: color 0.15s ease, transform 0.15s ease;
+        }
+        .toast-close-btn:hover {
+          color: rgba(255,255,255,0.9);
+          transform: scale(1.1);
         }
       `}</style>
     </div>

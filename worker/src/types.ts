@@ -18,6 +18,9 @@ export interface Env {
   // General
   ENVIRONMENT: string;
   
+  // Cloudflare D1 Failover DB
+  DB: D1Database;
+
   // Agent configuration (optional, for highly capable agentic tasks)
   AGENT_API_KEY?: string;
   AGENT_MODEL?: string;

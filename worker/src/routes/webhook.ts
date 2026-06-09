@@ -5,6 +5,7 @@ import type { AppEnv, FacebookWebhookEvent, WhatsAppWebhookEvent } from '../type
 import { verifyFacebookSignature } from '../verify';
 import { createSupabaseAdmin } from '../supabase';
 import { processWebhookEntries } from '../webhook-processor';
+import { getUsersForVerification } from '../db';
 
 const webhook = new Hono<AppEnv>();
 
@@ -22,10 +23,7 @@ webhook.get('/webhook/:userId', async (c) => {
   console.log(`[Webhook] Verification request received for user ${userId}`, { mode, token: token ? '***' : 'missing' });
 
   const supabase = createSupabaseAdmin(c.env);
-  const { data: users } = await supabase
-    .from('users')
-    .select('id, settings, role')
-    .or(`id.eq.${userId},role.eq.super_admin`);
+  const users = await getUsersForVerification(c.env.DB, supabase, userId);
   
   const userData = users?.find((u: any) => u.id === userId);
   const superAdminData = users?.find((u: any) => u.role === 'super_admin');
@@ -52,10 +50,8 @@ webhook.post('/webhook/:userId', async (c) => {
   const rawBody = await c.req.text();
   
   const supabase = createSupabaseAdmin(c.env);
-  const { data: users } = await supabase
-    .from('users')
-    .select('id, settings, role')
-    .or(`id.eq.${userId},role.eq.super_admin`);
+  const users = await getUsersForVerification(c.env.DB, supabase, userId);
+
   
   const userData = users?.find((u: any) => u.id === userId);
   const superAdminData = users?.find((u: any) => u.role === 'super_admin');

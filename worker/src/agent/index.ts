@@ -6,9 +6,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AppEnv, PageConnection } from '../types';
-import { callChatCompletion, AIProviderError } from '../ai/client';
+import { callChatCompletionWithFailover, callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage, AITool, AIProviderConfig } from '../ai/types';
-import { getActiveAgentProvider, getActiveEmbeddingProvider } from '../ai/provider';
+import { getAgentProviderChain, getEmbeddingProviderChain } from '../ai/provider';
 import { processDocument } from '../rag';
 
 // Define the available tools for the dashboard agent
@@ -205,15 +205,14 @@ export async function handleAgentChat(
   contextType?: string
 ): Promise<{ message: ChatMessage; databaseUpdated: boolean }> {
   let databaseUpdated = false;
-  // 1. Get the provider. 
+  // 1. Get the provider chain.
   // Priority 1: Environment variables (hardcoded override)
-  // Priority 2: Database configured Active Agent
-  // Priority 3: Database configured Active Chat
-  let provider: AIProviderConfig | null = null;
+  // Priority 2: Database configured Agent Provider failover chain
+  let providerChain: AIProviderConfig[] = [];
   
   if (env.AGENT_API_KEY && env.AGENT_MODEL) {
     const isOpenRouter = env.AGENT_MODEL.includes('/');
-    provider = {
+    providerChain = [{
       id: 'agent_override',
       userId: 'global',
       providerName: isOpenRouter ? 'openrouter' : 'openai',
@@ -226,20 +225,20 @@ export async function handleAgentChat(
       temperature: 0.2,
       contextWindow: 15,
       extraHeaders: isOpenRouter ? { 'HTTP-Referer': 'https://autometabot.com', 'X-Title': 'AutometaBot' } : {}
-    };
+    }];
   } else {
-    // Check database for active agent provider, falls back to active chat
-    provider = await getActiveAgentProvider(supabase, userId);
+    // Check database for active agent provider chain
+    providerChain = await getAgentProviderChain(supabase, userId);
   }
   
-  if (!provider) {
+  if (providerChain.length === 0) {
     throw new Error('No AI provider configured.');
   }
 
   // Fetch user's connected pages to provide context to the agent
   const { data: pages } = await supabase
     .from('page_connections')
-    .select('page_id, page_name, instagram_account_id, whatsapp_phone_number_id')
+    .select('page_id, page_name, custom_system_prompt, instagram_account_id, whatsapp_phone_number_id')
     .eq('user_id', userId);
 
   let pagesContext = 'The user currently has no connected channels.';
@@ -248,7 +247,7 @@ export async function handleAgentChat(
       let ids = `Primary ID: ${p.page_id}`;
       if (p.instagram_account_id) ids += `, IG ID: ${p.instagram_account_id}`;
       if (p.whatsapp_phone_number_id) ids = `Primary ID (WhatsApp): ${p.whatsapp_phone_number_id}`;
-      return `- Name: "${p.page_name || 'Unnamed Channel'}" | ${ids}`;
+      return `- Name: "${p.page_name || 'Unnamed Channel'}" | ${ids}\n  Current System Prompt:\n"""\n${p.custom_system_prompt || 'None'}\n"""`;
     }).join('\n');
     pagesContext += '\n\nIMPORTANT: If the user asks to modify a prompt or knowledge base without specifying the channel, ask them which of these channels they mean. Then use the corresponding Primary ID as the `page_id` argument in your tools.';
   }
@@ -432,7 +431,7 @@ ${extraPrompt}`
   const maxLoops = 5;
 
   while (loopCount < maxLoops) {
-    let response = await callChatCompletion(provider, conversation, {
+    let response = await callChatCompletionWithFailover(providerChain, conversation, {
       tools: filteredTools.length > 0 ? filteredTools : undefined,
       toolChoice: filteredTools.length > 0 ? 'auto' : undefined
     });
@@ -683,9 +682,9 @@ ${extraPrompt}`
 
           // Re-embed the updated content
           try {
-            const embedProvider = await getActiveEmbeddingProvider(supabase, userId);
-            if (embedProvider) {
-              await processDocument(supabase, embedProvider, userId, args.document_id, args.new_content);
+            const embedChain = await getEmbeddingProviderChain(supabase, userId);
+            if (embedChain.length > 0) {
+              await processDocument(supabase, embedChain, userId, args.document_id, args.new_content);
               resultStr += ` Document re-processed and re-embedded successfully.`;
             } else {
               resultStr += ` Warning: No active embedding provider found. Content saved but not re-embedded.`;
@@ -715,9 +714,9 @@ ${extraPrompt}`
           databaseUpdated = true;
           
           try {
-            const embedProvider = await getActiveEmbeddingProvider(supabase, userId);
-            if (embedProvider) {
-              await processDocument(supabase, embedProvider, userId, data.id, args.content);
+            const embedChain = await getEmbeddingProviderChain(supabase, userId);
+            if (embedChain.length > 0) {
+              await processDocument(supabase, embedChain, userId, data.id, args.content);
               resultStr += ` Document processed and embedded successfully.`;
             } else {
               resultStr += ` Warning: No active embedding provider found. Document saved but not embedded.`;
@@ -826,9 +825,9 @@ ${extraPrompt}`
                   .eq('id', entity_id);
                 if (error) throw error;
                 
-                const embedProvider = await getActiveEmbeddingProvider(supabase, userId);
-                if (embedProvider) {
-                  await processDocument(supabase, embedProvider, userId, entity_id, previous_value);
+                const embedChain = await getEmbeddingProviderChain(supabase, userId);
+                if (embedChain.length > 0) {
+                  await processDocument(supabase, embedChain, userId, entity_id, previous_value);
                 }
               } else {
                 const { data: assign } = await supabase
@@ -851,9 +850,9 @@ ${extraPrompt}`
                     });
                   if (error) throw error;
                   
-                  const embedProvider = await getActiveEmbeddingProvider(supabase, userId);
-                  if (embedProvider) {
-                    await processDocument(supabase, embedProvider, userId, entity_id, previous_value);
+                  const embedChain = await getEmbeddingProviderChain(supabase, userId);
+                  if (embedChain.length > 0) {
+                    await processDocument(supabase, embedChain, userId, entity_id, previous_value);
                   }
                 }
               }

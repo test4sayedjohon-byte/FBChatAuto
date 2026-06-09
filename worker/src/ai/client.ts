@@ -37,9 +37,21 @@ export async function callChatCompletion(
     ...provider.extraHeaders,
   };
 
+  // Sanitize messages to remove any extra properties (like 'timestamp') that some providers (e.g. Groq) reject
+  const sanitizedMessages = messages.map(m => {
+    const clean: any = {
+      role: m.role,
+      content: m.content
+    };
+    if (m.name !== undefined) clean.name = m.name;
+    if (m.tool_calls !== undefined) clean.tool_calls = m.tool_calls;
+    if (m.tool_call_id !== undefined) clean.tool_call_id = m.tool_call_id;
+    return clean;
+  });
+
   const body: any = {
     model: provider.modelChat,
-    messages,
+    messages: sanitizedMessages,
     max_tokens: options?.maxTokens ?? provider.maxTokens ?? 1024,
     temperature: options?.temperature ?? provider.temperature ?? 0.7,
     stream: options?.stream ?? false,
@@ -127,7 +139,65 @@ export async function callEmbedding(
 }
 
 /**
+ * Call the chat completions endpoint with automatic failover support.
+ * Iterates through a chain of providers, retrying if one fails.
+ */
+export async function callChatCompletionWithFailover(
+  chain: AIProviderConfig[],
+  messages: ChatMessage[],
+  options?: Parameters<typeof callChatCompletion>[2]
+): Promise<ChatCompletionResponse> {
+  if (chain.length === 0) {
+    throw new Error('[AI] No active or fallback chat providers configured.');
+  }
+
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < chain.length; i++) {
+    const provider = chain[i];
+    try {
+      console.log(`[AI-Failover] Attempt ${i + 1}/${chain.length} using provider ${provider.displayName} (${provider.modelChat})`);
+      return await callChatCompletion(provider, messages, options);
+    } catch (err: any) {
+      console.error(`[AI-Failover] ⚠️ Attempt ${i + 1} with ${provider.displayName} failed:`, err.message || err);
+      lastError = err;
+      // Continue to next provider in the chain
+    }
+  }
+
+  throw new Error(`[AI] All chat providers failed. Last error: ${lastError?.message || lastError}`);
+}
+
+/**
+ * Generate embeddings with automatic failover support.
+ */
+export async function callEmbeddingWithFailover(
+  chain: AIProviderConfig[],
+  input: string | string[]
+): Promise<number[][]> {
+  if (chain.length === 0) {
+    throw new Error('[AI] No active or fallback embedding providers configured.');
+  }
+
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < chain.length; i++) {
+    const provider = chain[i];
+    try {
+      console.log(`[AI-Failover] Generating embeddings: Attempt ${i + 1}/${chain.length} using provider ${provider.displayName}`);
+      return await callEmbedding(provider, input);
+    } catch (err: any) {
+      console.error(`[AI-Failover] ⚠️ Attempt ${i + 1} with ${provider.displayName} failed:`, err.message || err);
+      lastError = err;
+    }
+  }
+
+  throw new Error(`[AI] All embedding providers failed. Last error: ${lastError?.message || lastError}`);
+}
+
+/**
  * Custom error class for AI provider failures.
+
  * Includes provider name and HTTP status for debugging.
  */
 export class AIProviderError extends Error {

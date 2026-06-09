@@ -12,18 +12,28 @@ export async function publishToFacebook(
     console.log(`[Scheduler Mock] Successfully published mock Facebook post`);
     return { postId: `mock_fb_post_${Date.now()}` };
   }
-  // If there are photos, we upload to /photos first or use attachments.
-  // For simplicity, if we have media URLs, we can use the multi-photo feed post or simple message + link
-  const url = `https://graph.facebook.com/v25.0/${pageId}/feed`;
+
+  const mediaUrl = mediaUrls && mediaUrls.length > 0 ? mediaUrls[0] : null;
+  const isVideo = mediaUrl ? mediaUrl.toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) !== null : false;
+
+  let url: string;
   const params: any = {
-    message,
     access_token: accessToken,
   };
 
-  if (mediaUrls && mediaUrls.length > 0) {
-    // Facebook simple image attach uses link field or multi-attachments.
-    // For single image, we can just pass the 'link' parameter.
-    params.link = mediaUrls[0];
+  if (mediaUrl) {
+    if (isVideo) {
+      url = `https://graph-video.facebook.com/v25.0/${pageId}/videos`;
+      params.file_url = mediaUrl;
+      params.description = message;
+    } else {
+      url = `https://graph.facebook.com/v25.0/${pageId}/photos`;
+      params.url = mediaUrl;
+      params.message = message;
+    }
+  } else {
+    url = `https://graph.facebook.com/v25.0/${pageId}/feed`;
+    params.message = message;
   }
 
   const response = await fetch(url, {
@@ -38,7 +48,8 @@ export async function publishToFacebook(
   }
 
   const result = await response.json() as any;
-  return { postId: result.id };
+  // Return post_id if available (often returned for photos/videos representing the timeline post), otherwise result.id
+  return { postId: result.post_id || result.id };
 }
 
 export async function publishToInstagram(

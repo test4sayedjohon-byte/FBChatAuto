@@ -324,7 +324,9 @@ export default function ContentPlannerPage() {
       const payload = {
         page_connection_id: pageConnectionId,
         platform,
-        post_type: mediaUrls.length > 0 ? 'photo' : 'text',
+        post_type: mediaUrls.length > 0 
+          ? (mediaUrls.some(url => url.toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) !== null) ? 'video' : 'photo')
+          : 'text',
         message: message || null,
         media_urls: mediaUrls.length > 0 ? mediaUrls : null,
         scheduled_time: new Date(scheduledTime).toISOString(),
@@ -386,7 +388,9 @@ export default function ContentPlannerPage() {
       const payload = {
         page_connection_id: pageConnectionId,
         platform,
-        post_type: mediaUrls.length > 0 ? 'photo' : 'text',
+        post_type: mediaUrls.length > 0 
+          ? (mediaUrls.some(url => url.toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) !== null) ? 'video' : 'photo')
+          : 'text',
         message: message || null,
         media_urls: mediaUrls.length > 0 ? mediaUrls : null,
         scheduled_time: new Date().toISOString(),
@@ -696,7 +700,11 @@ export default function ContentPlannerPage() {
 
                   {post.media_urls && post.media_urls[0] && (
                     <div style={{ width: '100%', height: '160px', overflow: 'hidden', borderRadius: '6px', marginBottom: '12px', background: 'var(--bg-tertiary)' }}>
-                      <img src={post.media_urls[0]} alt="Post media attachment" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      {post.media_urls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
+                        <video src={post.media_urls[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted playsInline />
+                      ) : (
+                        <img src={post.media_urls[0]} alt="Post media attachment" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
                     </div>
                   )}
 
@@ -817,8 +825,8 @@ export default function ContentPlannerPage() {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px', marginTop: '8px', background: 'var(--bg-secondary)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-primary)' }}>
                         {mediaUrls.map((url, idx) => (
                           <div key={idx} style={{ position: 'relative', width: '80px', height: '80px', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-light)' }}>
-                            {url.toLowerCase().match(/\.(mp4|mov|avi|mkv)$/) ? (
-                              <div style={{ width: '100%', height: '100%', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '10px' }}>Video</div>
+                            {url.toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
+                              <video src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted playsInline />
                             ) : (
                               <img src={url} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={(e) => { (e.target as HTMLImageElement).src = 'https://placehold.co/600x400?text=Invalid+Image+URL'; }} />
                             )}
@@ -958,8 +966,8 @@ export default function ContentPlannerPage() {
                     {/* Fake Feed Image */}
                     {mediaUrls.length > 0 ? (
                       <div style={{ width: '100%', height: '220px', background: 'var(--bg-tertiary)', overflow: 'hidden', position: 'relative' }}>
-                        {mediaUrls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv)$/) ? (
-                          <div style={{ width: '100%', height: '100%', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>Video Attachment</div>
+                        {mediaUrls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
+                          <video src={mediaUrls[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} controls muted playsInline />
                         ) : (
                           <img src={mediaUrls[0]} alt="Preview attachment" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={(e) => { (e.target as HTMLImageElement).src = 'https://placehold.co/600x400?text=Invalid+Image+URL'; }} />
                         )}
@@ -1102,7 +1110,11 @@ export default function ContentPlannerPage() {
                   
                   {viewedPost.media_urls && viewedPost.media_urls[0] ? (
                     <div style={{ width: '100%', height: '150px', background: 'var(--bg-tertiary)', overflow: 'hidden' }}>
-                      <img src={viewedPost.media_urls[0]} alt="Attached visual" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      {viewedPost.media_urls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
+                        <video src={viewedPost.media_urls[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} controls muted playsInline />
+                      ) : (
+                        <img src={viewedPost.media_urls[0]} alt="Attached visual" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
                     </div>
                   ) : (
                     <div style={{ width: '100%', height: '120px', background: 'var(--bg-tertiary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', color: 'var(--text-secondary)' }}>

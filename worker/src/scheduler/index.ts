@@ -60,7 +60,7 @@ export async function runSchedulerJobs(supabase: SupabaseClient): Promise<void> 
         if (!mediaUrl) {
           throw new Error('Instagram requires at least one media URL attachment.');
         }
-        const isVideo = mediaUrl.toLowerCase().match(/\.(mp4|mov|avi|mkv)$/) !== null;
+        const isVideo = mediaUrl.toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) !== null;
 
         const igRes = await publishToInstagram(
           pageConnection.access_token,

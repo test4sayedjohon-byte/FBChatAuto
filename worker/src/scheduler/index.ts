@@ -5,6 +5,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { publishToFacebook, publishToInstagram } from './media-uploader';
 
+function getStoragePathFromUrl(url: string): string | null {
+  const marker = '/media_assets/';
+  const index = url.indexOf(marker);
+  if (index === -1) return null;
+  const pathWithQuery = url.substring(index + marker.length);
+  const path = pathWithQuery.split('?')[0];
+  return decodeURIComponent(path);
+}
+
 export async function runSchedulerJobs(supabase: SupabaseClient): Promise<void> {
   const now = new Date().toISOString();
 
@@ -72,12 +81,59 @@ export async function runSchedulerJobs(supabase: SupabaseClient): Promise<void> 
         postId = igRes.postId;
       }
 
-      // Mark published successfully
+      // Extract storage paths to delete and convert media URLs to local references
+      const mediaUrls = post.media_urls || [];
+      const updatedMediaUrls: string[] = [];
+      const pathsToDelete: string[] = [];
+
+      for (const url of mediaUrls) {
+        let localName = 'unknown_file';
+        try {
+          const parsedUrl = new URL(url);
+          const localNameParam = parsedUrl.searchParams.get('local_name');
+          if (localNameParam) {
+            localName = localNameParam;
+          } else {
+            const parts = parsedUrl.pathname.split('/');
+            localName = parts[parts.length - 1];
+          }
+        } catch (e) {
+          updatedMediaUrls.push(url);
+          continue;
+        }
+
+        const storagePath = getStoragePathFromUrl(url);
+        if (storagePath && url.includes('.supabase.')) {
+          pathsToDelete.push(storagePath);
+          updatedMediaUrls.push(`file://localhost/${localName}`);
+        } else {
+          updatedMediaUrls.push(url);
+        }
+      }
+
+      if (pathsToDelete.length > 0) {
+        console.log(`[Scheduler] Deleting ${pathsToDelete.length} published files from Supabase Storage:`, pathsToDelete);
+        try {
+          const { error: deleteErr } = await supabase.storage
+            .from('media_assets')
+            .remove(pathsToDelete);
+          if (deleteErr) {
+            console.error('[Scheduler] Failed to delete files from Supabase Storage:', deleteErr.message);
+          } else {
+            console.log('[Scheduler] Successfully deleted published files from Supabase Storage.');
+          }
+        } catch (storageErr: any) {
+          console.error('[Scheduler] Storage deletion error:', storageErr.message);
+        }
+      }
+
+      // Mark published successfully and replace URLs with local references
       await supabase
         .from('scheduled_posts')
         .update({
           status: 'published',
           meta_post_id: postId,
+          media_urls: updatedMediaUrls.length > 0 ? updatedMediaUrls : null,
           error_message: null,
           updated_at: new Date().toISOString(),
         })

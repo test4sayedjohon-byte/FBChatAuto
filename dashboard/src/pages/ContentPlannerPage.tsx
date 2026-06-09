@@ -5,6 +5,15 @@ import { toast } from '../hooks/useToast';
 import { workerPost } from '../lib/workerApi';
 import { Plus, X, Calendar as CalendarIcon, Clock, Globe, Image as ImageIcon, Save, Loader2, AlertTriangle, ChevronLeft, ChevronRight, List, Calendar, Edit3, Send, Upload } from 'lucide-react';
 
+const getStoragePathFromUrl = (url: string): string | null => {
+  const marker = '/media_assets/';
+  const index = url.indexOf(marker);
+  if (index === -1) return null;
+  const pathWithQuery = url.substring(index + marker.length);
+  const path = pathWithQuery.split('?')[0];
+  return decodeURIComponent(path);
+};
+
 interface ScheduledPost {
   id: string;
   user_id: string;
@@ -288,7 +297,8 @@ export default function ContentPlannerPage() {
           .getPublicUrl(filePath);
 
         if (publicUrl) {
-          newUrls.push(publicUrl);
+          const urlWithLocal = `${publicUrl}?local_name=${encodeURIComponent(file.name)}`;
+          newUrls.push(urlWithLocal);
         }
       }
       setMediaUrls(newUrls);
@@ -335,6 +345,21 @@ export default function ContentPlannerPage() {
       };
 
       if (isEditing && selectedPost) {
+        // Clean up removed media URLs from storage
+        if (selectedPost.media_urls) {
+          const removedUrls = selectedPost.media_urls.filter(url => !mediaUrls.includes(url));
+          const pathsToDelete: string[] = [];
+          removedUrls.forEach(url => {
+            const storagePath = getStoragePathFromUrl(url);
+            if (storagePath && url.includes('.supabase.')) {
+              pathsToDelete.push(storagePath);
+            }
+          });
+          if (pathsToDelete.length > 0) {
+            await supabase.storage.from('media_assets').remove(pathsToDelete);
+          }
+        }
+
         const { error } = await supabase
           .from('scheduled_posts')
           .update(payload)
@@ -446,6 +471,20 @@ export default function ContentPlannerPage() {
   async function handleDeletePost(id: string) {
     if (!confirm('Are you sure you want to delete this scheduled post?')) return;
     try {
+      const post = posts.find(p => p.id === id);
+      if (post && post.media_urls && post.media_urls.length > 0) {
+        const pathsToDelete: string[] = [];
+        post.media_urls.forEach(url => {
+          const storagePath = getStoragePathFromUrl(url);
+          if (storagePath && url.includes('.supabase.')) {
+            pathsToDelete.push(storagePath);
+          }
+        });
+        if (pathsToDelete.length > 0) {
+          await supabase.storage.from('media_assets').remove(pathsToDelete);
+        }
+      }
+
       const { error } = await supabase.from('scheduled_posts').delete().eq('id', id);
       if (error) throw error;
       toast.success('Scheduled post deleted.');
@@ -700,7 +739,15 @@ export default function ContentPlannerPage() {
 
                   {post.media_urls && post.media_urls[0] && (
                     <div style={{ width: '100%', height: '160px', overflow: 'hidden', borderRadius: '6px', marginBottom: '12px', background: 'var(--bg-tertiary)' }}>
-                      {post.media_urls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
+                      {post.media_urls[0].startsWith('file://localhost/') ? (
+                        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', border: '1px dashed var(--border-primary)', padding: '12px' }}>
+                          <ImageIcon size={28} style={{ color: 'var(--accent-primary)', opacity: 0.8 }} />
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'center', wordBreak: 'break-all' }}>
+                            Published & Cleaned Up<br/>
+                            <strong style={{ color: 'var(--text-primary)' }}>{decodeURIComponent(post.media_urls[0].replace('file://localhost/', ''))}</strong>
+                          </span>
+                        </div>
+                      ) : post.media_urls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
                         <video src={post.media_urls[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted playsInline />
                       ) : (
                         <img src={post.media_urls[0]} alt="Post media attachment" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -1110,7 +1157,15 @@ export default function ContentPlannerPage() {
                   
                   {viewedPost.media_urls && viewedPost.media_urls[0] ? (
                     <div style={{ width: '100%', height: '150px', background: 'var(--bg-tertiary)', overflow: 'hidden' }}>
-                      {viewedPost.media_urls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
+                      {viewedPost.media_urls[0].startsWith('file://localhost/') ? (
+                        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', border: '1px dashed var(--border-primary)', padding: '12px' }}>
+                          <ImageIcon size={24} style={{ color: 'var(--accent-primary)', opacity: 0.8 }} />
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'center', wordBreak: 'break-all' }}>
+                            Published & Cleaned Up<br/>
+                            <strong style={{ color: 'var(--text-primary)' }}>{decodeURIComponent(viewedPost.media_urls[0].replace('file://localhost/', ''))}</strong>
+                          </span>
+                        </div>
+                      ) : viewedPost.media_urls[0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/) ? (
                         <video src={viewedPost.media_urls[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} controls muted playsInline />
                       ) : (
                         <img src={viewedPost.media_urls[0]} alt="Attached visual" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />

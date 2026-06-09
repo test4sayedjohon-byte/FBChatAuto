@@ -456,10 +456,10 @@ async function handleWhatsAppMessage(
     );
 
     // Apply short human-like randomized delay BEFORE sending the WhatsApp message.
-    // WhatsApp doesn't support typing indicators, so we keep this under 2 seconds to avoid feeling frozen.
+    // WhatsApp doesn't support typing indicators, so we keep this under 1 second to avoid feeling frozen.
     let extraDelayMs = 0;
     if (Math.random() < 0.70) {
-      extraDelayMs = Math.floor(Math.random() * 1500) + 500; // 70% chance of 0.5 to 2 seconds delay
+      extraDelayMs = Math.floor(Math.random() * 600) + 200; // 70% chance of 0.2 to 0.8 seconds delay
     }
 
     if (extraDelayMs > 0) {

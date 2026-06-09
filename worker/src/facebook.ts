@@ -84,8 +84,8 @@ export async function sendFacebookSenderAction(
  */
 export function getReplyDelay(text: string, isVisionCanned: boolean): number {
   if (isVisionCanned) {
-    // 10 to 20 seconds
-    return Math.floor(Math.random() * 10000) + 10000;
+    // 3 to 6 seconds
+    return Math.floor(Math.random() * 3000) + 3000;
   }
 
   // 25% chance of completely randomized behavior (simulating human copy-paste or erratic typing patterns)
@@ -94,22 +94,22 @@ export function getReplyDelay(text: string, isVisionCanned: boolean): number {
     if (randomChoice < 0.40) {
       return 0; // 40% chance of instant reply (copy-paste)
     } else if (randomChoice < 0.70) {
-      return Math.floor(Math.random() * 4000) + 1000; // 30% chance of random medium delay (1-5s)
+      return Math.floor(Math.random() * 1000) + 500; // 30% chance of random medium delay (0.5-1.5s)
     } else {
-      return Math.floor(Math.random() * 9000) + 6000; // 30% chance of random long delay (6-15s)
+      return Math.floor(Math.random() * 2000) + 2000; // 30% chance of random long delay (2-4s)
     }
   }
 
   // 75% chance of structured length-dependent delays:
   const length = text.length;
   if (length < 50) {
-    return Math.floor(Math.random() * 1500) + 1000; // Short text: 1 to 2.5s
+    return 200; // Short text: 0.2 seconds (instantaneous)
   } else if (length < 150) {
-    return Math.floor(Math.random() * 3000) + 3000; // Medium text: 3 to 6s
+    return Math.floor(Math.random() * 1500) + 1000; // Medium text: 1 to 2.5s
   } else if (length < 300) {
-    return Math.floor(Math.random() * 4000) + 7000; // Long text: 7 to 11s
+    return Math.floor(Math.random() * 2000) + 2500; // Long text: 2.5 to 4.5s
   } else {
-    return Math.floor(Math.random() * 6000) + 12000; // Very long text: 12 to 18s
+    return Math.floor(Math.random() * 3000) + 5000; // Very long text: 5 to 8s
   }
 }
 

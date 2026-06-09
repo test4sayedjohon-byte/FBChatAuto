@@ -15,8 +15,9 @@ Before connecting your channels, you must ensure that the generated Meta Access 
 
 ### Facebook & Instagram Pages (Page Access Token)
 Your Page token must be generated with the following scopes:
-* **`pages_read_engagement`** (Required to read page info, test connectivity, and publish posts/comments)
+* **`pages_read_engagement`** (Required to read page info, test connectivity, and read posts/comments)
 * **`pages_manage_posts`** (Required to publish scheduled feed posts on your page)
+* **`pages_manage_engagement`** (Required to write/publish automated first comments and replies)
 * **`pages_messaging`** (Required for chatbot automated messaging/DMs)
 * **`pages_show_list`** (Required to discover pages linked to your account)
 

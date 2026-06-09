@@ -93,17 +93,47 @@ Your System User token must be generated in Meta Business Manager with:
 9. Click the **Generate** button next to the connected Page to get your **Page Access Token**. Copy this token.
 
 ### Phase 4: Page Connection & Access Tokens
-1. Still in the Meta Developer Portal (under Messenger > Settings > Access Tokens), click **Add or Remove Pages** (or use the Page generation list we configured in Phase 3).
-2. Authenticate with Facebook and select the Facebook/Instagram pages you want the AI to manage.
-3. Once linked, click **Generate Token** next to the connected page. 
-   > [!IMPORTANT]
-   > Ensure the generated token includes **`pages_read_engagement`** and **`pages_manage_posts`** permissions. If these are missing, scheduling posts will fail with error `(#283) Requires pages_read_engagement`.
-   Copy this long Page Access Token.
-4. Copy the **Page ID** (available under the page name).
-5. Go back to the AutometaBot Dashboard -> **Meta Channels** tab in the sidebar.
-6. Click the orange **+ Connect FB/IG** button in the top right.
-7. Paste the **Page ID**, type the **Page Name**, and paste the **Page Access Token**.
-8. Click **Connect Page** to save the connection.
+
+> [!IMPORTANT]
+> **Understanding Token Types (Crucial for Chatbot Delivery):**
+> * **User Access Token / System User Token:** Represents *you* as a person or system user. It cannot send messages on behalf of a Page. Do not save this in the chatbot database.
+> * **Page Access Token:** Represents the *Facebook Page* itself. This token authorizes the chatbot to send messages, reply to comments, and post updates on behalf of your Page. This is the token you must save in the database.
+
+To get a **Permanent (Long-Lived) Page Access Token** that never expires and has all the necessary permissions, follow these steps:
+
+#### Step 1: Generate a User Token with Scopes
+1. Open the [Meta Graph API Explorer](https://developers.facebook.com/tools/explorer/).
+2. Select your App (**PhoneFarmingConnect**) in the **Meta App** dropdown on the right.
+3. In the **User or Page** dropdown, select **User Token**.
+4. In the **Permissions** search box, add all of the following permissions:
+   * `pages_show_list`
+   * `pages_messaging`
+   * `pages_read_engagement`
+   * `pages_manage_posts`
+   * `pages_manage_engagement`
+   * `pages_manage_metadata`
+   * `read_page_mailboxes`
+   * *If using Instagram:* `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_content_publish`
+5. Click the blue **Generate Access Token** button. Log in and authorize all selected permissions for your Pages.
+
+#### Step 2: Extract the Page Access Token
+1. After authorization, go back to the **User or Page** dropdown in the Graph API Explorer.
+2. Select your target Facebook Page (e.g., **Phone Farming Bangladesh**).
+3. The explorer will automatically swap the token in the **Access Token** field to a Page-specific token.
+4. Copy this token.
+
+#### Step 3: Make the Token Permanent (Long-Lived)
+1. Go to the [Meta Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/).
+2. Paste the copied Page Access Token into the box and click **Debug**.
+3. Scroll to the bottom of the details page and click the blue **Extend Access Token** button.
+4. Copy the resulting extended token. This token will **never expire** (it will say `Expires: Never` or `Expires: Keep Alive`).
+
+#### Step 4: Connect the Page to AutometaBot
+1. Copy the **Page ID** of your Facebook Page.
+2. Go to your AutometaBot Dashboard -> **Meta Channels** tab in the sidebar.
+3. Click the orange **+ Connect FB/IG** button in the top right.
+4. Paste the **Page ID**, type the **Page Name**, and paste the **Extended Page Access Token** you copied in Step 3.
+5. Click **Connect Page** to save. Your chatbot is now active with a permanent, fully authorized connection!
 
 ### Phase 5: Go Live
 1. **Prepare Bot Settings & Content First:** Do not set the Meta App to live mode immediately. First, finish configuring your:

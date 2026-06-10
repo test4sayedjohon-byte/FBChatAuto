@@ -22,6 +22,7 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         created_at TEXT,
         monthly_token_limit INTEGER,
         strict_token_enforcement INTEGER,
+        billing_cycle_anchor TEXT,
         allow_vision INTEGER DEFAULT 0,
         vision_monthly_limit INTEGER DEFAULT 30,
         vision_queries_used INTEGER DEFAULT 0,
@@ -171,6 +172,44 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         created_at TEXT,
         updated_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS dm_flows (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        name TEXT,
+        description TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT,
+        updated_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS dm_flow_nodes (
+        id TEXT PRIMARY KEY,
+        flow_id TEXT,
+        type TEXT,
+        data TEXT,
+        position TEXT,
+        created_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS dm_flow_edges (
+        id TEXT PRIMARY KEY,
+        flow_id TEXT,
+        source_node_id TEXT,
+        target_node_id TEXT,
+        source_handle TEXT,
+        created_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_session_flows (
+        session_id TEXT PRIMARY KEY,
+        flow_id TEXT,
+        current_node_id TEXT,
+        state_data TEXT,
+        is_paused INTEGER DEFAULT 0,
+        last_executed_at TEXT,
+        created_at TEXT
+      );
     `;
 
     const statements = sql.split(';').map(s => s.trim()).filter(s => s);
@@ -179,6 +218,9 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
     }
     // Safely apply migrations for existing D1 databases
     try {
+      await db.exec(`ALTER TABLE users ADD COLUMN billing_cycle_anchor TEXT;`);
+    } catch (_) {}
+    try {
       await db.exec(`ALTER TABLE ai_providers ADD COLUMN model_reasoning TEXT;`);
     } catch (_) {}
     try {
@@ -186,6 +228,39 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
     } catch (_) {}
     try {
       await db.exec(`ALTER TABLE page_connections ADD COLUMN is_instagram_active INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS dm_flows (
+          id TEXT PRIMARY KEY, user_id TEXT, name TEXT, description TEXT,
+          is_active INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT
+        );
+      `);
+    } catch (_) {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS dm_flow_nodes (
+          id TEXT PRIMARY KEY, flow_id TEXT, type TEXT, data TEXT,
+          position TEXT, created_at TEXT
+        );
+      `);
+    } catch (_) {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS dm_flow_edges (
+          id TEXT PRIMARY KEY, flow_id TEXT, source_node_id TEXT,
+          target_node_id TEXT, source_handle TEXT, created_at TEXT
+        );
+      `);
+    } catch (_) {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_session_flows (
+          session_id TEXT PRIMARY KEY, flow_id TEXT, current_node_id TEXT,
+          state_data TEXT, is_paused INTEGER DEFAULT 0, last_executed_at TEXT,
+          created_at TEXT
+        );
+      `);
     } catch (_) {}
     d1Initialized = true;
     console.log('[D1] Database initialized successfully');
@@ -258,7 +333,7 @@ export async function getUserRecord(
   try {
     const { data, error } = await supabase
       .from('users')
-      .select('settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement')
+      .select('settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor')
       .eq('id', userId)
       .maybeSingle();
 
@@ -266,8 +341,8 @@ export async function getUserRecord(
     if (data) {
       // Replicate on read
       await db.prepare(
-        `INSERT OR REPLACE INTO users (id, settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO users (id, settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           userId,
@@ -278,7 +353,8 @@ export async function getUserRecord(
           data.allowed_channels ?? null,
           data.created_at ?? null,
           data.monthly_token_limit ?? null,
-          data.strict_token_enforcement ? 1 : 0
+          data.strict_token_enforcement ? 1 : 0,
+          data.billing_cycle_anchor ?? null
         )
           .run();
       return data;
@@ -305,7 +381,8 @@ export async function getUserRecord(
     allowed_channels: row.allowed_channels,
     created_at: row.created_at,
     monthly_token_limit: row.monthly_token_limit,
-    strict_token_enforcement: row.strict_token_enforcement === 1
+    strict_token_enforcement: row.strict_token_enforcement === 1,
+    billing_cycle_anchor: row.billing_cycle_anchor
   };
 }
 
@@ -950,6 +1027,14 @@ export async function storeIncomingMessageFallback(
   if (supabaseResult) {
     finalSessionId = supabaseResult.sessionId;
     botPaused = supabaseResult.botPaused;
+    
+    // Cache the Supabase session in D1
+    await db.prepare(
+      `INSERT OR REPLACE INTO chat_sessions (id, user_id, page_id, sender_id, bot_paused, unread_count, last_message_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?)`
+    )
+      .bind(finalSessionId, userId, pageId, senderId, botPaused ? 1 : 0, now)
+      .run();
   } else {
     // Determine or create session in D1
     const localSession = await db.prepare(

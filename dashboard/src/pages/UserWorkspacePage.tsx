@@ -309,18 +309,21 @@ export default function UserWorkspacePage() {
       const messageCount = (sessionsRes.data || []).reduce((acc: number, s: any) => acc + (s.message_count || 0), 0);
       const totalMonthTokens = (messagesRes.data || []).reduce((acc: number, m: any) => acc + (m.token_count || 0), 0);
 
-      // Enrich with doc page assignments
-      const docIds = (docsRes.data || []).map((d: any) => d.id);
+      // Enrich with folder page assignments
       let assignmentMap: Record<string, string[]> = {};
-      if (docIds.length > 0) {
-        const { data: assignments } = await supabase.from('document_page_assignments').select('document_id, page_id').in('document_id', docIds);
+      const folderIds = (docsRes.data || []).map((d: any) => d.folder_id).filter(Boolean);
+      if (folderIds.length > 0) {
+        const { data: assignments } = await supabase.from('folder_page_assignments').select('folder_id, page_id').in('folder_id', folderIds);
         for (const a of (assignments || [])) {
-          if (!assignmentMap[a.document_id]) assignmentMap[a.document_id] = [];
-          assignmentMap[a.document_id].push(a.page_id);
+          if (!assignmentMap[a.folder_id]) assignmentMap[a.folder_id] = [];
+          assignmentMap[a.folder_id].push(a.page_id);
         }
       }
 
-      const enrichedDocs = (docsRes.data || []).map((d: any) => ({ ...d, assignedPageIds: assignmentMap[d.id] || [] }));
+      const enrichedDocs = (docsRes.data || []).map((d: any) => ({ 
+        ...d, 
+        assignedPageIds: d.folder_id ? (assignmentMap[d.folder_id] || []) : [] 
+      }));
 
       setUserData({
         ...user,

@@ -421,6 +421,47 @@ const copilotTools: AITool[] = [
         required: ['post_id', 'updates']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_dm_flow',
+      description: 'Creates a visual multi-step message flow (sequence) for Messenger, Instagram, or WhatsApp. Nodes contain data for text, buttons, delays, conditions, or actions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Name of the flow.' },
+          description: { type: 'string', description: 'Helpful description of what the flow does.' },
+          nodes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Unique string ID for the node.' },
+                type: { type: 'string', enum: ['message', 'interactive', 'delay', 'condition', 'action', 'ai_route', 'capture_input', 'lead_webhook', 'randomizer', 'goto_flow'] },
+                data: { type: 'object', description: 'Config data for the node (text, buttons, quickReplies, delaySeconds, conditionKey, actionType).' }
+              },
+              required: ['id', 'type', 'data']
+            },
+            description: 'List of node blocks.'
+          },
+          edges: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                source_node_id: { type: 'string' },
+                target_node_id: { type: 'string' },
+                source_handle: { type: 'string', description: 'Handle link (e.g. default, true, false, or button payload).' }
+              },
+              required: ['source_node_id', 'target_node_id']
+            },
+            description: 'List of edge connections between blocks.'
+          }
+        },
+        required: ['name', 'nodes', 'edges']
+      }
+    }
   }
 ];
 
@@ -1204,6 +1245,44 @@ Ensure you output valid JSON only.`;
             .eq('user_id', userId);
           if (error) throw error;
           resultStr = `Successfully modified calendar for post ${args.post_id}.`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'create_dm_flow') {
+          const { data: flow, error: fErr } = await supabase
+            .from('dm_flows')
+            .insert({
+              user_id: userId,
+              name: args.name,
+              description: args.description || null,
+              is_active: true
+            })
+            .select('id')
+            .single();
+
+          if (fErr || !flow) throw new Error(`Failed to create flow: ${fErr?.message}`);
+
+          const nodesToInsert = args.nodes.map((n: any) => ({
+            flow_id: flow.id,
+            id: n.id,
+            type: n.type,
+            data: n.data,
+            position: n.position || { x: 0, y: 0 }
+          }));
+
+          const { error: nErr } = await supabase.from('dm_flow_nodes').insert(nodesToInsert);
+          if (nErr) throw nErr;
+
+          const edgesToInsert = args.edges.map((e: any) => ({
+            flow_id: flow.id,
+            source_node_id: e.source_node_id,
+            target_node_id: e.target_node_id,
+            source_handle: e.source_handle || 'default'
+          }));
+
+          const { error: eErr } = await supabase.from('dm_flow_edges').insert(edgesToInsert);
+          if (eErr) throw eErr;
+
+          resultStr = `Successfully created flow "${args.name}" with ID: ${flow.id}.`;
           databaseUpdated = true;
         }
         else if (fnName === 'update_system_prompt') {

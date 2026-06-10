@@ -266,7 +266,7 @@ export default function ProviderList({ providers, onEdit, onRefresh }: ProviderL
               <div className="list-item-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 600, fontSize: '15px' }}>{p.display_name}</span>
                 {p.is_active_chat && (
-                  <span style={{ fontSize: '10px', background: 'rgba(249, 115, 22, 0.15)', color: 'var(--accent-primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                  <span style={{ fontSize: '10px', background: '#22c55e', color: '#fff', padding: '3px 8px', borderRadius: '4px', fontWeight: 'bold', boxShadow: '0 2px 6px rgba(34, 197, 94, 0.4)' }}>
                     Primary Chat
                   </span>
                 )}
@@ -276,7 +276,7 @@ export default function ProviderList({ providers, onEdit, onRefresh }: ProviderL
                   </span>
                 )}
                 {p.is_active_summarization && (
-                  <span style={{ fontSize: '10px', background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                  <span style={{ fontSize: '10px', background: 'rgba(249, 115, 22, 0.15)', color: '#f97316', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
                     Active Summarize
                   </span>
                 )}

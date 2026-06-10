@@ -211,3 +211,82 @@ export interface PageConnection {
   instagram_account_id?: string | null;
   is_instagram_active?: boolean;
 }
+
+/**
+ * Flow and Automation Engine Types
+ */
+export interface DMFlow {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DMFlowNode {
+  id: string;
+  flow_id: string;
+  type: 'message' | 'interactive' | 'delay' | 'condition' | 'action' | 'ai_route' | 'capture_input' | 'lead_webhook' | 'randomizer' | 'goto_flow';
+  data: {
+    text?: string;
+    mediaUrl?: string;
+    mediaType?: 'image' | 'video' | 'audio' | 'file';
+    buttons?: Array<{
+      type: 'web_url' | 'postback' | 'phone_number';
+      title: string;
+      url?: string;
+      payload?: string;
+    }>;
+    quickReplies?: Array<{
+      title: string;
+      payload: string;
+    }>;
+    whatsappType?: 'button' | 'list';
+    whatsappButtons?: Array<{
+      id: string;
+      title: string;
+    }>;
+    whatsappList?: {
+      buttonText: string;
+      sections: Array<{
+        title: string;
+        rows: Array<{
+          id: string;
+          title: string;
+          description?: string;
+        }>;
+      }>;
+    };
+    delaySeconds?: number;
+    delayType?: 'short' | 'long';
+    conditionKey?: string;
+    conditionValue?: string;
+    conditionOperator?: 'equals' | 'contains' | 'exists';
+    actionType?: 'add_tag' | 'remove_tag' | 'set_attribute' | 'pause_bot' | 'resume_bot' | 'trigger_webhook';
+    actionParams?: Record<string, any>;
+  };
+  position?: { x: number; y: number } | null;
+  created_at: string;
+}
+
+export interface DMFlowEdge {
+  id: string;
+  flow_id: string;
+  source_node_id: string;
+  target_node_id: string;
+  source_handle: string | null;
+  created_at: string;
+}
+
+export interface ChatSessionFlow {
+  session_id: string;
+  flow_id: string;
+  current_node_id: string | null;
+  state_data: Record<string, any>;
+  is_paused: boolean;
+  last_executed_at: string;
+  created_at: string;
+}
+

@@ -2,6 +2,7 @@
 // Cron Scheduled Post Publisher & Token Health Monitor
 // ============================================================================
 
+import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { publishToFacebook, publishToInstagram } from './media-uploader';
 
@@ -236,4 +237,88 @@ async function publishComment(accessToken: string, parentId: string, message: st
 
   const data: any = await res.json();
   return data.id;
+}
+
+export async function cleanupOrphanedStorageAssets(supabase: SupabaseClient): Promise<void> {
+  try {
+    const supabaseUrl = (supabase as any).supabaseUrl;
+    const supabaseKey = (supabase as any).supabaseKey;
+    if (!supabaseUrl || !supabaseKey) return;
+
+    // Create a client focused on the storage schema
+    const storageDbClient = createClient(supabaseUrl, supabaseKey, {
+      db: { schema: 'storage' }
+    });
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    // 1. Fetch files in 'media_assets' bucket older than 7 days
+    const { data: objects, error: objErr } = await storageDbClient
+      .from('objects')
+      .select('name, created_at')
+      .eq('bucket_id', 'media_assets')
+      .lt('created_at', sevenDaysAgo)
+      .limit(100); // Process in batches of 100
+
+    if (objErr || !objects || objects.length === 0) {
+      if (objErr) console.error('[Storage Cleanup] Failed to fetch storage objects:', objErr.message);
+      return;
+    }
+
+    console.log(`[Storage Cleanup] Auditing ${objects.length} assets older than 7 days for orphans...`);
+
+    // 2. Fetch all active references from DB
+    const { data: chatAssets } = await supabase.from('chat_assets').select('file_url');
+    const { data: posts } = await supabase.from('scheduled_posts').select('media_urls').not('media_urls', 'is', null);
+    const { data: rules } = await supabase.from('comment_rules').select('attachment_urls, dm_attachment_urls');
+
+    // Extract all referenced URLs
+    const activeUrls = new Set<string>();
+    if (chatAssets) {
+      chatAssets.forEach(a => { if (a.file_url) activeUrls.add(a.file_url); });
+    }
+    if (posts) {
+      posts.forEach(p => {
+        if (p.media_urls && Array.isArray(p.media_urls)) {
+          p.media_urls.forEach(url => activeUrls.add(url));
+        }
+      });
+    }
+    if (rules) {
+      rules.forEach(r => {
+        if (r.attachment_urls && Array.isArray(r.attachment_urls)) {
+          r.attachment_urls.forEach((url: string) => activeUrls.add(url));
+        }
+        if (r.dm_attachment_urls && Array.isArray(r.dm_attachment_urls)) {
+          r.dm_attachment_urls.forEach((url: string) => activeUrls.add(url));
+        }
+      });
+    }
+
+    // 3. Identify and delete orphans
+    const pathsToDelete: string[] = [];
+    for (const obj of objects) {
+      const publicUrl = `${supabaseUrl}/storage/v1/object/public/media_assets/${obj.name}`;
+      if (!activeUrls.has(publicUrl)) {
+        pathsToDelete.push(obj.name);
+      }
+    }
+
+    if (pathsToDelete.length > 0) {
+      console.log(`[Storage Cleanup] Deleting ${pathsToDelete.length} orphaned storage files:`, pathsToDelete);
+      const { error: removeErr } = await supabase.storage
+        .from('media_assets')
+        .remove(pathsToDelete);
+      
+      if (removeErr) {
+        console.error('[Storage Cleanup] Error removing files from bucket:', removeErr.message);
+      } else {
+        console.log('[Storage Cleanup] Successfully purged orphaned files.');
+      }
+    } else {
+      console.log('[Storage Cleanup] No orphaned files found to purge.');
+    }
+  } catch (err: any) {
+    console.error('[Storage Cleanup] Error running sweeper:', err.message);
+  }
 }

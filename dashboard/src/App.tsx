@@ -23,9 +23,14 @@ import StorePage from './pages/StorePage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ContentPlannerPage from './pages/ContentPlannerPage';
 import AutoModerationPage from './pages/AutoModerationPage';
+import AutoModerationRuleEditPage from './pages/AutoModerationRuleEditPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import ChatAssetsPage from './pages/ChatAssetsPage';
+import FlowsPage from './pages/FlowsPage';
+import FlowBuilderPage from './pages/FlowBuilderPage';
+import ActivityMonitorPage from './pages/ActivityMonitorPage';
+
 
 import type { ReactNode } from 'react';
 
@@ -66,8 +71,8 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
  * Route guard for admin pages — accessible by both admin and super_admin.
  */
 function AdminRoute({ children }: { children: ReactNode }) {
-  const { isAdmin } = useAuth();
-  if (!isAdmin) return <Navigate to="/" replace />;
+  const { isSuperAdmin } = useAuth();
+  if (!isSuperAdmin) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -81,8 +86,8 @@ function PublicRoute({ children }: { children: ReactNode }) {
 }
 
 function DashboardRouter() {
-  const { isAdmin } = useAuth();
-  if (isAdmin) {
+  const { isSuperAdmin } = useAuth();
+  if (isSuperAdmin) {
     return <Navigate to="/super-stats" replace />;
   }
   return <DashboardPage />;
@@ -112,8 +117,13 @@ export default function App() {
               <Route path="/sandbox" element={<SandboxPage />} />
               <Route path="/planner" element={<ContentPlannerPage />} />
               <Route path="/moderation" element={<AutoModerationPage />} />
+              <Route path="/moderation/new" element={<AutoModerationRuleEditPage />} />
+              <Route path="/moderation/edit/:ruleId" element={<AutoModerationRuleEditPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/activity" element={<ActivityMonitorPage />} />
+              <Route path="/flows" element={<FlowsPage />} />
+              <Route path="/flows/:flowId" element={<FlowBuilderPage />} />
               <Route path="/agent" element={<Navigate to="/" replace />} />
               <Route path="/store" element={<StorePage />} />
               {/* Admin routes — accessible by admin AND super_admin */}

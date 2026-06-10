@@ -286,8 +286,12 @@ export default function ChatAssetsPage() {
               {assets.map(asset => (
                 <tr key={asset.id}>
                   <td>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', borderRadius: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-light)' }}>
-                      {getIcon(asset.file_type)}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px', borderRadius: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-light)', overflow: 'hidden' }}>
+                      {asset.file_type === 'image' ? (
+                        <img src={asset.file_url} alt={asset.friendly_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        getIcon(asset.file_type)
+                      )}
                     </div>
                   </td>
                   <td>
@@ -370,7 +374,7 @@ export default function ChatAssetsPage() {
       {/* Upload/Creation Modal */}
       {showModal && (
         <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-          <div className="modal animate-scaleUp" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-primary)', padding: '24px', borderRadius: '16px', maxWidth: '500px', width: '100%', margin: '16px' }}>
+          <div className="modal animate-scaleUp" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-primary)', padding: '24px', borderRadius: '16px', maxWidth: '500px', width: '100%', margin: '16px', maxHeight: '90vh', overflowY: 'auto' }}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2>Upload Chat Asset</h2>
               <button className="btn-ghost btn-icon" onClick={() => setShowModal(false)}><X size={18} /></button>
@@ -398,13 +402,17 @@ export default function ChatAssetsPage() {
                       <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Uploading to secure vault...</span>
                     </>
                   ) : fileUrl ? (
-                    <>
-                      <Check size={24} style={{ color: 'var(--success)' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                      {fileType === 'image' ? (
+                        <img src={fileUrl} alt="Preview" style={{ width: '80px', height: '80px', borderRadius: '8px', objectFit: 'cover', border: '1px solid var(--border-primary)' }} />
+                      ) : (
+                        <Check size={24} style={{ color: 'var(--success)' }} />
+                      )}
                       <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>File uploaded successfully!</span>
                       <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', wordBreak: 'break-all', maxWidth: '200px' }} title={fileUrl}>
                         {fileUrl.substring(fileUrl.lastIndexOf('/') + 1)}
                       </span>
-                    </>
+                    </div>
                   ) : (
                     <>
                       <FileText size={24} style={{ color: 'var(--text-secondary)' }} />

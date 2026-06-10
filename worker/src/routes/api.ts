@@ -9,6 +9,7 @@ import { processDocument } from '../rag';
 import { handleAgentChat } from '../agent';
 import { processAutopilotConfig } from '../comments/autopilot';
 import { runSchedulerJobs } from '../scheduler';
+import { sendCommentReply, likeComment, hideComment, deleteComment } from '../comments/meta-api';
 
 const api = new Hono<AppEnv>();
 
@@ -223,7 +224,6 @@ api.post('/agent/chat', async (c) => {
  
     if (agent_usage_month !== currentMonth) {
       agent_queries_used = 0;
-      agent_extra_queries = 0; // Extra queries expire at the end of the month
       agent_usage_month = currentMonth;
     }
  
@@ -513,14 +513,14 @@ api.post('/admin/impersonate', async (c) => {
 
     const supabase = createSupabaseAdmin(c.env);
 
-    // 1. Verify caller is admin or super_admin
+    // 1. Verify caller is super_admin
     const { data: caller } = await supabase
       .from('users')
       .select('role')
       .eq('id', authUser.id)
       .single();
 
-    if (!caller || !['admin', 'super_admin'].includes(caller.role)) {
+    if (!caller || caller.role !== 'super_admin') {
       return c.json({ error: 'Insufficient permissions' }, 403);
     }
 
@@ -606,6 +606,184 @@ api.post('/scheduler/run', async (c) => {
     return c.json({ success: true });
   } catch (error: any) {
     console.error('[Scheduler Route Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.get('/page-posts/:pageId', async (c) => {
+  try {
+    const pageId = c.req.param('pageId');
+    const authUser = c.get('authUser');
+    
+    if (!authUser || !authUser.id) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const supabase = createSupabaseAdmin(c.env);
+    
+    // Fetch the page connection to get the access token and verify ownership
+    const { data: pageConnection, error } = await supabase
+      .from('page_connections')
+      .select('access_token, user_id')
+      .eq('page_id', pageId)
+      .single();
+      
+    if (error || !pageConnection) {
+      return c.json({ error: 'Page connection not found' }, 404);
+    }
+    
+    // Verify tenant ownership
+    if (pageConnection.user_id !== authUser.id) {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+    
+    // Fetch posts from Facebook Graph API
+    const fbUrl = `https://graph.facebook.com/v25.0/${pageId}/posts?fields=id,message,created_time,full_picture&limit=25&access_token=${pageConnection.access_token}`;
+    const fbResponse = await fetch(fbUrl);
+    
+    if (!fbResponse.ok) {
+      const errText = await fbResponse.text();
+      throw new Error(`Failed to fetch posts from Facebook: ${errText}`);
+    }
+    
+    const fbData = await fbResponse.json() as any;
+    const posts = (fbData.data || []).map((post: any) => ({
+      id: post.id,
+      message: post.message || '[No text]',
+      created_time: post.created_time,
+      picture: post.full_picture || null
+    }));
+    
+    return c.json({ posts });
+  } catch (error: any) {
+    console.error('[Fetch Page Posts Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/comment/reply', async (c) => {
+  try {
+    const { commentId, pageId, message } = await c.req.json();
+    const authUser = c.get('authUser');
+    
+    if (!authUser || !authUser.id) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const supabase = createSupabaseAdmin(c.env);
+    
+    // Fetch the page connection to get the access token and verify ownership
+    const { data: pageConnection, error } = await supabase
+      .from('page_connections')
+      .select('access_token, user_id')
+      .eq('page_id', pageId)
+      .single();
+      
+    if (error || !pageConnection) {
+      return c.json({ error: 'Page connection not found' }, 404);
+    }
+    
+    // Verify tenant ownership
+    if (pageConnection.user_id !== authUser.id) {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    // Call Facebook Graph API to reply
+    const result = await sendCommentReply(pageConnection.access_token, commentId, message);
+
+    // Save to comment_logs / update the action_taken and reply_message
+    await supabase.from('comment_logs')
+      .update({
+        action_taken: 'replied',
+        reply_message: message
+      })
+      .eq('comment_id', commentId);
+
+    return c.json({ success: true, result });
+  } catch (error: any) {
+    console.error('[Comment Reply Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/comment/like', async (c) => {
+  try {
+    const { commentId, pageId } = await c.req.json();
+    const authUser = c.get('authUser');
+    if (!authUser || !authUser.id) return c.json({ error: 'Unauthorized' }, 401);
+    
+    const supabase = createSupabaseAdmin(c.env);
+    const { data: pageConnection, error } = await supabase
+      .from('page_connections')
+      .select('access_token, user_id')
+      .eq('page_id', pageId)
+      .single();
+      
+    if (error || !pageConnection) return c.json({ error: 'Page connection not found' }, 404);
+    if (pageConnection.user_id !== authUser.id) return c.json({ error: 'Forbidden' }, 403);
+
+    const result = await likeComment(pageConnection.access_token, commentId);
+    return c.json({ success: true, result });
+  } catch (error: any) {
+    console.error('[Comment Like Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/comment/hide', async (c) => {
+  try {
+    const { commentId, pageId } = await c.req.json();
+    const authUser = c.get('authUser');
+    if (!authUser || !authUser.id) return c.json({ error: 'Unauthorized' }, 401);
+    
+    const supabase = createSupabaseAdmin(c.env);
+    const { data: pageConnection, error } = await supabase
+      .from('page_connections')
+      .select('access_token, user_id')
+      .eq('page_id', pageId)
+      .single();
+      
+    if (error || !pageConnection) return c.json({ error: 'Page connection not found' }, 404);
+    if (pageConnection.user_id !== authUser.id) return c.json({ error: 'Forbidden' }, 403);
+
+    const result = await hideComment(pageConnection.access_token, commentId);
+
+    await supabase.from('comment_logs')
+      .update({ action_taken: 'hidden' })
+      .eq('comment_id', commentId);
+
+    return c.json({ success: true, result });
+  } catch (error: any) {
+    console.error('[Comment Hide Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/comment/delete', async (c) => {
+  try {
+    const { commentId, pageId } = await c.req.json();
+    const authUser = c.get('authUser');
+    if (!authUser || !authUser.id) return c.json({ error: 'Unauthorized' }, 401);
+    
+    const supabase = createSupabaseAdmin(c.env);
+    const { data: pageConnection, error } = await supabase
+      .from('page_connections')
+      .select('access_token, user_id')
+      .eq('page_id', pageId)
+      .single();
+      
+    if (error || !pageConnection) return c.json({ error: 'Page connection not found' }, 404);
+    if (pageConnection.user_id !== authUser.id) return c.json({ error: 'Forbidden' }, 403);
+
+    const result = await deleteComment(pageConnection.access_token, commentId);
+
+    await supabase.from('comment_logs')
+      .update({ action_taken: 'trashed' })
+      .eq('comment_id', commentId);
+
+    return c.json({ success: true, result });
+  } catch (error: any) {
+    console.error('[Comment Delete Error]:', error);
     return c.json({ error: error.message }, 500);
   }
 });

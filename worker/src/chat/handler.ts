@@ -48,6 +48,7 @@ export interface ChatHandlerResult {
     fileType: 'image' | 'video' | 'audio' | 'file';
     facebookMediaId?: string;
   };
+  flowId?: string;
 }
 
 /**
@@ -335,7 +336,8 @@ export async function handleChatMessage(
       const response = await callChatCompletion(visionProvider, visionMessages, { maxTokens: 1024 });
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't analyze the image. Please try again.";
       
-      const { finalReply, attachment } = await extractDynamicAttachment(reply, userId, supabase, db);
+      const { finalReply: replyAfterAttach, attachment } = await extractDynamicAttachment(reply, userId, supabase, db);
+      const { finalReply, flowId } = await extractDynamicFlowTrigger(replyAfterAttach, userId, supabase, db);
 
       const msgMetadata: any = {
         provider: visionProvider.providerName,
@@ -358,7 +360,8 @@ export async function handleChatMessage(
         ragUsed: false, 
         provider: visionProvider.providerName, 
         model: visionProvider.modelChat,
-        attachment
+        attachment,
+        flowId
       };
     } catch (err: any) {
       const errMsg = err?.message || String(err);
@@ -467,7 +470,8 @@ export async function handleChatMessage(
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't generate a response. Please try again.";
       const tokensUsed = response.usage?.total_tokens;
 
-      const { finalReply, attachment } = await extractDynamicAttachment(reply, userId, supabase, db);
+      const { finalReply: replyAfterAttach, attachment } = await extractDynamicAttachment(reply, userId, supabase, db);
+      const { finalReply, flowId } = await extractDynamicFlowTrigger(replyAfterAttach, userId, supabase, db);
 
       const msgMetadata: any = {
         provider: chatProvider.providerName,
@@ -493,7 +497,8 @@ export async function handleChatMessage(
         ragUsed,
         provider: executionProvider.providerName,
         model: executionProvider.modelChat,
-        attachment
+        attachment,
+        flowId
       };
     } catch (error) {
       if (error instanceof AIProviderError) {
@@ -668,3 +673,45 @@ async function extractDynamicAttachment(
 
   return { finalReply, attachment: matchedAttachment };
 }
+
+/**
+ * Helper to check and extract dynamic flow triggers of the format [StartFlow: flow_name] from the reply.
+ */
+async function extractDynamicFlowTrigger(
+  reply: string,
+  userId: string,
+  supabase: SupabaseClient,
+  db?: D1Database
+): Promise<{ finalReply: string; flowId?: string }> {
+  let finalReply = reply;
+  let flowId: string | undefined = undefined;
+
+  const startFlowRegex = /\[StartFlow:\s*([a-zA-Z0-9_-]+)\s*\]/i;
+  const match = finalReply.match(startFlowRegex);
+  if (match) {
+    const flowName = match[1];
+    console.log(`[Chat] Dynamic flow trigger tag detected: ${flowName}`);
+
+    try {
+      const { data } = await supabase
+        .from('dm_flows')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('name', flowName)
+        .maybeSingle();
+
+      if (data) {
+        flowId = data.id;
+      } else {
+        console.warn(`[Chat] Dynamic flow trigger '${flowName}' did not match any active flow.`);
+      }
+    } catch (err) {
+      console.error('[Chat] Error querying dm_flows details:', err);
+    }
+
+    finalReply = finalReply.replace(startFlowRegex, '').trim();
+  }
+
+  return { finalReply, flowId };
+}
+

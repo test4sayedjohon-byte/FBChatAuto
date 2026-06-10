@@ -20,7 +20,9 @@ import {
   Zap,
   Link2,
   BarChart3,
-  Paperclip
+  Paperclip,
+  GitBranch,
+  Eye
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -29,13 +31,13 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
-  const { user, profile, isAdmin, isSuperAdmin, signOut } = useAuth();
+  const { user, profile, isSuperAdmin, signOut } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [pendingPurchases, setPendingPurchases] = useState(0);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (isSuperAdmin) {
       loadPendingPurchases();
       
       // Optional: Set up real-time subscription for purchases
@@ -85,7 +87,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       </div>
 
       <nav className="sidebar-nav">
-        {!isAdmin && (
+        {!isSuperAdmin && (
           <>
             <span className="sidebar-section-label">Main</span>
 
@@ -97,6 +99,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             <NavLink to="/inbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <MessageSquare className="nav-icon" />
               Inbox
+            </NavLink>
+
+            <NavLink to="/activity" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Eye className="nav-icon" />
+              Activity Monitor
             </NavLink>
 
             <NavLink to="/sandbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
@@ -131,6 +138,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               Auto-Moderation
             </NavLink>
 
+            <NavLink to="/flows" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <GitBranch className="nav-icon" />
+              DM Flow Builder
+            </NavLink>
+
             <NavLink to="/integrations" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Link2 className="nav-icon" />
               Integrations
@@ -143,10 +155,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           </>
         )}
 
-        {isAdmin && (
+        {isSuperAdmin && (
           <>
             <span className="sidebar-section-label">
-              {isSuperAdmin ? 'Super Admin' : 'Admin'}
+              Super Admin
             </span>
             <NavLink to="/super-stats" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <LayoutDashboard className="nav-icon" />
@@ -177,7 +189,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           </>
         )}
 
-        {!isAdmin && (
+        {!isSuperAdmin && (
           <>
             <span className="sidebar-section-label">Settings</span>
 

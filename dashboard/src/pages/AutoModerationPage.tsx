@@ -1,18 +1,26 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
-import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save } from 'lucide-react';
+import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save, Edit2 } from 'lucide-react';
 
 interface Rule {
   id: string;
   trigger_type: string;
   keywords: string[] | null;
   sentiment_target: string | null;
+  ai_custom_criteria?: string | null;
+  use_dynamic_ai_reply?: boolean;
   action_to_take: string;
   reply_templates: string[] | null;
+  dm_reply_templates?: string[] | null;
   is_active: boolean;
   page_connection_id: string;
+  attachment_urls?: string[] | null;
+  dm_attachment_urls?: string[] | null;
+  post_id?: string | null;
+  dm_flow_id?: string | null;
 }
 
 interface CommentLog {
@@ -34,22 +42,51 @@ interface Channel {
   page_name: string;
 }
 
+interface ChatAsset {
+  id: string;
+  name: string;
+  friendly_name: string;
+  file_url: string;
+  file_type: string;
+}
+
 export default function AutoModerationPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [rules, setRules] = useState<Rule[]>([]);
   const [logs, setLogs] = useState<CommentLog[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [chatAssets, setChatAssets] = useState<ChatAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  
+  // DM Flow selection states
+  const [flows, setFlows] = useState<{ id: string; name: string; is_active: boolean }[]>([]);
+  const [responseType, setResponseType] = useState<'text' | 'flow'>('text');
+  const [selectedDmFlowId, setSelectedDmFlowId] = useState<string>('');
+
 
   // Rule Creator State
   const [selectedChannel, setSelectedChannel] = useState('');
   const [triggerType, setTriggerType] = useState('keywords');
   const [keywordsInput, setKeywordsInput] = useState('');
+  const [keywords, setKeywords] = useState<string[]>([]);
   const [sentimentTarget, setSentimentTarget] = useState('negative');
-  const [actionToTake, setActionToTake] = useState('hide');
+  const [selectedActions, setSelectedActions] = useState<string[]>(['hide']);
+  const [selectedAttachments, setSelectedAttachments] = useState<string[]>([]);
+  const [selectedDmAttachments, setSelectedDmAttachments] = useState<string[]>([]);
   const [replyInput, setReplyInput] = useState('');
+  const [dmReplyInput, setDmReplyInput] = useState('');
+  const [aiCustomCriteria, setAiCustomCriteria] = useState('');
+  const [useDynamicAiReply, setUseDynamicAiReply] = useState(false);
+
+  // Post Selector State
+  const [posts, setPosts] = useState<{ id: string; message: string; created_time: string; picture: string | null }[]>([]);
+  const [selectedPostId, setSelectedPostId] = useState('');
+  const [applyToPostType, setApplyToPostType] = useState('global');
+  const [loadingPosts, setLoadingPosts] = useState(false);
 
   // Autopilot Drawer State
   const [showAutopilot, setShowAutopilot] = useState(false);
@@ -58,6 +95,29 @@ export default function AutoModerationPage() {
     { sender: 'bot', text: 'Hi! I am your AI Autopilot Configurator. Tell me what automation rule you want to set up in plain English (e.g. "If someone comments price, reply to check DMs and hide it").' }
   ]);
   const [sendingAutopilot, setSendingAutopilot] = useState(false);
+
+  async function fetchPagePosts(pageId: string) {
+    if (!pageId) return;
+    try {
+      setLoadingPosts(true);
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data.session?.access_token || '';
+      
+      const response = await fetch(`http://localhost:8787/api/page-posts/${pageId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!response.ok) throw new Error('Failed to fetch posts');
+      const data = await response.json() as any;
+      setPosts(data.posts || []);
+    } catch (err: any) {
+      console.error('Error fetching page posts:', err);
+      setPosts([]);
+    } finally {
+      setLoadingPosts(false);
+    }
+  }
 
   useEffect(() => {
     if (user) {
@@ -76,9 +136,20 @@ export default function AutoModerationPage() {
       const { data: channelsData } = await supabase
         .from('page_connections')
         .select('page_id, page_name, whatsapp_phone_number_id');
+      // Fetch chat assets
+      const { data: chatAssetsData } = await supabase
+        .from('chat_assets')
+        .select('id, name, friendly_name, file_url, file_type');
+      // Fetch DM flows
+      const { data: flowsData } = await supabase
+        .from('dm_flows')
+        .select('id, name, is_active');
 
       setRules(rulesData || []);
       setLogs(logsData || []);
+      setChatAssets(chatAssetsData || []);
+      setFlows(flowsData || []);
+
       
       const filteredChannels = (channelsData || [])
         .filter((c: any) => !c.whatsapp_phone_number_id)
@@ -97,33 +168,108 @@ export default function AutoModerationPage() {
     setSaving(true);
 
     try {
-      const { error } = await supabase
-        .from('comment_rules')
-        .insert({
-          user_id: user.id,
-          page_connection_id: selectedChannel,
-          trigger_type: triggerType,
-          keywords: triggerType === 'keywords' ? keywordsInput.split(',').map(k => k.trim()).filter(k => k) : null,
-          sentiment_target: triggerType === 'ai_sentiment' ? sentimentTarget : null,
-          action_to_take: actionToTake,
-          reply_templates: replyInput.trim() ? [replyInput.trim()] : null,
-          is_active: true
-        });
+      let finalKeywords = [...keywords];
+      if (keywordsInput.trim()) {
+        const word = keywordsInput.trim();
+        if (!finalKeywords.includes(word)) {
+          finalKeywords.push(word);
+        }
+      }
 
-      if (error) throw error;
+      if (triggerType === 'keywords' && finalKeywords.length === 0) {
+        throw new Error('Please specify at least one keyword.');
+      }
 
-      toast.success('Moderation rule connected successfully!');
+      if (triggerType === 'ai_custom' && !aiCustomCriteria.trim()) {
+        throw new Error('Please specify the custom AI trigger criteria.');
+      }
+
+      if (selectedActions.length === 0) {
+        throw new Error('Please select at least one action.');
+      }
+
+      if (editingRuleId) {
+        const { error } = await supabase
+          .from('comment_rules')
+          .update({
+            page_connection_id: selectedChannel,
+            trigger_type: triggerType,
+            keywords: triggerType === 'keywords' ? finalKeywords : null,
+            sentiment_target: triggerType === 'ai_sentiment' ? sentimentTarget : null,
+            ai_custom_criteria: triggerType === 'ai_custom' ? aiCustomCriteria.trim() : null,
+            use_dynamic_ai_reply: selectedActions.includes('reply') ? useDynamicAiReply : false,
+            action_to_take: selectedActions.join(','),
+            reply_templates: selectedActions.includes('reply') && !useDynamicAiReply && replyInput.trim() ? [replyInput.trim()] : null,
+            dm_reply_templates: selectedActions.includes('dm') && responseType === 'text' && dmReplyInput.trim() ? [dmReplyInput.trim()] : null,
+            attachment_urls: selectedActions.includes('reply') && selectedAttachments.length > 0 ? selectedAttachments : null,
+            dm_attachment_urls: selectedActions.includes('dm') && responseType === 'text' && selectedDmAttachments.length > 0 ? selectedDmAttachments : null,
+            dm_flow_id: selectedActions.includes('dm') && responseType === 'flow' ? selectedDmFlowId || null : null,
+            post_id: applyToPostType === 'specific' && selectedPostId ? selectedPostId : null,
+          })
+          .eq('id', editingRuleId);
+
+        if (error) throw error;
+        toast.success('Moderation rule updated successfully!');
+      } else {
+        const { error } = await supabase
+          .from('comment_rules')
+          .insert({
+            user_id: user.id,
+            page_connection_id: selectedChannel,
+            trigger_type: triggerType,
+            keywords: triggerType === 'keywords' ? finalKeywords : null,
+            sentiment_target: triggerType === 'ai_sentiment' ? sentimentTarget : null,
+            ai_custom_criteria: triggerType === 'ai_custom' ? aiCustomCriteria.trim() : null,
+            use_dynamic_ai_reply: selectedActions.includes('reply') ? useDynamicAiReply : false,
+            action_to_take: selectedActions.join(','),
+            reply_templates: selectedActions.includes('reply') && !useDynamicAiReply && replyInput.trim() ? [replyInput.trim()] : null,
+            dm_reply_templates: selectedActions.includes('dm') && responseType === 'text' && dmReplyInput.trim() ? [dmReplyInput.trim()] : null,
+            attachment_urls: selectedActions.includes('reply') && selectedAttachments.length > 0 ? selectedAttachments : null,
+            dm_attachment_urls: selectedActions.includes('dm') && responseType === 'text' && selectedDmAttachments.length > 0 ? selectedDmAttachments : null,
+            dm_flow_id: selectedActions.includes('dm') && responseType === 'flow' ? selectedDmFlowId || null : null,
+            post_id: applyToPostType === 'specific' && selectedPostId ? selectedPostId : null,
+            is_active: true
+          });
+
+        if (error) throw error;
+        toast.success('Moderation rule connected successfully!');
+      }
+
       setShowModal(false);
       // Reset Rule Form
+      setEditingRuleId(null);
       setSelectedChannel('');
       setKeywordsInput('');
+      setKeywords([]);
       setReplyInput('');
+      setDmReplyInput('');
+      setResponseType('text');
+      setSelectedDmFlowId('');
+      setAiCustomCriteria('');
+      setUseDynamicAiReply(false);
+
+      setSelectedActions(['hide']);
+      setSelectedAttachments([]);
+      setSelectedDmAttachments([]);
+      setApplyToPostType('global');
+      setSelectedPostId('');
+      setPosts([]);
       loadData();
     } catch (err: any) {
       toast.error('Failed to create rule: ' + err.message);
     } finally {
       setSaving(false);
     }
+  }
+
+
+  function closeModal() {
+    setShowModal(false);
+    setEditingRuleId(null);
+    setResponseType('text');
+    setSelectedDmFlowId('');
+    setAiCustomCriteria('');
+    setUseDynamicAiReply(false);
   }
 
   async function handleToggleRule(rule: Rule) {
@@ -224,7 +370,7 @@ export default function AutoModerationPage() {
           <button className="btn btn-secondary" onClick={() => setShowAutopilot(true)}>
             <Sparkles size={16} style={{ color: 'var(--primary)', marginRight: '4px' }} /> AI Autopilot
           </button>
-          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+          <button className="btn btn-primary" onClick={() => navigate('/moderation/new')}>
             <Plus size={16} /> Create Trigger Rule
           </button>
         </div>
@@ -250,17 +396,73 @@ export default function AutoModerationPage() {
                       <span className="badge" style={{ background: 'rgba(var(--primary-rgb), 0.1)', color: 'var(--primary)', fontSize: '10px' }}>
                         {channelName}
                       </span>
+                      <span className="badge" style={{ 
+                        background: rule.post_id ? 'rgba(139,92,246,0.1)' : 'rgba(107,114,128,0.1)', 
+                        color: rule.post_id ? '#8b5cf6' : 'var(--text-secondary)', 
+                        fontSize: '9px',
+                        fontWeight: 'bold'
+                      }}>
+                        {rule.post_id ? 'Post-Specific' : 'Global'}
+                      </span>
                       <strong style={{ fontSize: '0.9rem' }}>
-                        {rule.trigger_type === 'keywords' ? `Keywords: ${rule.keywords?.join(', ')}` : rule.trigger_type === 'ai_sentiment' ? `AI Sentiment: ${rule.sentiment_target}` : 'All Comments'}
+                        {rule.trigger_type === 'keywords' 
+                          ? `Keywords: ${rule.keywords?.join(', ')}` 
+                          : rule.trigger_type === 'ai_sentiment' 
+                          ? `AI Sentiment: ${rule.sentiment_target}` 
+                          : rule.trigger_type === 'ai_custom'
+                          ? `AI Custom Criteria: "${rule.ai_custom_criteria}"`
+                          : 'All Comments'}
                       </strong>
                     </div>
-                    <div className="list-item-subtitle" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      Action: {rule.action_to_take} {rule.reply_templates && `| Canned Reply: "${rule.reply_templates[0].substring(0, 30)}..."`}
+                    <div className="list-item-subtitle" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: '500' }}>Actions:</span>
+                      {rule.action_to_take.split(',').map((action: string) => {
+                        const colors: Record<string, string> = {
+                          hide: 'rgba(245,158,11,0.15), #f59e0b',
+                          delete: 'rgba(239,68,68,0.15), #ef4444',
+                          like: 'rgba(59,130,246,0.15), #3b82f6',
+                          block: 'rgba(220,38,38,0.2), #dc2626',
+                          reply: 'rgba(16,185,129,0.15), #10b981',
+                          dm: 'rgba(139,92,246,0.15), #8b5cf6',
+                          trash_queue: 'rgba(107,114,128,0.15), #6b7280'
+                        };
+                        const [bg, col] = colors[action] ? colors[action].split(', ') : ['rgba(255,255,255,0.05)', 'var(--text-secondary)'];
+                        return (
+                          <span key={action} style={{ background: bg, color: col, padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 'bold' }}>
+                            {action.toUpperCase()}
+                          </span>
+                        );
+                      })}
+                      {rule.use_dynamic_ai_reply ? (
+                        <span style={{ marginLeft: '4px', color: 'var(--primary)', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                          <Sparkles size={11} /> AI Autopilot Reply
+                        </span>
+                      ) : rule.reply_templates && (
+                        <span style={{ marginLeft: '4px' }}>| Canned Reply: "{rule.reply_templates[0].substring(0, 25)}..."</span>
+                      )}
+                      {rule.dm_flow_id ? (
+                        <span style={{ marginLeft: '4px', color: '#8b5cf6', fontWeight: '500' }}>
+                          | DM Flow: "{flows.find(f => f.id === rule.dm_flow_id)?.name || 'Flow'}"
+                        </span>
+                      ) : rule.dm_reply_templates ? (
+                        <span style={{ marginLeft: '4px' }}>
+                          | DM Reply: "{rule.dm_reply_templates[0].substring(0, 25)}..."
+                        </span>
+                      ) : null}
+
+                      {rule.attachment_urls && rule.attachment_urls.length > 0 && (
+                        <span style={{ color: 'var(--primary)', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '4px', fontWeight: '600' }}>
+                          ({rule.attachment_urls.length} files attached)
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="list-item-actions">
                     <button className={`btn btn-sm ${rule.is_active ? 'btn-secondary' : 'btn-success'}`} onClick={() => handleToggleRule(rule)}>
                       {rule.is_active ? 'Pause' : 'Activate'}
+                    </button>
+                    <button className="btn-ghost btn-icon" onClick={() => navigate(`/moderation/edit/${rule.id}`)} title="Edit Rule">
+                      <Edit2 size={14} color="var(--text-secondary)" />
                     </button>
                     <button className="btn-ghost btn-icon" onClick={() => handleDeleteRule(rule.id)}>
                       <Trash2 size={14} color="var(--error)" />
@@ -310,17 +512,27 @@ export default function AutoModerationPage() {
 
       {/* Trigger Rule Modal */}
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+        <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
             <div className="modal-header">
-              <h2>Connect Trigger Rule</h2>
-              <button className="btn-ghost btn-icon" onClick={() => setShowModal(false)}><X size={18} /></button>
+              <h2>{editingRuleId ? 'Edit Trigger Rule' : 'Connect Trigger Rule'}</h2>
+              <button className="btn-ghost btn-icon" type="button" onClick={closeModal}><X size={18} /></button>
             </div>
             <form onSubmit={handleCreateRule}>
               <div className="modal-body">
                 <div className="form-group">
                   <label className="form-label">Select Social Channel</label>
-                  <select className="form-input" value={selectedChannel} onChange={e => setSelectedChannel(e.target.value)} required>
+                  <select className="form-input" value={selectedChannel} onChange={e => {
+                    const val = e.target.value;
+                    setSelectedChannel(val);
+                    setSelectedPostId('');
+                    setApplyToPostType('global');
+                    if (val) {
+                      fetchPagePosts(val);
+                    } else {
+                      setPosts([]);
+                    }
+                  }} required>
                     <option value="">-- Choose Connected Page --</option>
                     {channels.map(c => (
                       <option key={c.page_id} value={c.page_id}>{c.page_name}</option>
@@ -328,19 +540,170 @@ export default function AutoModerationPage() {
                   </select>
                 </div>
 
+                {selectedChannel && (
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Rule Scope</label>
+                      <select className="form-input" value={applyToPostType} onChange={e => setApplyToPostType(e.target.value)}>
+                        <option value="global">Apply to All Posts on Page (Global)</option>
+                        <option value="specific">Apply to a Specific Post</option>
+                      </select>
+                    </div>
+
+                    {applyToPostType === 'specific' && (
+                      <div className="form-group">
+                        <label className="form-label">Select Target Post</label>
+                        {loadingPosts ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                            <Loader2 size={14} className="animate-spin" /> Fetching recent page posts...
+                          </div>
+                        ) : posts.length === 0 ? (
+                          <div style={{ padding: '8px 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                            No posts found on this page.
+                          </div>
+                        ) : (
+                          <>
+                            <select 
+                              className="form-input" 
+                              value={selectedPostId} 
+                              onChange={e => setSelectedPostId(e.target.value)}
+                              required={applyToPostType === 'specific'}
+                            >
+                              <option value="">-- Choose a Post --</option>
+                              {posts.map(post => (
+                                <option key={post.id} value={post.id}>
+                                  {post.message.substring(0, 60)}{post.message.length > 60 ? '...' : ''}
+                                </option>
+                              ))}
+                            </select>
+
+                            {selectedPostId && (
+                              (() => {
+                                const selectedPost = posts.find(p => p.id === selectedPostId);
+                                if (!selectedPost) return null;
+                                return (
+                                  <div style={{ 
+                                    display: 'flex', 
+                                    gap: '12px', 
+                                    background: 'var(--bg-secondary)', 
+                                    padding: '12px', 
+                                    borderRadius: '8px', 
+                                    marginTop: '8px', 
+                                    border: '1px solid var(--border-primary)',
+                                    alignItems: 'center'
+                                  }}>
+                                    {selectedPost.picture && (
+                                      <img 
+                                        src={selectedPost.picture} 
+                                        alt="Post thumbnail" 
+                                        style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px' }} 
+                                      />
+                                    )}
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', flex: 1 }}>
+                                      <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '2px' }}>Selected Post Preview:</div>
+                                      "{selectedPost.message.substring(0, 100)}{selectedPost.message.length > 100 ? '...' : ''}"
+                                    </div>
+                                  </div>
+                                );
+                              })()
+                            )}
+                          </>
+                        )}
+                    </div>
+                    )}
+                  </>
+                )}
+
                 <div className="form-group">
                   <label className="form-label">Trigger Event Type</label>
                   <select className="form-input" value={triggerType} onChange={e => setTriggerType(e.target.value)} required>
                     <option value="keywords">Keyword Match</option>
                     <option value="ai_sentiment">AI Sentiment Analysis</option>
+                    <option value="ai_custom">Custom AI Trigger (Natural Language)</option>
                     <option value="all">All Comments</option>
                   </select>
                 </div>
 
-                {triggerType === 'keywords' && (
+                 {triggerType === 'keywords' && (
                   <div className="form-group">
-                    <label className="form-label">Trigger Keywords (comma separated)</label>
-                    <input className="form-input" placeholder="e.g. price, cost, buy, discount" value={keywordsInput} onChange={e => setKeywordsInput(e.target.value)} required />
+                    <label className="form-label">Trigger Keywords (Type and press comma or Enter)</label>
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                      padding: '8px 12px',
+                      background: 'var(--bg-secondary)',
+                      border: '1.5px solid var(--border-primary)',
+                      borderRadius: '8px',
+                      minHeight: '42px',
+                      alignItems: 'center',
+                      cursor: 'text'
+                    }} onClick={() => document.getElementById('keyword-tag-input')?.focus()}>
+                      {keywords.map((kw, idx) => (
+                        <div key={idx} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'var(--bg-primary)',
+                          border: '1.5px solid var(--accent-primary)',
+                          borderRadius: '6px',
+                          padding: '2px 8px',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          color: 'var(--text-primary)'
+                        }}>
+                          <span>{kw}</span>
+                          <button 
+                            type="button" 
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                            onClick={(e) => { e.stopPropagation(); setKeywords(keywords.filter((_, i) => i !== idx)); }}
+                          >
+                            <X size={14} color="var(--text-secondary)" />
+                          </button>
+                        </div>
+                      ))}
+                      <input 
+                        id="keyword-tag-input"
+                        type="text"
+                        placeholder={keywords.length === 0 ? "e.g. price, cost, buy" : ""}
+                        value={keywordsInput}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (val.endsWith(',')) {
+                            const word = val.slice(0, -1).trim();
+                            if (word && !keywords.includes(word)) {
+                              setKeywords([...keywords, word]);
+                            }
+                            setKeywordsInput('');
+                          } else {
+                            setKeywordsInput(val);
+                          }
+                        }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const word = keywordsInput.trim();
+                            if (word && !keywords.includes(word)) {
+                              setKeywords([...keywords, word]);
+                            }
+                            setKeywordsInput('');
+                          } else if (e.key === 'Backspace' && !keywordsInput && keywords.length > 0) {
+                            setKeywords(keywords.slice(0, -1));
+                          }
+                        }}
+                        style={{
+                          flex: 1,
+                          minWidth: '120px',
+                          background: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          color: 'var(--text-primary)',
+                          padding: 0,
+                          fontSize: '0.9rem'
+                        }}
+                      />
+                    </div>
+                    <span className="form-hint">Type a keyword and separate with commas or press Enter. Backspace deletes the entire block.</span>
                   </div>
                 )}
 
@@ -355,29 +718,464 @@ export default function AutoModerationPage() {
                   </div>
                 )}
 
-                <div className="form-group">
-                  <label className="form-label">Action to Take</label>
-                  <select className="form-input" value={actionToTake} onChange={e => setActionToTake(e.target.value)} required>
-                    <option value="reply">Public Comment Reply</option>
-                    <option value="hide">Hide Comment</option>
-                    <option value="trash_queue">Send to Safety Hold Queue</option>
-                    <option value="hide_and_reply">Hide & Reply</option>
-                    <option value="dm">Private DM Handshake</option>
-                  </select>
+                {triggerType === 'ai_custom' && (
+                  <div className="form-group animate-fadeIn">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <label className="form-label" style={{ margin: 0 }}>Custom AI Trigger Prompt</label>
+                      <span style={{ 
+                        cursor: 'pointer', 
+                        background: 'var(--bg-secondary)', 
+                        border: '1px solid var(--border-primary)',
+                        borderRadius: '50%',
+                        width: '18px',
+                        height: '18px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        color: 'var(--text-secondary)'
+                      }} title="Define a natural language instruction for the AI. The comment will trigger if the AI decides the comment matches your description.">?</span>
+                    </div>
+                    
+                    <textarea 
+                      className="form-textarea" 
+                      placeholder="e.g. anyone talking about red cows or green trees" 
+                      value={aiCustomCriteria} 
+                      onChange={e => setAiCustomCriteria(e.target.value)} 
+                      required 
+                    />
+                    
+                    <div style={{ marginTop: '8px' }}>
+                      <span className="form-hint" style={{ display: 'block', marginBottom: '6px', fontSize: '0.75rem' }}>Presets (Click to apply):</span>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button 
+                          type="button" 
+                          className="btn btn-sm btn-secondary" 
+                          style={{ fontSize: '11px', padding: '2px 8px' }}
+                          onClick={() => setAiCustomCriteria("Comments asking about pricing, cost, rates, fees, or how to buy.")}
+                        >
+                          Pricing/Buy
+                        </button>
+                        <button 
+                          type="button" 
+                          className="btn btn-sm btn-secondary" 
+                          style={{ fontSize: '11px', padding: '2px 8px' }}
+                          onClick={() => setAiCustomCriteria("Comments expressing customer support issues, technical problems, or complaints.")}
+                        >
+                          Issues/Support
+                        </button>
+                        <button 
+                          type="button" 
+                          className="btn btn-sm btn-secondary" 
+                          style={{ fontSize: '11px', padding: '2px 8px' }}
+                          onClick={() => setAiCustomCriteria("Comments asking if the product is in stock, where it is available, or shipping times.")}
+                        >
+                          Availability
+                        </button>
+                        <button 
+                          type="button" 
+                          className="btn btn-sm btn-secondary" 
+                          style={{ fontSize: '11px', padding: '2px 8px' }}
+                          onClick={() => setAiCustomCriteria("Comments containing general praise, compliments, or positive feedback.")}
+                        >
+                          Positive/Praise
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}                <div className="form-group">
+                  <label className="form-label">Actions to Take (Select all that apply)</label>
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', 
+                    gap: '12px', 
+                    background: 'var(--bg-secondary)', 
+                    padding: '12px', 
+                    borderRadius: '8px',
+                    border: '1.5px solid var(--border-primary)'
+                  }}>
+                    {[
+                      { id: 'hide', label: 'Hide Comment' },
+                      { id: 'delete', label: 'Delete Comment' },
+                      { id: 'like', label: 'Auto-Like Comment' },
+                      { id: 'block', label: 'Block User on Page' },
+                      { id: 'reply', label: 'Public Comment Reply' },
+                      { id: 'dm', label: 'Private DM Handshake' },
+                      { id: 'trash_queue', label: 'Send to Safety Queue' },
+                    ].map(act => {
+                      const checked = selectedActions.includes(act.id);
+                      return (
+                        <label key={act.id} style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '8px', 
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                          fontWeight: checked ? '600' : 'normal',
+                          color: checked ? 'var(--text-primary)' : 'var(--text-secondary)'
+                        }}>
+                          <input 
+                            type="checkbox" 
+                            checked={checked}
+                            onChange={() => {
+                              if (checked) {
+                                setSelectedActions(selectedActions.filter(a => a !== act.id));
+                              } else {
+                                setSelectedActions([...selectedActions, act.id]);
+                              }
+                            }}
+                            style={{ accentColor: 'var(--primary)' }}
+                          />
+                          {act.label}
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {(actionToTake === 'reply' || actionToTake === 'hide_and_reply' || actionToTake === 'dm') && (
-                  <div className="form-group">
-                    <label className="form-label">Reply Message Template</label>
-                    <textarea className="form-textarea" placeholder="Type your response template..." value={replyInput} onChange={e => setReplyInput(e.target.value)} required />
+                {selectedActions.includes('reply') && (
+                  <div style={{ borderTop: '1px solid var(--border-primary)', paddingTop: '16px', marginTop: '16px' }}>
+                    <h4 style={{ margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
+                      Public Comment Reply Settings
+                    </h4>
+                    <div className="form-group" style={{ marginBottom: '12px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={useDynamicAiReply} 
+                          onChange={e => setUseDynamicAiReply(e.target.checked)}
+                          style={{ accentColor: '#10b981' }}
+                        />
+                        Enable AI Autopilot Reply (Contextual AI Responses)
+                      </label>
+                      <span className="form-hint" style={{ display: 'block', marginTop: '4px', marginLeft: '22px' }}>
+                        If enabled, the AI will dynamically write a contextual reply using the post caption and comment instead of a canned template.
+                      </span>
+                    </div>
+
+                    {!useDynamicAiReply && (
+                      <div className="form-group animate-fadeIn">
+                        <label className="form-label">Public Reply Message Template</label>
+                        <textarea className="form-textarea" placeholder="Type your public response template..." value={replyInput} onChange={e => setReplyInput(e.target.value)} required={!useDynamicAiReply} />
+                      </div>
+                    )}
+
+                    <div className="form-group">
+                      <label className="form-label">Public Reply Attachments (Optional)</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <select 
+                          className="form-input" 
+                          value="" 
+                          onChange={e => {
+                            const val = e.target.value;
+                            if (val && !selectedAttachments.includes(val)) {
+                              setSelectedAttachments([...selectedAttachments, val]);
+                            }
+                          }}
+                        >
+                          <option value="">-- Attach a file from Chat Assets --</option>
+                          {chatAssets.map(asset => (
+                            <option key={asset.id} value={asset.file_url}>{asset.friendly_name} ({asset.file_type})</option>
+                          ))}
+                        </select>
+
+                        {selectedAttachments.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
+                            {selectedAttachments.map((url, idx) => {
+                              const asset = chatAssets.find(a => a.file_url === url);
+                              const displayName = asset ? asset.friendly_name : url.split('/').pop() || 'File';
+                              return (
+                                <div key={idx} style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  background: 'var(--bg-primary)',
+                                  border: '1.5px solid var(--accent-primary)',
+                                  borderRadius: '6px',
+                                  padding: '2px 8px',
+                                  fontSize: '0.8rem',
+                                  color: 'var(--text-primary)'
+                                }}>
+                                  <span>{displayName}</span>
+                                  <button 
+                                    type="button" 
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                                    onClick={() => setSelectedAttachments(selectedAttachments.filter((_, i) => i !== idx))}
+                                  >
+                                    <X size={12} color="var(--text-secondary)" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div style={{ marginTop: '4px' }}>
+                          <input 
+                            type="file" 
+                            id="inline-asset-upload" 
+                            style={{ display: 'none' }} 
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file || !user) return;
+                              
+                              try {
+                                setSaving(true);
+                                const fileExt = file.name.split('.').pop();
+                                const fileName = `${Math.random().toString(36).substring(2)}-${Date.now()}.${fileExt}`;
+                                const filePath = `${user.id}/${fileName}`;
+
+                                const { error: uploadErr } = await supabase.storage
+                                  .from('media_assets')
+                                  .upload(filePath, file);
+
+                                if (uploadErr) throw uploadErr;
+
+                                const { data: { publicUrl } } = supabase.storage
+                                  .from('media_assets')
+                                  .getPublicUrl(filePath);
+
+                                let fileType = 'file';
+                                if (file.type.startsWith('image/')) fileType = 'image';
+                                else if (file.type.startsWith('video/')) fileType = 'video';
+                                else if (file.type.startsWith('audio/')) fileType = 'audio';
+
+                                const assetName = file.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+                                const { error: dbErr } = await supabase
+                                  .from('chat_assets')
+                                  .insert({
+                                    user_id: user.id,
+                                    name: `${assetName}_${Date.now()}`,
+                                    friendly_name: file.name,
+                                    file_url: publicUrl,
+                                    file_type: fileType,
+                                    ai_auto_send: true
+                                  });
+
+                                if (dbErr) throw dbErr;
+
+                                toast.success(`Uploaded & attached: ${file.name}`);
+                                
+                                const { data: chatAssetsData } = await supabase
+                                  .from('chat_assets')
+                                  .select('id, name, friendly_name, file_url, file_type');
+                                setChatAssets(chatAssetsData || []);
+
+                                setSelectedAttachments(prev => [...prev, publicUrl]);
+                              } catch (err: any) {
+                                toast.error('Upload failed: ' + err.message);
+                              } finally {
+                                setSaving(false);
+                              }
+                            }}
+                          />
+                          <button 
+                            type="button" 
+                            className="btn btn-sm btn-secondary" 
+                            style={{ width: '100%' }}
+                            onClick={() => document.getElementById('inline-asset-upload')?.click()}
+                            disabled={saving}
+                          >
+                            Upload & Attach New File
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedActions.includes('dm') && (
+                  <div style={{ borderTop: '1px solid var(--border-primary)', paddingTop: '16px', marginTop: '16px' }}>
+                    <h4 style={{ margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6' }}></span>
+                      Private DM Handshake Settings
+                    </h4>
+                    <div className="form-group" style={{ marginBottom: '16px' }}>
+                      <label className="form-label" style={{ display: 'block', marginBottom: '8px' }}>Response Type</label>
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input
+                            type="radio"
+                            name="responseType"
+                            value="text"
+                            checked={responseType === 'text'}
+                            onChange={() => setResponseType('text')}
+                            style={{ accentColor: '#8b5cf6' }}
+                          />
+                          Send static text message
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input
+                            type="radio"
+                            name="responseType"
+                            value="flow"
+                            checked={responseType === 'flow'}
+                            onChange={() => setResponseType('flow')}
+                            style={{ accentColor: '#8b5cf6' }}
+                          />
+                          Trigger a structured DM Flow
+                        </label>
+                      </div>
+                    </div>
+
+                    {responseType === 'text' ? (
+                      <>
+                        <div className="form-group">
+                          <label className="form-label">Private DM Message Template</label>
+                          <textarea className="form-textarea" placeholder="Type your private DM template..." value={dmReplyInput} onChange={e => setDmReplyInput(e.target.value)} required={responseType === 'text'} />
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">Private DM Attachments (Optional)</label>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <select 
+                              className="form-input" 
+                              value="" 
+                              onChange={e => {
+                                const val = e.target.value;
+                                if (val && !selectedDmAttachments.includes(val)) {
+                                  setSelectedDmAttachments([...selectedDmAttachments, val]);
+                                }
+                              }}
+                            >
+                              <option value="">-- Attach a file from Chat Assets --</option>
+                              {chatAssets.map(asset => (
+                                <option key={asset.id} value={asset.file_url}>{asset.friendly_name} ({asset.file_type})</option>
+                              ))}
+                            </select>
+
+                            {selectedDmAttachments.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
+                                {selectedDmAttachments.map((url, idx) => {
+                                  const asset = chatAssets.find(a => a.file_url === url);
+                                  const displayName = asset ? asset.friendly_name : url.split('/').pop() || 'File';
+                                  return (
+                                    <div key={idx} style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      background: 'var(--bg-primary)',
+                                      border: '1.5px solid var(--accent-primary)',
+                                      borderRadius: '6px',
+                                      padding: '2px 8px',
+                                      fontSize: '0.8rem',
+                                      color: 'var(--text-primary)'
+                                    }}>
+                                      <span>{displayName}</span>
+                                      <button 
+                                        type="button" 
+                                        style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                                        onClick={() => setSelectedDmAttachments(selectedDmAttachments.filter((_, i) => i !== idx))}
+                                      >
+                                        <X size={12} color="var(--text-secondary)" />
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            <div style={{ marginTop: '4px' }}>
+                              <input 
+                                type="file" 
+                                id="inline-dm-asset-upload" 
+                                style={{ display: 'none' }} 
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file || !user) return;
+                                  
+                                  try {
+                                    setSaving(true);
+                                    const fileExt = file.name.split('.').pop();
+                                    const fileName = `${Math.random().toString(36).substring(2)}-${Date.now()}.${fileExt}`;
+                                    const filePath = `${user.id}/${fileName}`;
+
+                                    const { error: uploadErr } = await supabase.storage
+                                      .from('media_assets')
+                                      .upload(filePath, file);
+
+                                    if (uploadErr) throw uploadErr;
+
+                                    const { data: { publicUrl } } = supabase.storage
+                                      .from('media_assets')
+                                      .getPublicUrl(filePath);
+
+                                    let fileType = 'file';
+                                    if (file.type.startsWith('image/')) fileType = 'image';
+                                    else if (file.type.startsWith('video/')) fileType = 'video';
+                                    else if (file.type.startsWith('audio/')) fileType = 'audio';
+
+                                    const assetName = file.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+                                    const { error: dbErr } = await supabase
+                                      .from('chat_assets')
+                                      .insert({
+                                        user_id: user.id,
+                                        name: `${assetName}_${Date.now()}`,
+                                        friendly_name: file.name,
+                                        file_url: publicUrl,
+                                        file_type: fileType,
+                                        ai_auto_send: true
+                                      });
+
+                                    if (dbErr) throw dbErr;
+
+                                    toast.success(`Uploaded & attached: ${file.name}`);
+                                    
+                                    const { data: chatAssetsData } = await supabase
+                                      .from('chat_assets')
+                                      .select('id, name, friendly_name, file_url, file_type');
+                                    setChatAssets(chatAssetsData || []);
+
+                                    setSelectedDmAttachments(prev => [...prev, publicUrl]);
+                                  } catch (err: any) {
+                                    toast.error('Upload failed: ' + err.message);
+                                  } finally {
+                                    setSaving(false);
+                                  }
+                                }}
+                              />
+                              <button 
+                                type="button" 
+                                className="btn btn-sm btn-secondary" 
+                                style={{ width: '100%' }}
+                                onClick={() => document.getElementById('inline-dm-asset-upload')?.click()}
+                                disabled={saving}
+                              >
+                                Upload & Attach New File
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="form-group">
+                        <label className="form-label">Select DM Flow</label>
+                        <select
+                          className="form-input"
+                          value={selectedDmFlowId}
+                          onChange={e => setSelectedDmFlowId(e.target.value)}
+                          required={responseType === 'flow'}
+                        >
+                          <option value="">-- Choose an active Flow --</option>
+                          {flows.map(f => (
+                            <option key={f.id} value={f.id}>{f.name} {!f.is_active ? '(Inactive)' : ''}</option>
+                          ))}
+                        </select>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '6px' }}>
+                          The chosen sequence will run automatically once the user receives the private comment handshake.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                <button type="button" className="btn btn-secondary" onClick={closeModal}>Cancel</button>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  Connect Rule
+                  {editingRuleId ? 'Save Changes' : 'Connect Rule'}
                 </button>
               </div>
             </form>

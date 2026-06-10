@@ -19,7 +19,7 @@ import {
   updateMessageMetadataFallback,
   syncOfflineMessages
 } from './db';
-import { runSchedulerJobs, runTokenHealthChecks } from './scheduler';
+import { runSchedulerJobs, runTokenHealthChecks, cleanupOrphanedStorageAssets } from './scheduler';
 import { processSocialPosterQueue } from './queue-processor';
 
 // ─── App Setup ──────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ app.use('*', cors({
 
 app.use('/api/*', async (c, next) => {
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || url.hostname === 'metachat.junoverseai.com';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
   console.log(`[Bypass Debug] hostname=${url.hostname}, x-bypass=${c.req.header('X-Bypass-Auth')}`);
   if (isLocal && c.req.header('X-Bypass-Auth') === 'true') {
     c.set('authUser', { id: 'e71afde7-ec06-4c0d-9982-3e665e294817', email: 'test@example.com' });
@@ -62,7 +62,7 @@ app.use('/api/*', async (c, next) => {
 
 app.use('/test-chat', async (c, next) => {
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || url.hostname === 'metachat.junoverseai.com';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
   if (isLocal && c.req.header('X-Bypass-Auth') === 'true') {
     c.set('authUser', { id: 'e71afde7-ec06-4c0d-9982-3e665e294817', email: 'test@example.com' });
     return await next();
@@ -240,7 +240,10 @@ export default {
 
       if (!sessions || sessions.length === 0) return;
 
-      for (const session of sessions) {
+      // Limit to at most 5 sessions per cron run to prevent hitting Cloudflare's subrequest limit of 50
+      const sessionsToSweep = sessions.slice(0, 5);
+
+      for (const session of sessionsToSweep) {
         // get pageConnection
         const pageConnection = await getPageConnectionFallback(env.DB, supabase, session.page_id);
         if (!pageConnection || !pageConnection.enable_customer_profiling) continue;
@@ -274,6 +277,13 @@ export default {
       await runTokenHealthChecks(supabase);
     } catch (healthErr: any) {
       console.error('[Cron] Token Health check failed:', healthErr.message);
+    }
+
+    // 4.5. Storage Sweeper: Clean up orphaned files older than 7 days
+    try {
+      await cleanupOrphanedStorageAssets(supabase);
+    } catch (cleanupErr: any) {
+      console.error('[Cron] Storage cleanup sweeper failed:', cleanupErr.message);
     }
 
     // 5. Weekly content generation scheduling (Auto Mode)

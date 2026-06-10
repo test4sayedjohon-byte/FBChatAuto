@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env, WhatsAppWebhookEvent, WhatsAppMessage, WhatsAppValue, PageConnection } from './types';
 import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
+import { handleFlowInteraction, handleFlowTextInput, startFlow, executeNode } from './chat/flow-engine';
 import {
   getWhatsAppConnectionFallback,
   getUserRecord,
@@ -24,11 +25,12 @@ export async function sendWhatsAppReply(
   accessToken: string,
   recipientPhoneNumber: string,
   messageText: string
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
   // WhatsApp has a limit of 4096 characters per message.
   // Split long responses if needed.
   const MAX_LENGTH = 4000;
   const messages = splitMessage(messageText, MAX_LENGTH);
+  let lastError: string | undefined;
 
   for (const msg of messages) {
     const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
@@ -57,13 +59,20 @@ export async function sendWhatsAppReply(
       if (!response.ok) {
         const errorBody = await response.text();
         console.error(`[WhatsApp] ❌ Failed to send reply (${response.status}):`, errorBody);
+        lastError = errorBody;
       } else {
         console.log(`[WhatsApp] ✅ Reply sent to ${recipientPhoneNumber}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('[WhatsApp] ❌ Network error sending reply:', error);
+      lastError = error.message;
     }
   }
+
+  if (lastError) {
+    return { success: false, error: lastError };
+  }
+  return { success: true };
 }
 
 /**
@@ -99,18 +108,11 @@ function splitMessage(text: string, maxLength: number): string[] {
 }
 
 function calculateBillingCycle(
-  registrationDateStr: string | undefined,
-  purchases: { created_at: string; status: string; payment_method?: string }[]
+  anchorDateStr: string | undefined
 ) {
-  const latestApproved = [...purchases]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .find(p => p.status === 'approved' && p.payment_method !== 'gift');
-  
   let cycleAnchor = new Date();
-  if (latestApproved) {
-    cycleAnchor = new Date(latestApproved.created_at);
-  } else if (registrationDateStr) {
-    cycleAnchor = new Date(registrationDateStr);
+  if (anchorDateStr) {
+    cycleAnchor = new Date(anchorDateStr);
   }
 
   const now = new Date();
@@ -212,18 +214,7 @@ export async function processWhatsAppWebhookEntries(
           continue;
         }
         
-        let pHistory: any[] = [];
-        try {
-          const { data } = await supabase
-            .from('purchases')
-            .select('created_at, status, payment_method')
-            .eq('user_id', pageConnection.user_id);
-          pHistory = data || [];
-        } catch (err: any) {
-          console.warn(`[Failover] Purchases fetch failed for user ${pageConnection.user_id}: ${err.message}. Using default billing anchor.`);
-        }
-
-        const { startDate } = calculateBillingCycle(userRecord.created_at, pHistory);
+        const { startDate } = calculateBillingCycle(userRecord.billing_cycle_anchor || userRecord.created_at);
 
         const messagesCount = await getMonthlyMessageCountFallback(env.DB, supabase, pageConnection.user_id, startDate.toISOString());
 
@@ -265,10 +256,12 @@ async function handleWhatsAppMessage(
   // Extract text and attachments
   let messageText = '';
   let attachmentType = '';
+  let buttonReplyId = '';
 
   if (message.type === 'text') {
     messageText = message.text?.body || '';
   } else if (message.type === 'interactive') {
+    buttonReplyId = message.interactive?.button_reply?.id || message.interactive?.list_reply?.id || '';
     messageText = message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || '';
   } else {
     // Media or other types (e.g. image, audio, video, document, voice)
@@ -276,6 +269,34 @@ async function handleWhatsAppMessage(
   }
 
   const messageId = message.id || Date.now().toString();
+
+  if (buttonReplyId && buttonReplyId.startsWith('FLOW_NODE_ID:')) {
+    console.log(`[WhatsApp Webhook] 🔘 WhatsApp Flow Button payload: ${buttonReplyId}`);
+    const tappedText = `[Tapped: ${messageText || 'Option'}]`;
+    const result = await storeIncomingMessageFallback(
+      env.DB,
+      supabase,
+      pageConnection.user_id,
+      phoneNumberId,
+      senderPhoneNumber,
+      tappedText,
+      messageId,
+      pageConnection.access_token
+    );
+    if (result) {
+      const handled = await handleFlowInteraction(
+        env.DB,
+        supabase,
+        result.sessionId,
+        buttonReplyId,
+        pageConnection,
+        senderPhoneNumber
+      );
+      if (handled) {
+        return; // Exit webhook handler since flow advanced.
+      }
+    }
+  }
 
   if (!messageText && !attachmentType) {
     return;
@@ -303,6 +324,25 @@ async function handleWhatsAppMessage(
 
   if (!result) return;
   console.log(`[WhatsApp Webhook] ✅ Message stored in session: ${result.sessionId}`);
+
+  // Check if there is an active flow session
+  const activeFlow = await env.DB.prepare(
+    `SELECT current_node_id FROM chat_session_flows WHERE session_id = ? AND is_paused = 0`
+  )
+    .bind(result.sessionId)
+    .first();
+
+  if (activeFlow && messageText) {
+    const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderPhoneNumber);
+    if (handledText) {
+      console.log(`[Flow Engine] WhatsApp Flow advanced via text input`);
+      return;
+    } else {
+      console.log(`[Flow Engine] WhatsApp Mismatched text input during flow. Resending options for node ${activeFlow.current_node_id}`);
+      await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id as string, pageConnection, senderPhoneNumber);
+      return;
+    }
+  }
 
   // Fetch name from contacts profile in the webhook and save to the chat_session if missing
   const contactName = value.contacts?.find(c => c.wa_id === senderPhoneNumber)?.profile?.name || 'WhatsApp User';
@@ -473,6 +513,11 @@ async function handleWhatsAppMessage(
       senderPhoneNumber,
       chatResult.reply
     );
+
+    if (chatResult.flowId) {
+      console.log(`[WhatsApp Webhook] AI triggered Flow ${chatResult.flowId}`);
+      await startFlow(env.DB, supabase, result.sessionId, chatResult.flowId, pageConnection, senderPhoneNumber);
+    }
 
     // ── Phase 3: Sliding Window Summarization ──────────────────────
     try {

@@ -47,7 +47,7 @@ const ROLES: RoleConfig[] = [
     title: 'Chatbot Responses',
     description: 'Handles conversations directly with visitors in the Facebook Messenger and WhatsApp chat widget.',
     icon: MessageSquare,
-    color: '#f97316',
+    color: '#22c55e',
     activeField: 'is_active_chat',
     fallbackOrderField: 'fallback_chat_order',
   },
@@ -65,7 +65,7 @@ const ROLES: RoleConfig[] = [
     title: 'Conversation Summaries',
     description: 'Summarizes long conversation histories periodically to fit inside model token context windows.',
     icon: FileText,
-    color: '#22c55e',
+    color: '#f97316',
     activeField: 'is_active_summarization',
     fallbackOrderField: 'fallback_summarize_order',
   },
@@ -288,7 +288,7 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
                 className="form-select"
                 value={primary?.id || ''}
                 onChange={e => handleSetPrimary(role, e.target.value)}
-                style={{ margin: 0, width: '100%', fontSize: '13px' }}
+                style={{ margin: 0, width: '100%', fontSize: '13px', marginBottom: '4px' }}
                 disabled={updatingId?.startsWith(role.id)}
               >
                 <option value="" disabled>-- Select Primary --</option>
@@ -296,6 +296,56 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
                   <option key={p.id} value={p.id}>{p.display_name} ({p.model_chat || p.model_embedding})</option>
                 ))}
               </select>
+
+              {primary ? (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  background: `${role.color}0d`,
+                  borderRadius: '10px',
+                  border: `1px solid ${role.color}40`,
+                  boxShadow: `inset 0 0 12px ${role.color}05`,
+                  marginTop: '6px'
+                }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1, marginRight: '8px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {primary.display_name}
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      Model: <code style={{ color: role.color, background: `${role.color}15`, padding: '2px 4px', borderRadius: '4px', fontSize: '11px' }}>{role.id === 'embedding' ? primary.model_embedding : primary.model_chat}</code>
+                    </span>
+                  </div>
+                  <span style={{
+                    fontSize: '9px',
+                    background: role.color,
+                    color: '#fff',
+                    padding: '3px 8px',
+                    borderRadius: '99px',
+                    fontWeight: 'bold',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    boxShadow: `0 2px 8px ${role.color}30`,
+                    flexShrink: 0
+                  }}>
+                    Active Primary
+                  </span>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.05)',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  color: 'var(--danger)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  marginTop: '6px'
+                }}>
+                  ⚠️ No primary provider configured!
+                </div>
+              )}
             </div>
 
             {/* Fallback chain list */}

@@ -2,14 +2,18 @@
 
 export async function sendFacebookReply(
   accessToken: string,
-  recipientId: string,
+  recipientId: string | { id?: string; comment_id?: string },
   messageText: string,
   pageId?: string
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
+  const recipient = typeof recipientId === 'string' ? { id: recipientId } : recipientId;
+  const logRecipient = typeof recipientId === 'string' ? recipientId : JSON.stringify(recipientId);
+
   // Facebook Messenger has a 2000 character limit per message.
   // Split long responses into multiple messages.
   const MAX_LENGTH = 2000;
   const messages = splitMessage(messageText, MAX_LENGTH);
+  let lastError: string | undefined;
 
   for (const msg of messages) {
     const url = pageId
@@ -17,7 +21,7 @@ export async function sendFacebookReply(
       : 'https://graph.facebook.com/v21.0/me/messages';
 
     const payload = {
-      recipient: { id: recipientId },
+      recipient,
       message: { text: msg },
       messaging_type: 'RESPONSE',
     };
@@ -35,13 +39,20 @@ export async function sendFacebookReply(
       if (!response.ok) {
         const errorBody = await response.text();
         console.error(`[Facebook] ❌ Failed to send reply (${response.status}):`, errorBody);
+        lastError = errorBody;
       } else {
-        console.log(`[Facebook] ✅ Reply sent to ${recipientId}`);
+        console.log(`[Facebook] ✅ Reply sent to ${logRecipient}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('[Facebook] ❌ Network error sending reply:', error);
+      lastError = error.message;
     }
   }
+
+  if (lastError) {
+    return { success: false, error: lastError };
+  }
+  return { success: true };
 }
 
 /**
@@ -88,18 +99,21 @@ export async function sendFacebookSenderAction(
  */
 export async function sendFacebookAttachment(
   accessToken: string,
-  recipientId: string,
+  recipientId: string | { id?: string; comment_id?: string },
   attachmentType: 'image' | 'video' | 'audio' | 'file',
   attachmentUrl: string,
   mediaId?: string,
   pageId?: string
 ): Promise<{ success: boolean; mediaId?: string; error?: string }> {
+  const recipient = typeof recipientId === 'string' ? { id: recipientId } : recipientId;
+  const logRecipient = typeof recipientId === 'string' ? recipientId : JSON.stringify(recipientId);
+
   const url = pageId
     ? `https://graph.facebook.com/v21.0/${pageId}/messages`
     : 'https://graph.facebook.com/v21.0/me/messages';
 
   const payload: any = {
-    recipient: { id: recipientId },
+    recipient,
     message: {
       attachment: {
         type: attachmentType,
@@ -128,7 +142,7 @@ export async function sendFacebookAttachment(
     }
 
     const result = await response.json() as any;
-    console.log(`[Facebook] ✅ Attachment sent to ${recipientId} (ID: ${result.attachment_id || 'reused'})`);
+    console.log(`[Facebook] ✅ Attachment sent to ${logRecipient} (ID: ${result.attachment_id || 'reused'})`);
     return { success: true, mediaId: result.attachment_id };
   } catch (error: any) {
     console.error('[Facebook] ❌ Network error sending attachment:', error);

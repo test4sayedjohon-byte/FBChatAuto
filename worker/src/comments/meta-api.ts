@@ -40,13 +40,93 @@ export async function hideComment(
 export async function sendPrivateReply(
   accessToken: string,
   commentId: string,
-  message: string
+  message: string,
+  imageUrl?: string | null
 ): Promise<any> {
-  const url = `https://graph.facebook.com/v25.0/${commentId}/private_replies`;
+  const url = `https://graph.facebook.com/v25.0/me/messages?access_token=${accessToken}`;
+
+  if (imageUrl) {
+    try {
+      const cleanMsg = message.trim();
+      let payload: any;
+
+      if (!cleanMsg) {
+        // Send as a regular expandable image bubble if there is no accompanying text
+        payload = {
+          recipient: { comment_id: commentId },
+          message: {
+            attachment: {
+              type: 'image',
+              payload: {
+                url: imageUrl,
+                is_reusable: true
+              }
+            }
+          }
+        };
+      } else {
+        // Send as a Generic Template card if both text and image are present
+        const title = cleanMsg.substring(0, 80) || 'Attachment';
+        const subtitle = cleanMsg.length > 80 ? cleanMsg.substring(80, 160) : undefined;
+
+        payload = {
+          recipient: { comment_id: commentId },
+          message: {
+            attachment: {
+              type: 'template',
+              payload: {
+                template_type: 'generic',
+                elements: [
+                  {
+                    title,
+                    subtitle,
+                    image_url: imageUrl
+                  }
+                ]
+              }
+            }
+          }
+        };
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+
+      const errText = await response.text();
+      console.warn(`[Comments Webhook] Image/Template private reply failed, falling back to text. Error: ${errText}`);
+    } catch (e: any) {
+      console.warn(`[Comments Webhook] Image/Template private reply failed with exception, falling back to text: ${e.message}`);
+    }
+  }
+
+  // Fallback to text message
+  let textPayload = message;
+  if (imageUrl && !textPayload.includes(imageUrl)) {
+    if (textPayload) {
+      textPayload += `\n\nImage: ${imageUrl}`;
+    } else {
+      textPayload = imageUrl;
+    }
+  }
+
+  if (!textPayload.trim()) {
+    textPayload = 'Thanks for your comment!';
+  }
+
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, access_token: accessToken }),
+    body: JSON.stringify({
+      recipient: { comment_id: commentId },
+      message: { text: textPayload }
+    }),
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -54,3 +134,70 @@ export async function sendPrivateReply(
   }
   return await response.json();
 }
+
+export async function deleteComment(
+  accessToken: string,
+  commentId: string
+): Promise<any> {
+  const url = `https://graph.facebook.com/v25.0/${commentId}?access_token=${accessToken}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Meta API Delete Failed: ${errText}`);
+  }
+  return await response.json();
+}
+
+export async function blockUserOnPage(
+  accessToken: string,
+  pageId: string,
+  userId: string
+): Promise<any> {
+  const url = `https://graph.facebook.com/v25.0/${pageId}/blocked`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: userId, access_token: accessToken }),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Meta API Block User Failed: ${errText}`);
+  }
+  return await response.json();
+}
+
+export async function likeComment(
+  accessToken: string,
+  commentId: string
+): Promise<any> {
+  const url = `https://graph.facebook.com/v25.0/${commentId}/likes`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token: accessToken }),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Meta API Like Comment Failed: ${errText}`);
+  }
+  return await response.json();
+}
+
+export async function fetchPostContext(
+  accessToken: string,
+  postId: string,
+  platform: 'facebook' | 'instagram'
+): Promise<string> {
+  const fields = platform === 'instagram' ? 'caption' : 'message';
+  const url = `https://graph.facebook.com/v25.0/${postId}?fields=${fields}&access_token=${accessToken}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Meta API Fetch Post Context Failed: ${errText}`);
+  }
+  const data = await response.json() as any;
+  return (platform === 'instagram' ? data.caption : data.message) || '';
+}
+

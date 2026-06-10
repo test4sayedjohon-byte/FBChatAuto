@@ -21,6 +21,7 @@ import {
 } from './db';
 import { processCommentChanges } from './comments';
 import { processFeedChanges } from './feed-processor';
+import { handleFlowInteraction, handleFlowTextInput, executeNode } from './chat/flow-engine';
 
 // ─── Helper: Download Facebook Images to Base64 ─────────────────────────────
 // Facebook Messenger webhook image URLs (lookaside.fbsbx.com) are self-authenticating
@@ -247,6 +248,38 @@ async function handleMessagingEvent(
   const attachments = event.message?.attachments || [];
   const fbMessageId = event.message?.mid || Date.now().toString();
 
+  const payload = event.postback?.payload || (event.message as any)?.quick_reply?.payload;
+  if (payload && payload.startsWith('FLOW_NODE_ID:')) {
+    console.log(`[Webhook] 🔘 Button/Quick-Reply flow payload from ${senderId}: ${payload}`);
+    const title = event.postback?.title || event.message?.text || 'Option';
+    const tappedText = `[Tapped: ${title}]`;
+
+    const result = await storeIncomingMessageFallback(
+      env.DB,
+      supabase,
+      pageConnection.user_id,
+      pageId,
+      senderId,
+      tappedText,
+      fbMessageId,
+      pageConnection.access_token
+    );
+
+    if (result) {
+      const handled = await handleFlowInteraction(
+        env.DB,
+        supabase,
+        result.sessionId,
+        payload,
+        pageConnection,
+        senderId
+      );
+      if (handled) {
+        return;
+      }
+    }
+  }
+
   if (event.postback) {
     console.log(`[Webhook] 🔘 Postback from ${senderId}: ${event.postback.payload}`);
     return;
@@ -312,6 +345,25 @@ async function handleMessagingEvent(
 
   if (!result) return;
   console.log(`[Webhook] ✅ Message stored in session: ${result.sessionId}`);
+
+  // Check if there is an active flow session
+  const activeFlow = await env.DB.prepare(
+    `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
+  )
+    .bind(result.sessionId)
+    .first();
+
+  if (activeFlow && messageText) {
+    const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderId);
+    if (handledText) {
+      console.log(`[Flow Engine] Flow advanced via text input`);
+      return;
+    } else {
+      console.log(`[Flow Engine] Mismatched text input during flow. Resending options for node ${activeFlow.current_node_id}`);
+      await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id as string, pageConnection, senderId);
+      return;
+    }
+  }
 
   // ── Download & store images as base64 ─────────────────────────────────
   // This runs BEFORE the AI call so the chat handler reads the base64 data URLs.

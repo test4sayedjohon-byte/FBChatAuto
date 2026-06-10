@@ -277,7 +277,29 @@ async function handleMessagingEvent(
       if (handled) {
         return;
       }
+
+      // If handleFlowInteraction returned false, check if a flow is still active
+      const activeFlow = await env.DB.prepare(
+        `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
+      )
+        .bind(result.sessionId)
+        .first<{ current_node_id: string }>();
+
+      if (activeFlow && activeFlow.current_node_id) {
+        console.log(`[Webhook] Mismatched button interaction. Flow still active at node ${activeFlow.current_node_id}. Resending options.`);
+        await executeNode(
+          env.DB,
+          supabase,
+          result.sessionId,
+          activeFlow.current_node_id,
+          pageConnection,
+          senderId
+        );
+      } else {
+        console.log(`[Webhook] Expired button interaction. No active flow session.`);
+      }
     }
+    return; // Block raw payload from reaching AI chatbot under any circumstances
   }
 
   if (event.postback) {
@@ -351,18 +373,21 @@ async function handleMessagingEvent(
     `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
   )
     .bind(result.sessionId)
-    .first();
+    .first<{ current_node_id: string }>();
 
-  if (activeFlow && messageText) {
-    const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderId);
-    if (handledText) {
-      console.log(`[Flow Engine] Flow advanced via text input`);
-      return;
-    } else {
-      console.log(`[Flow Engine] Mismatched text input during flow. Resending options for node ${activeFlow.current_node_id}`);
-      await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id as string, pageConnection, senderId);
-      return;
+  if (activeFlow) {
+    if (messageText) {
+      const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderId);
+      if (handledText) {
+        console.log(`[Flow Engine] Flow advanced via text input`);
+        return;
+      }
     }
+    
+    // Either messageText is empty (user sent attachment/media) or handleFlowTextInput returned false (mismatched text)
+    console.log(`[Flow Engine] Mismatched/unsupported input during flow. Resending options for node ${activeFlow.current_node_id}`);
+    await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id, pageConnection, senderId);
+    return;
   }
 
   // ── Download & store images as base64 ─────────────────────────────────

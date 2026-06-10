@@ -295,7 +295,29 @@ async function handleWhatsAppMessage(
       if (handled) {
         return; // Exit webhook handler since flow advanced.
       }
+
+      // If handleFlowInteraction returned false, check if a flow is still active
+      const activeFlow = await env.DB.prepare(
+        `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
+      )
+        .bind(result.sessionId)
+        .first<{ current_node_id: string }>();
+
+      if (activeFlow && activeFlow.current_node_id) {
+        console.log(`[WhatsApp Webhook] Mismatched button interaction. Flow still active at node ${activeFlow.current_node_id}. Resending options.`);
+        await executeNode(
+          env.DB,
+          supabase,
+          result.sessionId,
+          activeFlow.current_node_id,
+          pageConnection,
+          senderPhoneNumber
+        );
+      } else {
+        console.log(`[WhatsApp Webhook] Expired button interaction. No active flow session.`);
+      }
     }
+    return; // Block raw payload from reaching AI chatbot under any circumstances
   }
 
   if (!messageText && !attachmentType) {
@@ -327,21 +349,24 @@ async function handleWhatsAppMessage(
 
   // Check if there is an active flow session
   const activeFlow = await env.DB.prepare(
-    `SELECT current_node_id FROM chat_session_flows WHERE session_id = ? AND is_paused = 0`
+    `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
   )
     .bind(result.sessionId)
-    .first();
+    .first<{ current_node_id: string }>();
 
-  if (activeFlow && messageText) {
-    const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderPhoneNumber);
-    if (handledText) {
-      console.log(`[Flow Engine] WhatsApp Flow advanced via text input`);
-      return;
-    } else {
-      console.log(`[Flow Engine] WhatsApp Mismatched text input during flow. Resending options for node ${activeFlow.current_node_id}`);
-      await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id as string, pageConnection, senderPhoneNumber);
-      return;
+  if (activeFlow) {
+    if (messageText) {
+      const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderPhoneNumber);
+      if (handledText) {
+        console.log(`[Flow Engine] WhatsApp Flow advanced via text input`);
+        return;
+      }
     }
+    
+    // Either messageText is empty (user sent attachment/media) or handleFlowTextInput returned false (mismatched text)
+    console.log(`[Flow Engine] WhatsApp Mismatched/unsupported input during flow. Resending options for node ${activeFlow.current_node_id}`);
+    await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id, pageConnection, senderPhoneNumber);
+    return;
   }
 
   // Fetch name from contacts profile in the webhook and save to the chat_session if missing

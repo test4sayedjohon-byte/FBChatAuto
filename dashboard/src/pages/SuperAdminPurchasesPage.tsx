@@ -55,7 +55,7 @@ export default function SuperAdminPurchasesPage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('No active session');
 
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8787';
+      const apiUrl = import.meta.env.VITE_WORKER_URL || import.meta.env.VITE_API_URL || 'https://metachat.junoverseai.com';
       const endpoint = `${apiUrl}/api/super-admin/purchases/${targetId}/${targetStatus}`;
       
       const response = await fetch(endpoint, {

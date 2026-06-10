@@ -22,7 +22,11 @@ import {
   User,
   Share2,
   Shuffle,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Plus,
+  ChevronDown,
+  Sparkles,
+  MoreHorizontal
 } from 'lucide-react';
 import { exportFlow } from '../lib/FlowJsonHandler';
 import AssetSelector from '../components/AssetSelector';
@@ -37,7 +41,7 @@ interface Flow {
 interface FlowNode {
   id: string;
   flow_id: string;
-  type: 'message' | 'interactive' | 'delay' | 'condition' | 'action' | 'ai_route' | 'capture_input' | 'lead_webhook' | 'randomizer' | 'goto_flow';
+  type: 'message' | 'interactive' | 'delay' | 'condition' | 'action' | 'ai_route' | 'capture_input' | 'lead_webhook' | 'randomizer' | 'goto_flow' | 'ai_agent';
   data: {
     text?: string;
     mediaUrl?: string;
@@ -81,6 +85,8 @@ interface FlowNode {
     validationErrorMessage?: string;
     webhookUrl?: string;
     targetFlowId?: string;
+    promptInstructions?: string;
+    aiModel?: string;
   };
   position: { x: number; y: number };
 }
@@ -103,6 +109,8 @@ export default function FlowBuilderPage() {
   const [otherFlows, setOtherFlows] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [addBlockOpen, setAddBlockOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
 
   // UX / Interaction state
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -236,6 +244,8 @@ export default function FlowBuilderPage() {
         return {};
       case 'goto_flow':
         return { targetFlowId: '' };
+      case 'ai_agent':
+        return { promptInstructions: 'You are a helpful assistant talking to {{name}}. Keep responses short.', aiModel: '' };
       default:
         return {};
     }
@@ -594,45 +604,188 @@ export default function FlowBuilderPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px' }}>
-          {/* Quick Toolbar */}
-          <div style={{ display: 'inline-flex', gap: '4px', background: 'var(--bg-primary)', padding: '4px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)' }}>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('message')} title="Add Text Message">
-              <MessageSquare size={13} color="#4f46e5" /> +Text
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }}>
+          {/* Dropdown Backdrop Overlays to close when clicking away */}
+          {addBlockOpen && (
+            <div 
+              style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 85, background: 'transparent' }} 
+              onClick={() => setAddBlockOpen(false)} 
+            />
+          )}
+          {actionsOpen && (
+            <div 
+              style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 85, background: 'transparent' }} 
+              onClick={() => setActionsOpen(false)} 
+            />
+          )}
+
+          <style>{`
+            .node-dropdown-item {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              width: 100%;
+              padding: 8px 12px;
+              background: transparent;
+              border: none;
+              border-radius: var(--radius-md);
+              color: var(--text-primary);
+              font-size: 13px;
+              text-align: left;
+              cursor: pointer;
+              transition: all 0.15s ease;
+            }
+            .node-dropdown-item:hover {
+              background: rgba(255, 255, 255, 0.08);
+              color: #fff;
+            }
+            .node-dropdown-group-title {
+              font-size: 9px;
+              font-weight: 700;
+              color: var(--text-secondary);
+              padding: 6px 8px 2px 8px;
+              letter-spacing: 0.8px;
+              text-transform: uppercase;
+            }
+            .node-dropdown-divider {
+              height: 1px;
+              background: var(--border-primary);
+              margin: 4px 8px;
+            }
+          `}</style>
+
+          {/* n8n-style Node Selector Dropdown */}
+          <div style={{ position: 'relative', zIndex: 90 }}>
+            <button 
+              className="btn-primary" 
+              onClick={() => setAddBlockOpen(!addBlockOpen)}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '13px' }}
+            >
+              <Plus size={16} />
+              Add Block
+              <ChevronDown size={14} />
             </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('interactive')} title="Add Interactive Options">
-              <GitPullRequest size={13} color="#d946ef" /> +Interactive
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('delay')} title="Add Time Delay">
-              <Clock size={13} color="#f59e0b" /> +Delay
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('condition')} title="Add Conditional Logic">
-              <Zap size={13} color="#eab308" /> +Rule
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('action')} title="Add Tag/Attribute Action">
-              <Settings size={13} color="#10b981" /> +Action
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('ai_route')} title="Route control to AI Chatbot">
-              <Bot size={13} color="#f43f5e" /> +AI
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('capture_input')} title="Capture User Response">
-              <User size={13} color="#06b6d4" /> +Capture
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('lead_webhook')} title="Send Lead to Webhook">
-              <Share2 size={13} color="#8b5cf6" /> +Webhook
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('randomizer')} title="A/B Split Test Path">
-              <Shuffle size={13} color="#ec4899" /> +Split
-            </button>
-            <button className="btn-ghost" style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }} onClick={() => handleAddNode('goto_flow')} title="Go to another flow">
-              <ArrowRightLeft size={13} color="#3b82f6" /> +Go-To
-            </button>
+
+            {addBlockOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                width: '240px',
+                background: 'rgba(21, 23, 28, 0.95)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: 'var(--radius-lg)',
+                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)',
+                padding: '8px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px'
+              }}>
+                <div className="node-dropdown-group-title">Messaging</div>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('message'); setAddBlockOpen(false); }}>
+                  <MessageSquare size={14} color="#4f46e5" />
+                  <span>Text Message</span>
+                </button>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('interactive'); setAddBlockOpen(false); }}>
+                  <GitPullRequest size={14} color="#d946ef" />
+                  <span>Interactive Choices</span>
+                </button>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('capture_input'); setAddBlockOpen(false); }}>
+                  <User size={14} color="#06b6d4" />
+                  <span>Capture Input</span>
+                </button>
+
+                <div className="node-dropdown-divider" />
+
+                <div className="node-dropdown-group-title">Logic</div>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('delay'); setAddBlockOpen(false); }}>
+                  <Clock size={14} color="#f59e0b" />
+                  <span>Typing Delay</span>
+                </button>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('condition'); setAddBlockOpen(false); }}>
+                  <Zap size={14} color="#eab308" />
+                  <span>Conditional Rule</span>
+                </button>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('randomizer'); setAddBlockOpen(false); }}>
+                  <Shuffle size={14} color="#ec4899" />
+                  <span>A/B Split Test</span>
+                </button>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('goto_flow'); setAddBlockOpen(false); }}>
+                  <ArrowRightLeft size={14} color="#3b82f6" />
+                  <span>Go-To Flow</span>
+                </button>
+
+                <div className="node-dropdown-divider" />
+
+                <div className="node-dropdown-group-title">AI Agents</div>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('ai_agent'); setAddBlockOpen(false); }}>
+                  <Sparkles size={14} color="#a855f7" />
+                  <span>AI Agent Node</span>
+                </button>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('ai_route'); setAddBlockOpen(false); }}>
+                  <Bot size={14} color="#f43f5e" />
+                  <span>Resume Chatbot</span>
+                </button>
+
+                <div className="node-dropdown-divider" />
+
+                <div className="node-dropdown-group-title">Integration</div>
+                <button className="node-dropdown-item" onClick={() => { handleAddNode('lead_webhook'); setAddBlockOpen(false); }}>
+                  <Share2 size={14} color="#10b981" />
+                  <span>Send Lead (Webhook)</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          <button className="btn-secondary" onClick={() => document.getElementById('import-builder-json')?.click()} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', fontSize: '13px' }} title="Import Flow JSON directly onto canvas">
-            <Upload size={13} />
-            Import JSON
-          </button>
+          {/* Compact Actions Dropdown Menu */}
+          <div style={{ position: 'relative', zIndex: 90 }}>
+            <button 
+              className="btn-secondary" 
+              onClick={() => setActionsOpen(!actionsOpen)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', fontSize: '13px' }}
+              title="Actions"
+            >
+              <MoreHorizontal size={16} />
+              Actions
+              <ChevronDown size={14} />
+            </button>
+
+            {actionsOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                width: '160px',
+                background: 'rgba(21, 23, 28, 0.95)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: 'var(--radius-md)',
+                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)',
+                padding: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px'
+              }}>
+                <button 
+                  className="node-dropdown-item" 
+                  onClick={() => { setActionsOpen(false); document.getElementById('import-builder-json')?.click(); }}
+                >
+                  <Upload size={14} />
+                  <span>Import JSON</span>
+                </button>
+                <button 
+                  className="node-dropdown-item" 
+                  onClick={() => { setActionsOpen(false); handleExportJson(); }}
+                >
+                  <Download size={14} />
+                  <span>Export JSON</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <input
             id="import-builder-json"
             type="file"
@@ -640,11 +793,13 @@ export default function FlowBuilderPage() {
             onChange={handleImportJsonLocal}
             style={{ display: 'none' }}
           />
-          <button className="btn-secondary" onClick={handleExportJson} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', fontSize: '13px' }} title="Export Flow config as JSON">
-            <Download size={13} />
-            Export JSON
-          </button>
-          <button className="btn-primary" disabled={saving} onClick={handleSaveFlow} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '13px' }}>
+
+          <button 
+            className="btn-primary" 
+            disabled={saving} 
+            onClick={handleSaveFlow} 
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '13px' }}
+          >
             <Save size={14} />
             {saving ? 'Saving...' : 'Save Flow'}
           </button>
@@ -782,7 +937,8 @@ export default function FlowBuilderPage() {
               capture_input: { border: '#06b6d4', bg: 'rgba(6, 182, 212, 0.12)', label: 'Capture Input' },
               lead_webhook: { border: '#8b5cf6', bg: 'rgba(139, 92, 246, 0.12)', label: 'Send Lead (Webhook)' },
               randomizer: { border: '#ec4899', bg: 'rgba(236, 72, 153, 0.12)', label: 'A/B Split Test' },
-              goto_flow: { border: '#3b82f6', bg: 'rgba(59, 130, 246, 0.12)', label: 'Go-To Flow' }
+              goto_flow: { border: '#3b82f6', bg: 'rgba(59, 130, 246, 0.12)', label: 'Go-To Flow' },
+              ai_agent: { border: '#a855f7', bg: 'rgba(168, 85, 247, 0.12)', label: 'AI Agent' }
             }[node.type];
 
             return (
@@ -1173,6 +1329,34 @@ export default function FlowBuilderPage() {
                       <div style={{ fontSize: '10px', opacity: 0.8, color: 'var(--accent-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {otherFlows.find(f => f.id === node.data.targetFlowId)?.name || 'Select Flow...'}
                       </div>
+                    </div>
+                  )}
+
+                  {node.type === 'ai_agent' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ fontWeight: 'bold', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        Model: <span style={{ fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{node.data.aiModel || 'Default'}</span>
+                      </div>
+                      <div style={{ fontSize: '10px', opacity: 0.8, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        Prompt: "{node.data.promptInstructions || 'You are a helpful assistant...'}"
+                      </div>
+                      {/* Outgoing Handle */}
+                      <div
+                        onClick={(e) => startLinking(node.id, 'default', e)}
+                        style={{
+                          position: 'absolute',
+                          right: '-7px',
+                          top: '33px',
+                          width: '12px',
+                          height: '12px',
+                          borderRadius: '50%',
+                          background: colors.border,
+                          border: '2px solid #15171c',
+                          zIndex: 35,
+                          cursor: 'crosshair'
+                        }}
+                        title="Link next step"
+                      />
                     </div>
                   )}
 
@@ -1721,6 +1905,58 @@ export default function FlowBuilderPage() {
                     <p style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>
                       Transitions execution instantly from this block into the selected flow's starting block.
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {selectedNode.type === 'ai_agent' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}>AI AGENT SYSTEM INSTRUCTIONS</label>
+                    <textarea
+                      value={selectedNode.data.promptInstructions || ''}
+                      onChange={e => updateNodeData(selectedNode.id, { promptInstructions: e.target.value })}
+                      rows={5}
+                      placeholder="e.g. You are a helpful sales assistant talking to {{name}}. Pitch the service and keep responses brief."
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        background: 'var(--bg-primary)',
+                        border: '1px solid var(--border-primary)',
+                        borderRadius: 'var(--radius-md)',
+                        color: '#fff',
+                        fontSize: '13px',
+                        resize: 'none'
+                      }}
+                    />
+                    <p style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: '1.4' }}>
+                      You can use template placeholders: {"{{name}}"}, {"{{phone}}"}, {"{{email}}"}, or any custom variable keys you captured.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}>MODEL OVERRIDE (OPTIONAL)</label>
+                    <select
+                      value={selectedNode.data.aiModel || ''}
+                      onChange={e => updateNodeData(selectedNode.id, { aiModel: e.target.value })}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        background: 'var(--bg-primary)',
+                        border: '1px solid var(--border-primary)',
+                        borderRadius: 'var(--radius-md)',
+                        color: '#fff',
+                        fontSize: '13px'
+                      }}
+                    >
+                      <option value="">-- Use Default Model --</option>
+                      <option value="gpt-4o">GPT-4o (OpenAI)</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini (OpenAI)</option>
+                      <option value="claude-3-5-sonnet">Claude 3.5 Sonnet (Anthropic)</option>
+                      <option value="claude-3-haiku">Claude 3 Haiku (Anthropic)</option>
+                      <option value="gemini-1.5-pro">Gemini 1.5 Pro (Google)</option>
+                      <option value="gemini-1.5-flash">Gemini 1.5 Flash (Google)</option>
+                    </select>
                   </div>
                 </div>
               )}

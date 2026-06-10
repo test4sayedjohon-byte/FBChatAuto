@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
+import { WORKER_URL } from '../lib/workerApi';
 import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save, Edit2 } from 'lucide-react';
 
 interface Rule {
@@ -103,7 +104,7 @@ export default function AutoModerationPage() {
       const sessionRes = await supabase.auth.getSession();
       const token = sessionRes.data.session?.access_token || '';
       
-      const response = await fetch(`http://localhost:8787/api/page-posts/${pageId}`, {
+      const response = await fetch(`${WORKER_URL}/api/page-posts/${pageId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -323,13 +324,15 @@ export default function AutoModerationPage() {
     setSendingAutopilot(true);
 
     try {
-      // Local URL for worker execution
-      const workerUrl = 'http://localhost:8787/api/autopilot-config';
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data.session?.access_token || '';
+
+      const workerUrl = `${WORKER_URL}/api/autopilot-config`;
       const response = await fetch(workerUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Bypass-Auth': 'true' // bypass auth check locally
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           userId: user.id,

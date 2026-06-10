@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
-import { workerPost } from '../lib/workerApi';
+import { workerPost, WORKER_URL } from '../lib/workerApi';
 import { 
   ArrowLeft, Save, Sparkles, Plus, Trash2, X, Loader2, FileText, 
   FolderOpen, HelpCircle, Settings, BookOpen 
@@ -218,7 +218,7 @@ export default function AutoModerationRuleEditPage() {
       const sessionRes = await supabase.auth.getSession();
       const token = sessionRes.data.session?.access_token || '';
       
-      const response = await fetch(`http://localhost:8787/api/page-posts/${pageId}`, {
+      const response = await fetch(`${WORKER_URL}/api/page-posts/${pageId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

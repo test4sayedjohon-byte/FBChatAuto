@@ -228,7 +228,7 @@ export interface DMFlow {
 export interface DMFlowNode {
   id: string;
   flow_id: string;
-  type: 'message' | 'interactive' | 'delay' | 'condition' | 'action' | 'ai_route' | 'capture_input' | 'lead_webhook' | 'randomizer' | 'goto_flow';
+  type: 'message' | 'interactive' | 'delay' | 'condition' | 'action' | 'ai_route' | 'capture_input' | 'lead_webhook' | 'randomizer' | 'goto_flow' | 'ai_agent';
   data: {
     text?: string;
     mediaUrl?: string;

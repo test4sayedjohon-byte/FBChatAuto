@@ -143,7 +143,7 @@ export async function importFlow(
           target_node_id: targetId,
           source_handle: edge.source_handle || null
         };
-      }).filter(Boolean);
+      }).filter((edge): edge is Exclude<typeof edge, null> => edge !== null);
 
       if (newEdges.length > 0) {
         const { error: edgesErr } = await supabase

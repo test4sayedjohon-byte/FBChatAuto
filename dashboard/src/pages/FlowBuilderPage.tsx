@@ -93,13 +93,6 @@ interface FlowEdge {
   source_handle: string; // 'default', 'true', 'false', or button title/payload
 }
 
-interface ChatAsset {
-  id: string;
-  friendly_name: string;
-  file_url: string;
-  file_type: string;
-}
-
 export default function FlowBuilderPage() {
   const { flowId } = useParams<{ flowId: string }>();
   const navigate = useNavigate();
@@ -107,7 +100,6 @@ export default function FlowBuilderPage() {
   const [flow, setFlow] = useState<Flow | null>(null);
   const [nodes, setNodes] = useState<FlowNode[]>([]);
   const [edges, setEdges] = useState<FlowEdge[]>([]);
-  const [chatAssets, setChatAssets] = useState<ChatAsset[]>([]);
   const [otherFlows, setOtherFlows] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -164,13 +156,7 @@ export default function FlowBuilderPage() {
       if (edgesErr) throw edgesErr;
       setEdges((edgesData || []) as FlowEdge[]);
 
-      // 4. Fetch chat assets
-      const { data: assetsData } = await supabase
-        .from('chat_assets')
-        .select('*');
-      setChatAssets(assetsData || []);
-
-      // 5. Fetch active flows for Go-To options
+      // 4. Fetch active flows for Go-To options
       const { data: otherFlowsData } = await supabase
         .from('dm_flows')
         .select('id, name')

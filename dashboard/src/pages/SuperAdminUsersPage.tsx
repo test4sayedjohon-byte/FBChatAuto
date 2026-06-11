@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
-import { workerPost } from '../lib/workerApi';
+import { workerPost, WORKER_URL } from '../lib/workerApi';
 import { toast } from '../hooks/useToast';
 import UserCard from './super-admin/UserCard';
 import {
@@ -23,6 +23,10 @@ import {
   RefreshCw,
   Gift,
   X,
+  Lock,
+  Database,
+  Download,
+  Upload,
 } from 'lucide-react';
 import type { SuperAdminUser } from './super-admin/types';
 
@@ -54,6 +58,276 @@ export default function SuperAdminUsersPage() {
   // Pagination
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 20;
+
+  // ── Maintenance / Backup State ──────────────────────────────────────────
+  const [, setSecretClickCount] = useState(0);
+  const [showMaintenancePanel, setShowMaintenancePanel] = useState(false);
+  const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [maintenanceUnlocked, setMaintenanceUnlocked] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [backupProgress, setBackupProgress] = useState(0);
+  const [backupStatusText, setBackupStatusText] = useState('');
+  const [backupLog, setBackupLog] = useState<string[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  const BACKUP_TABLES = [
+    'users',
+    'document_folders',
+    'media',
+    'page_connections',
+    'folder_page_assignments',
+    'knowledge_fields',
+    'documents',
+    'document_chunks',
+    'chat_sessions',
+    'chat_messages',
+    'customer_profiles',
+    'dm_flows',
+    'dm_flow_nodes',
+    'dm_flow_edges',
+    'chat_session_flows',
+    'scheduled_posts',
+    'comment_rules',
+    'comment_logs',
+    'post_contexts',
+    'user_blocklist',
+    'integrations',
+    'purchases',
+    'billing_ledger',
+    'admin_audit_log'
+  ];
+
+  const handleSecretClick = () => {
+    setSecretClickCount(prev => {
+      const next = prev + 1;
+      if (next >= 5) {
+        setShowMaintenancePanel(true);
+        toast.success('Developer Easter Egg: Maintenance Panel Revealed!');
+        return 0;
+      }
+      return next;
+    });
+  };
+
+  const handleUnlockMaintenance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminPassword) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        toast.error('Session expired, please sign in again.');
+        return;
+      }
+
+      const response = await fetch(`${WORKER_URL}/api/super-admin/backup/verify-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ password: adminPassword })
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: 'Invalid password' }));
+        throw new Error(err.error || 'Password verification failed');
+      }
+
+      setMaintenanceUnlocked(true);
+      setPasswordPromptOpen(false);
+      toast.success('Maintenance access unlocked successfully!');
+      setBackupLog(prev => [...prev, `[System] Maintenance panel unlocked at ${new Date().toLocaleTimeString()}`]);
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleExportBackup = async () => {
+    if (!maintenanceUnlocked) {
+      setPasswordPromptOpen(true);
+      return;
+    }
+
+    setIsExporting(true);
+    setBackupProgress(0);
+    setBackupStatusText('Initializing Backup Export...');
+    setBackupLog([`[Backup] Starting full system export...`]);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Session expired');
+
+      const backupData: Record<string, any[]> = {};
+      const totalSteps = BACKUP_TABLES.length;
+
+      for (let i = 0; i < BACKUP_TABLES.length; i++) {
+        const table = BACKUP_TABLES[i];
+        setBackupStatusText(`Exporting table: ${table}...`);
+        setBackupLog(prev => [...prev, `[Backup] Exporting table ${table}...`]);
+
+        let allRows: any[] = [];
+        let offset = 0;
+        const limit = 500;
+        let hasMoreRows = true;
+
+        while (hasMoreRows) {
+          const response = await fetch(`${WORKER_URL}/api/super-admin/backup/export-table`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({
+              password: adminPassword,
+              tableName: table,
+              offset,
+              limit
+            })
+          });
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: 'Failed' }));
+            throw new Error(`Failed to export ${table}: ${err.error}`);
+          }
+
+          const res = await response.json();
+          const rows = res.data || [];
+          allRows = [...allRows, ...rows];
+
+          if (rows.length < limit) {
+            hasMoreRows = false;
+          } else {
+            offset += limit;
+          }
+        }
+
+        backupData[table] = allRows;
+        setBackupLog(prev => [...prev, `[Backup] Successfully exported ${allRows.length} rows from ${table}`]);
+        setBackupProgress(Math.round(((i + 1) / totalSteps) * 100));
+      }
+
+      const backupPayload = {
+        version: '1.0',
+        timestamp: new Date().toISOString(),
+        data: backupData
+      };
+
+      const blob = new Blob([JSON.stringify(backupPayload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `autometabot_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setBackupStatusText('Backup completed successfully!');
+      setBackupLog(prev => [...prev, `[Backup] Success! File downloaded.`]);
+      toast.success('Backup file created and downloaded successfully!');
+    } catch (err: any) {
+      console.error(err);
+      setBackupStatusText('Backup export failed');
+      setBackupLog(prev => [...prev, `[Backup] Error: ${err.message}`]);
+      toast.error(`Export failed: ${err.message}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleRestoreBackup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFile) {
+      toast.warning('Please select a backup JSON file first.');
+      return;
+    }
+
+    if (!maintenanceUnlocked) {
+      setPasswordPromptOpen(true);
+      return;
+    }
+
+    if (!confirm('WARNING: This will restore database tables and could overwrite/update existing records. Are you absolutely sure?')) {
+      return;
+    }
+
+    setIsRestoring(true);
+    setBackupProgress(0);
+    setBackupStatusText('Initializing Restore...');
+    setBackupLog([`[Restore] Reading backup file...`]);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Session expired');
+
+      const fileContent = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(selectedFile);
+      });
+
+      const backupPayload = JSON.parse(fileContent);
+      if (!backupPayload.data || typeof backupPayload.data !== 'object') {
+        throw new Error('Invalid backup file format: data object not found');
+      }
+
+      const totalSteps = BACKUP_TABLES.length;
+
+      for (let i = 0; i < BACKUP_TABLES.length; i++) {
+        const table = BACKUP_TABLES[i];
+        const rows = backupPayload.data[table] || [];
+
+        setBackupStatusText(`Restoring table: ${table}...`);
+        setBackupLog(prev => [...prev, `[Restore] Table ${table}: restoring ${rows.length} rows...`]);
+
+        if (rows.length === 0) {
+          setBackupLog(prev => [...prev, `[Restore] Table ${table}: skipped (no rows)`]);
+          setBackupProgress(Math.round(((i + 1) / totalSteps) * 100));
+          continue;
+        }
+
+        const chunkSize = 200;
+        for (let chunkIdx = 0; chunkIdx < rows.length; chunkIdx += chunkSize) {
+          const chunk = rows.slice(chunkIdx, chunkIdx + chunkSize);
+          const response = await fetch(`${WORKER_URL}/api/super-admin/backup/restore-batch`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({
+              password: adminPassword,
+              tableName: table,
+              rows: chunk
+            })
+          });
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: 'Failed' }));
+            throw new Error(`Failed to restore chunk for ${table}: ${err.error}`);
+          }
+        }
+
+        setBackupLog(prev => [...prev, `[Restore] Table ${table}: restored successfully`]);
+        setBackupProgress(Math.round(((i + 1) / totalSteps) * 100));
+      }
+
+      setBackupStatusText('Restore completed successfully!');
+      setBackupLog(prev => [...prev, `[Restore] Success! All tables restored.`]);
+      toast.success('Database restore completed successfully!');
+      loadUsers();
+    } catch (err: any) {
+      console.error(err);
+      setBackupStatusText('Restore failed');
+      setBackupLog(prev => [...prev, `[Restore] Error: ${err.message}`]);
+      toast.error(`Restore failed: ${err.message}`);
+    } finally {
+      setIsRestoring(false);
+    }
+  };
 
   useEffect(() => {
     if (isAdmin) loadUsers();
@@ -361,7 +635,7 @@ export default function SuperAdminUsersPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
         <div>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '24px' }}>
-            <Users size={26} style={{ color: 'var(--accent-primary)' }} />
+            <Users size={26} style={{ color: 'var(--accent-primary)', cursor: 'pointer' }} onClick={handleSecretClick} />
             Users
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
@@ -722,6 +996,212 @@ export default function SuperAdminUsersPage() {
                 }}
               >
                 {giftSubmitting ? 'Processing...' : 'Confirm Gift 🎁'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 🛠️ Hidden System Maintenance (Backup & Restore) Panel */}
+      {showMaintenancePanel && (
+        <div className="card animate-slideUp" style={{ marginTop: '24px', padding: '24px', border: '1px solid var(--border-primary)', borderRadius: '16px', background: 'var(--bg-secondary)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-primary)', paddingBottom: '12px' }}>
+            <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+              <Database size={18} style={{ color: 'var(--accent-primary)' }} />
+              System Maintenance (Backup & Restore)
+            </h3>
+            <button className="btn-ghost btn-icon" onClick={() => setShowMaintenancePanel(false)} style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+              <X size={18} />
+            </button>
+          </div>
+
+          {!maintenanceUnlocked ? (
+            <div style={{ textAlign: 'center', padding: '24px 0' }}>
+              <Lock size={32} style={{ color: 'var(--text-secondary)', marginBottom: '12px', opacity: 0.5 }} />
+              <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                This area is password protected.
+              </p>
+              <button className="btn btn-primary" onClick={() => setPasswordPromptOpen(true)}>
+                Unlock with Password
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                <div style={{ flex: 1, minWidth: '250px', padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '12px', border: '1px solid var(--border-primary)' }}>
+                  <h4 style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 600 }}>
+                    <Download size={16} style={{ color: 'var(--accent-primary)' }} />
+                    Export System Backup
+                  </h4>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: 1.4 }}>
+                    Download a database-independent JSON backup file of all users, chats, posts, and keys.
+                  </p>
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={handleExportBackup} 
+                    disabled={isExporting || isRestoring}
+                    style={{ width: '100%' }}
+                  >
+                    {isExporting ? 'Exporting...' : 'Export Backup JSON'}
+                  </button>
+                </div>
+
+                <div style={{ flex: 1, minWidth: '250px', padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '12px', border: '1px solid var(--border-primary)' }}>
+                  <h4 style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 600 }}>
+                    <Upload size={16} style={{ color: '#10b981' }} />
+                    Restore System Backup
+                  </h4>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: 1.4 }}>
+                    Upload a previously exported JSON backup file to restore all tables and user data.
+                  </p>
+                  <form onSubmit={handleRestoreBackup} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <input 
+                      type="file" 
+                      accept=".json"
+                      onChange={e => setSelectedFile(e.target.files?.[0] || null)}
+                      style={{ fontSize: '12px', color: 'var(--text-primary)' }}
+                    />
+                    <button 
+                      type="submit"
+                      className="btn btn-secondary" 
+                      disabled={isExporting || isRestoring || !selectedFile}
+                      style={{ width: '100%', border: '1px solid #10b981', color: '#10b981', background: 'transparent' }}
+                    >
+                      {isRestoring ? 'Restoring...' : 'Restore Backup JSON'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* Progress Indicator */}
+              {(isExporting || isRestoring) && (
+                <div style={{ marginBottom: '16px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{backupStatusText}</span>
+                    <span style={{ fontWeight: 600, color: 'var(--accent-primary)' }}>{backupProgress}%</span>
+                  </div>
+                  <div style={{ width: '100%', height: '8px', background: 'var(--border-primary)', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{ width: `${backupProgress}%`, height: '100%', background: 'var(--accent-gradient, linear-gradient(90deg, #6366f1, #10b981))', transition: 'width 0.2s' }}></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Activity Log Terminal */}
+              {backupLog.length > 0 && (
+                <div>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Maintenance Console Log</label>
+                  <div style={{ 
+                    background: '#0d0e10', 
+                    color: '#34d399', 
+                    fontFamily: 'monospace', 
+                    fontSize: '11px', 
+                    padding: '12px', 
+                    borderRadius: '8px', 
+                    maxHeight: '150px', 
+                    overflowY: 'auto',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px'
+                  }}>
+                    {backupLog.map((log, idx) => (
+                      <div key={idx} style={{ wordBreak: 'break-all' }}>{log}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 🔐 Password Prompt Modal */}
+      {passwordPromptOpen && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px'
+          }}
+          onClick={() => setPasswordPromptOpen(false)}
+        >
+          <form 
+            onSubmit={handleUnlockMaintenance}
+            className="card animate-scaleUp" 
+            style={{
+              maxWidth: '380px', 
+              width: '100%', 
+              background: 'var(--bg-primary, #111315)', 
+              border: '1px solid var(--border-primary, rgba(255,255,255,0.08))',
+              borderRadius: '16px',
+              padding: '24px',
+              boxShadow: '0 24px 64px rgba(0,0,0,0.65)'
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+                <Lock size={18} style={{ color: 'var(--accent-primary)' }} />
+                Verify Password
+              </h3>
+              <button 
+                type="button"
+                className="btn-ghost btn-icon" 
+                onClick={() => setPasswordPromptOpen(false)}
+                style={{ padding: '4px', borderRadius: '50%', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.4 }}>
+              Please confirm your Super Admin password to unlock system backup and restore operations.
+            </p>
+
+            <div className="form-group" style={{ marginBottom: '20px' }}>
+              <label className="form-label" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px', display: 'block' }}>
+                Password
+              </label>
+              <input 
+                type="password"
+                required
+                placeholder="Enter your login password"
+                className="form-input"
+                value={adminPassword}
+                onChange={e => setAdminPassword(e.target.value)}
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                onClick={() => setPasswordPromptOpen(false)}
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                className="btn btn-primary"
+                style={{ 
+                  background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))', 
+                  border: 'none',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                Verify & Unlock
               </button>
             </div>
           </form>

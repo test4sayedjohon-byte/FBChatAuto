@@ -13,6 +13,7 @@ import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
 import apiRoutes from './routes/api';
 import webhookRoutes from './routes/webhook';
+import backupRoutes from './routes/backup';
 import {
   getPageConnectionFallback,
   storeIncomingMessageFallback,
@@ -203,6 +204,7 @@ app.get('/', (c) => {
 // ─── Mount Route Modules ────────────────────────────────────────────────────
 
 app.route('/api', apiRoutes);
+app.route('/api/super-admin/backup', backupRoutes);
 app.route('', webhookRoutes);
 
 // ─── Export ─────────────────────────────────────────────────────────────────

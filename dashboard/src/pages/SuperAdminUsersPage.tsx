@@ -74,6 +74,7 @@ export default function SuperAdminUsersPage() {
 
   const BACKUP_TABLES = [
     'users',
+    'ai_providers',
     'document_folders',
     'media',
     'page_connections',
@@ -96,7 +97,9 @@ export default function SuperAdminUsersPage() {
     'integrations',
     'purchases',
     'billing_ledger',
-    'admin_audit_log'
+    'admin_audit_log',
+    'audit_logs',
+    'version_history'
   ];
 
   const handleSecretClick = () => {
@@ -313,6 +316,28 @@ export default function SuperAdminUsersPage() {
 
         setBackupLog(prev => [...prev, `[Restore] Table ${table}: restored successfully`]);
         setBackupProgress(Math.round(((i + 1) / totalSteps) * 100));
+      }
+
+      // Finalize: Restore circular user -> provider references
+      setBackupStatusText('Finalizing user-provider links...');
+      setBackupLog(prev => [...prev, `[Restore] Finalizing user provider links...`]);
+      const finalizeRes = await fetch(`${WORKER_URL}/api/super-admin/backup/restore-finalize`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          password: adminPassword,
+          rows: backupPayload.data['users'] || []
+        })
+      });
+
+      if (!finalizeRes.ok) {
+        const err = await finalizeRes.json().catch(() => ({ error: 'Failed' }));
+        setBackupLog(prev => [...prev, `[Restore] Warning: failed to finalize provider links: ${err.error}`]);
+      } else {
+        setBackupLog(prev => [...prev, `[Restore] Provider links finalized successfully`]);
       }
 
       setBackupStatusText('Restore completed successfully!');

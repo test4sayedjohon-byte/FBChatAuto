@@ -114,7 +114,20 @@ backup.post('/restore-batch', async (c) => {
     }
 
     // 3. Special handling for auth recreation in users table
+    let rowsToInsert = rows;
     if (tableName === 'users') {
+      rowsToInsert = rows.map(r => ({
+        ...r,
+        assigned_chat_provider_id: null,
+        assigned_fallback_chat_provider_id: null,
+        assigned_embedding_provider_id: null,
+        assigned_summarization_provider_id: null,
+        assigned_agent_provider_id: null,
+        assigned_vision_provider_id: null,
+        assigned_image_provider_id: null,
+        assigned_fallback_image_provider_id: null
+      }));
+
       for (const userRow of rows) {
         if (!userRow.id || !userRow.email) continue;
         try {
@@ -138,12 +151,70 @@ backup.post('/restore-batch', async (c) => {
     }
 
     // 4. Batch upsert into public table
-    const { error: upsertErr } = await supabase.from(tableName).upsert(rows);
+    const { error: upsertErr } = await supabase.from(tableName).upsert(rowsToInsert);
     if (upsertErr) {
       return c.json({ error: `Restore error in table ${tableName}: ${upsertErr.message}` }, 500);
     }
 
     return c.json({ success: true, count: rows.length });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// ─── Restore Finalize (Updates circular user -> provider references) ─────────
+backup.post('/restore-finalize', async (c) => {
+  try {
+    const authUser = c.get('authUser');
+    if (!authUser || !authUser.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const { password, rows } = await c.req.json();
+    if (!password || !rows || !Array.isArray(rows)) {
+      return c.json({ error: 'Missing parameters' }, 400);
+    }
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // 1. Verify super admin role
+    const { data: profile } = await supabase.from('users').select('role').eq('id', authUser.id).single();
+    if (!profile || profile.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    if (!authUser.email) return c.json({ error: 'Admin email not found in session' }, 400);
+
+    // 2. Authenticate password
+    const { error: authErr } = await supabase.auth.signInWithPassword({
+      email: authUser.email,
+      password,
+    });
+    if (authErr) return c.json({ error: 'Invalid password' }, 401);
+
+    // 3. Perform the updates to set circular references
+    for (const userRow of rows) {
+      if (!userRow.id) continue;
+      const updatePayload = {
+        assigned_chat_provider_id: userRow.assigned_chat_provider_id || null,
+        assigned_fallback_chat_provider_id: userRow.assigned_fallback_chat_provider_id || null,
+        assigned_embedding_provider_id: userRow.assigned_embedding_provider_id || null,
+        assigned_summarization_provider_id: userRow.assigned_summarization_provider_id || null,
+        assigned_agent_provider_id: userRow.assigned_agent_provider_id || null,
+        assigned_vision_provider_id: userRow.assigned_vision_provider_id || null,
+        assigned_image_provider_id: userRow.assigned_image_provider_id || null,
+        assigned_fallback_image_provider_id: userRow.assigned_fallback_image_provider_id || null,
+      };
+
+      const { error } = await supabase
+        .from('users')
+        .update(updatePayload)
+        .eq('id', userRow.id);
+
+      if (error) {
+        console.error(`[Restore Finalize] Error updating user ${userRow.id}:`, error.message);
+      }
+    }
+
+    return c.json({ success: true });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }

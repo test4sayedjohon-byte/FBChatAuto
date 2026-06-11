@@ -28,6 +28,7 @@ interface AIProviderRow {
   is_active_summarization?: boolean;
   is_active_agent?: boolean;
   is_active_vision?: boolean;
+  is_active_image?: boolean;
   is_global?: boolean;
   fallback_order?: number;
   fallback_chat_order?: number | null;
@@ -35,6 +36,7 @@ interface AIProviderRow {
   fallback_summarize_order?: number | null;
   fallback_vision_order?: number | null;
   fallback_embedding_order?: number | null;
+  fallback_image_order?: number | null;
   extra_headers: Record<string, string>;
   max_tokens: number | null;
   temperature: number | null;
@@ -48,15 +50,20 @@ interface AIProviderRow {
 async function getProviderChainForRole(
   supabase: SupabaseClient,
   userId: string,
-  role: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision',
+  role: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision' | 'comment_analysis' | 'image',
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
-  const activeField = role === 'summarization' ? 'is_active_summarization' : `is_active_${role}`;
-  const configOrderField = `fallback${
-    role === 'summarization'
-      ? 'Summarize'
-      : role.charAt(0).toUpperCase() + role.slice(1)
-  }Order`;
+  const activeField = role === 'comment_analysis'
+    ? 'is_active_chat'
+    : (role === 'summarization' ? 'is_active_summarization' : `is_active_${role}`);
+
+  const configOrderField = role === 'comment_analysis'
+    ? 'fallbackChatOrder'
+    : `fallback${
+        role === 'summarization'
+          ? 'Summarize'
+          : role.charAt(0).toUpperCase() + role.slice(1)
+      }Order`;
 
   // Fetch all providers for the user (including global ones)
   let rows: any[];
@@ -87,7 +94,9 @@ async function getProviderChainForRole(
     agent: 'assigned_agent_provider_id',
     summarization: 'assigned_summarization_provider_id',
     embedding: 'assigned_embedding_provider_id',
-    vision: 'assigned_vision_provider_id'
+    vision: 'assigned_vision_provider_id',
+    comment_analysis: 'assigned_comment_analysis_provider_id',
+    image: 'assigned_image_provider_id'
   };
 
   const assignedCol = userAssignedFields[role];
@@ -161,6 +170,31 @@ export async function getChatProviderChain(
   userId: string,
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
+  // Check if chat is allowed (defaults to true)
+  let allowChat = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_chat !== undefined && userRecord.allow_chat !== null) {
+      allowChat = userRecord.allow_chat === 1 || userRecord.allow_chat === true;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_chat')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord && userRecord.allow_chat !== null && userRecord.allow_chat !== undefined) {
+        allowChat = userRecord.allow_chat;
+      }
+    } catch (_) {}
+  }
+
+  if (!allowChat) {
+    console.warn(`[AI] ⚠️ Chat is disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
   return getProviderChainForRole(supabase, userId, 'chat', db);
 }
 
@@ -184,6 +218,31 @@ export async function getAgentProviderChain(
   userId: string,
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
+  // Check if agent is allowed (defaults to true)
+  let allowAgent = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_agent !== undefined && userRecord.allow_agent !== null) {
+      allowAgent = userRecord.allow_agent === 1 || userRecord.allow_agent === true;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_agent')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord && userRecord.allow_agent !== null && userRecord.allow_agent !== undefined) {
+        allowAgent = userRecord.allow_agent;
+      }
+    } catch (_) {}
+  }
+
+  if (!allowAgent) {
+    console.warn(`[AI] ⚠️ Agent is disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
   return getProviderChainForRole(supabase, userId, 'agent', db);
 }
 
@@ -207,6 +266,31 @@ export async function getEmbeddingProviderChain(
   userId: string,
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
+  // Check if embeddings are allowed (defaults to true)
+  let allowEmbeddings = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_embeddings !== undefined && userRecord.allow_embeddings !== null) {
+      allowEmbeddings = userRecord.allow_embeddings === 1 || userRecord.allow_embeddings === true;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_embeddings')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord && userRecord.allow_embeddings !== null && userRecord.allow_embeddings !== undefined) {
+        allowEmbeddings = userRecord.allow_embeddings;
+      }
+    } catch (_) {}
+  }
+
+  if (!allowEmbeddings) {
+    console.warn(`[AI] ⚠️ Embeddings are disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
   const chain = await getProviderChainForRole(supabase, userId, 'embedding', db);
   
   // Fallback to chat provider chain if no dedicated embedding provider is configured
@@ -237,6 +321,31 @@ export async function getSummarizationProviderChain(
   userId: string,
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
+  // Check if summarization is allowed (defaults to true)
+  let allowSummarization = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_summarization !== undefined && userRecord.allow_summarization !== null) {
+      allowSummarization = userRecord.allow_summarization === 1 || userRecord.allow_summarization === true;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_summarization')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord && userRecord.allow_summarization !== null && userRecord.allow_summarization !== undefined) {
+        allowSummarization = userRecord.allow_summarization;
+      }
+    } catch (_) {}
+  }
+
+  if (!allowSummarization) {
+    console.warn(`[AI] ⚠️ Summarization is disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
   const chain = await getProviderChainForRole(supabase, userId, 'summarization', db);
   
   // Fallback to chat provider chain if no summarization provider is configured
@@ -254,11 +363,13 @@ export async function getVisionProviderChain(
   userId: string,
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
-  // Check if vision is allowed
-  let allowVision = false;
+  // Check if vision is allowed (defaults to true)
+  let allowVision = true;
   if (db) {
     const userRecord = await getUserRecord(db, supabase, userId);
-    allowVision = userRecord?.allow_vision === 1 || userRecord?.allow_vision === true;
+    if (userRecord && userRecord.allow_vision !== undefined && userRecord.allow_vision !== null) {
+      allowVision = userRecord.allow_vision === 1 || userRecord.allow_vision === true;
+    }
   } else {
     try {
       const { data: userRecord } = await supabase
@@ -266,7 +377,9 @@ export async function getVisionProviderChain(
         .select('allow_vision')
         .eq('id', userId)
         .maybeSingle();
-      allowVision = userRecord?.allow_vision || false;
+      if (userRecord && userRecord.allow_vision !== null && userRecord.allow_vision !== undefined) {
+        allowVision = userRecord.allow_vision;
+      }
     } catch (_) {}
   }
 
@@ -288,6 +401,42 @@ export async function getActiveVisionProvider(
 ): Promise<AIProviderConfig | null> {
   const chain = await getVisionProviderChain(supabase, userId, db);
   return chain[0] || null;
+}
+
+/**
+ * Load the active comment analysis provider chain.
+ */
+export async function getCommentAnalysisProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  // Check if comment analysis is allowed (defaults to true)
+  let allowCommentAnalysis = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_comment_analysis !== undefined && userRecord.allow_comment_analysis !== null) {
+      allowCommentAnalysis = userRecord.allow_comment_analysis === 1 || userRecord.allow_comment_analysis === true;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_comment_analysis')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord && userRecord.allow_comment_analysis !== null && userRecord.allow_comment_analysis !== undefined) {
+        allowCommentAnalysis = userRecord.allow_comment_analysis;
+      }
+    } catch (_) {}
+  }
+
+  if (!allowCommentAnalysis) {
+    console.warn(`[AI] ⚠️ Comment analysis is disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
+  return getProviderChainForRole(supabase, userId, 'comment_analysis', db);
 }
 
 /**
@@ -393,10 +542,60 @@ function rowToConfig(row: AIProviderRow): AIProviderConfig {
     fallbackSummarizeOrder: row.fallback_summarize_order ?? null,
     fallbackVisionOrder: row.fallback_vision_order ?? null,
     fallbackEmbeddingOrder: row.fallback_embedding_order ?? null,
+    fallbackImageOrder: row.fallback_image_order ?? null,
     is_active_chat: row.is_active_chat === true || (row.is_active_chat as any) === 1,
     is_active_embedding: row.is_active_embedding === true || (row.is_active_embedding as any) === 1,
     is_active_summarization: row.is_active_summarization === true || (row.is_active_summarization as any) === 1,
     is_active_agent: row.is_active_agent === true || (row.is_active_agent as any) === 1,
     is_active_vision: row.is_active_vision === true || (row.is_active_vision as any) === 1,
+    is_active_image: row.is_active_image === true || (row.is_active_image as any) === 1,
   };
+}
+
+/**
+ * Load the image generation provider chain.
+ */
+export async function getImageProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  // Check if image generation is allowed (defaults to true)
+  let allowImageGen = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_image_gen !== undefined && userRecord.allow_image_gen !== null) {
+      allowImageGen = userRecord.allow_image_gen === 1 || userRecord.allow_image_gen === true;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_image_gen')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord && userRecord.allow_image_gen !== null && userRecord.allow_image_gen !== undefined) {
+        allowImageGen = userRecord.allow_image_gen;
+      }
+    } catch (_) {}
+  }
+
+  if (!allowImageGen) {
+    console.warn(`[AI] ⚠️ Image generation is disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
+  return getProviderChainForRole(supabase, userId, 'image', db);
+}
+
+/**
+ * Load the active image generation provider.
+ */
+export async function getActiveImageProvider(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig | null> {
+  const chain = await getImageProviderChain(supabase, userId, db);
+  return chain[0] || null;
 }

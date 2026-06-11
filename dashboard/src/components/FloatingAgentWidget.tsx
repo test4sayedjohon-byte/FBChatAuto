@@ -41,7 +41,7 @@ interface ChatSession {
 }
 
 export default function FloatingAgentWidget() {
-  const { user } = useAuth();
+  const { user, profile, refreshCreditBalance } = useAuth();
   if (!user) return null; // Only show for logged in users
 
   // --- Widget Visibility State ---
@@ -132,38 +132,7 @@ export default function FloatingAgentWidget() {
   const [newDocTitle, setNewDocTitle] = useState('');
   const [newDocContent, setNewDocContent] = useState('');
 
-  // --- Agent Quota State ---
-  const [agentQuota, setAgentQuota] = useState<{
-    limit: number;
-    used: number;
-    extra: number;
-    usageMonth: string;
-  } | null>(null);
 
-  const loadAgentQuota = async () => {
-    if (!user) return;
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('agent_monthly_limit, agent_queries_used, agent_extra_queries, agent_usage_month')
-        .eq('id', user.id)
-        .single();
-      if (!error && data) {
-        setAgentQuota({
-          limit: data.agent_monthly_limit ?? 30,
-          used: data.agent_queries_used ?? 0,
-          extra: data.agent_extra_queries ?? 0,
-          usageMonth: data.agent_usage_month || '',
-        });
-      }
-    } catch (err) {
-      console.error('Failed to load agent quota:', err);
-    }
-  };
-
-  useEffect(() => {
-    loadAgentQuota();
-  }, [user]);
 
   // --- Position State (Draggable) ---
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
@@ -397,7 +366,7 @@ export default function FloatingAgentWidget() {
       loadSystemPrompt();
       loadQuickAnswers();
       loadDocsData();
-      loadAgentQuota();
+      refreshCreditBalance();
 
       // Trigger flash transition
       if (selectedContext === 'system_prompt') {
@@ -472,7 +441,7 @@ export default function FloatingAgentWidget() {
           ...s,
           messages: [...updatedMessages, { role: 'assistant', content: data.message.content, timestamp: Date.now() }]
         } : s));
-        loadAgentQuota();
+        refreshCreditBalance();
       }
       if (data.databaseUpdated) {
         window.dispatchEvent(new Event('agent-data-updated'));
@@ -1447,68 +1416,65 @@ export default function FloatingAgentWidget() {
 
               {/* Chat Input form */}
               <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border-subtle)', background: 'var(--surface-secondary)' }}>
-                {agentQuota && (() => {
-                  const currentMonth = new Date().toISOString().slice(0, 7);
-                  const isNewMonth = agentQuota.usageMonth !== currentMonth;
-                  const used = isNewMonth ? 0 : agentQuota.used;
-                  const extra = isNewMonth ? 0 : agentQuota.extra;
-                  const limit = agentQuota.limit;
-                  const remaining = Math.max(0, limit - used) + extra;
+                {profile && (() => {
+                  const total = (profile.monthly_credits_limit ?? 0) + (profile.extra_credits_balance ?? 0);
+                  const remaining = Math.max(0, total - (profile.credits_used_this_month ?? 0));
+                  const isOutOfCredits = remaining === 0;
                   return (
-                    <div style={{ 
-                      fontSize: '11px', 
-                      color: 'var(--text-secondary)', 
-                      marginBottom: '6px', 
-                      display: 'flex', 
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      opacity: 0.8
-                    }}>
-                      <span>AI Agent Monthly Quota</span>
-                      <span style={{ 
-                        fontWeight: 600, 
-                        color: remaining === 0 ? 'var(--error, #ef4444)' : 'var(--text-primary)' 
+                    <>
+                      <div style={{ 
+                        fontSize: '11px', 
+                        color: 'var(--text-secondary)', 
+                        marginBottom: '6px', 
+                        display: 'flex', 
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        opacity: 0.8
                       }}>
-                        {remaining} queries left
-                      </span>
-                    </div>
+                        <span>AI Credits</span>
+                        <span style={{ 
+                          fontWeight: 600, 
+                          color: remaining === 0 ? 'var(--error, #ef4444)' : 'var(--text-primary)' 
+                        }}>
+                          {remaining} left (5 credits/query)
+                        </span>
+                      </div>
+                      <form onSubmit={handleSend} style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+                        <textarea
+                          ref={textareaRef}
+                          value={input}
+                          onChange={(e) => setInput(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          placeholder={isOutOfCredits ? 'Out of credits. Please purchase more.' : `Ask me in ${getContextLabel(selectedContext)}...`}
+                          className="form-textarea"
+                          style={{ 
+                            flex: 1, 
+                            padding: '7px 12px', 
+                            fontSize: '12.5px', 
+                            borderRadius: '8px', 
+                            height: '34px', 
+                            minHeight: '34px', 
+                            maxHeight: '110px', 
+                            resize: 'none', 
+                            outline: 'none',
+                            background: isOutOfCredits ? 'var(--bg-tertiary, rgba(255,255,255,0.02))' : 'var(--surface-primary)',
+                            border: '1px solid var(--border-subtle)',
+                            color: isOutOfCredits ? 'var(--text-muted, #666)' : 'var(--text-primary)',
+                          }}
+                          disabled={isLoading || isOutOfCredits}
+                        />
+                        <button 
+                          type="submit" 
+                          className="btn-primary" 
+                          disabled={!input.trim() || isLoading || isOutOfCredits}
+                          style={{ width: '34px', height: '34px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', border: 'none', cursor: isOutOfCredits ? 'not-allowed' : 'pointer', flexShrink: 0 }}
+                        >
+                          <Send size={13} />
+                        </button>
+                      </form>
+                    </>
                   );
                 })()}
-                <form onSubmit={handleSend} style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
-                  <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={`Ask me in ${getContextLabel(selectedContext)}...`}
-                    className="form-textarea"
-                    style={{ 
-                      flex: 1, 
-                      padding: '7px 12px', 
-                      fontSize: '12.5px', 
-                      borderRadius: '8px', 
-                      height: '34px', 
-                      minHeight: '34px', 
-                      maxHeight: '110px', 
-                      resize: 'none', 
-                      overflowY: 'auto', 
-                      lineHeight: '1.4',
-                      background: 'var(--surface-primary)',
-                      border: '1px solid var(--border-subtle)',
-                      color: 'var(--text-primary)',
-                      outline: 'none'
-                    }}
-                    disabled={isLoading}
-                  />
-                  <button 
-                    type="submit" 
-                    className="btn-primary" 
-                    disabled={!input.trim() || isLoading}
-                    style={{ width: '34px', height: '34px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', border: 'none', cursor: 'pointer', flexShrink: 0 }}
-                  >
-                    <Send size={13} />
-                  </button>
-                </form>
               </div>
             </div>
 

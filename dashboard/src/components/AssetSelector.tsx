@@ -32,9 +32,10 @@ export default function AssetSelector({ selectedUrl, onSelect }: AssetSelectorPr
     try {
       setLoading(true);
       const { data, error } = await supabase
-        .from('chat_assets')
+        .from('media')
         .select('id, friendly_name, file_url, file_type')
         .eq('file_type', 'image') // Visual selector mainly targets images
+        .eq('use_in_chat', true)  // Only load assets meant for chat
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -54,7 +55,7 @@ export default function AssetSelector({ selectedUrl, onSelect }: AssetSelectorPr
     try {
       const fileExt = file.name.split('.').pop() || '';
       const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-      const filePath = `${user.id}/chat_assets/${fileName}`;
+      const filePath = `${user.id}/media/${fileName}`;
 
       // 1. Upload to storage
       const { error: uploadErr } = await supabase.storage
@@ -70,19 +71,23 @@ export default function AssetSelector({ selectedUrl, onSelect }: AssetSelectorPr
 
       if (!publicUrl) throw new Error('Failed to retrieve public URL');
 
-      // 3. Register record in chat_assets table
+      // 3. Register record in media table
       const friendlyName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
       const aliasName = friendlyName.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 
       const { data: registeredData, error: dbErr } = await supabase
-        .from('chat_assets')
+        .from('media')
         .insert({
           user_id: user.id,
           name: aliasName,
           friendly_name: friendlyName,
           file_url: publicUrl,
           file_type: 'image',
-          ai_auto_send: false
+          ai_auto_send: false,
+          use_in_chat: true,
+          use_in_comments: false,
+          use_in_scheduler: false,
+          is_permanent: true
         })
         .select()
         .single();

@@ -39,3 +39,7 @@ queue = "social-poster-queue"
 max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 5
+
+[[r2_buckets]]
+binding = "MEDIA_BACKUP_BUCKET"
+bucket_name = "autometabot-media-backup"

@@ -163,9 +163,9 @@ export default function AutoModerationRuleEditPage() {
         .eq('user_id', user?.id);
       setFlows(flowsData || []);
 
-      // Fetch Chat Assets
+      // Fetch Media Assets
       const { data: assetsData } = await supabase
-        .from('chat_assets')
+        .from('media')
         .select('id, name, friendly_name, file_url, file_type')
         .eq('user_id', user?.id);
       setChatAssets(assetsData || []);

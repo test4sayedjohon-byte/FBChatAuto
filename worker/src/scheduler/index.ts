@@ -241,19 +241,72 @@ async function publishComment(accessToken: string, parentId: string, message: st
 
 export async function cleanupOrphanedStorageAssets(supabase: SupabaseClient): Promise<void> {
   try {
-    const supabaseUrl = (supabase as any).supabaseUrl;
-    const supabaseKey = (supabase as any).supabaseKey;
-    if (!supabaseUrl || !supabaseKey) return;
+    console.log('[Storage Cleanup] Starting cleanup process...');
 
-    // Create a client focused on the storage schema
-    const storageDbClient = createClient(supabaseUrl, supabaseKey, {
-      db: { schema: 'storage' }
-    });
+    // A. PURGE TEMPORARY MEDIA (is_permanent = false and older than 24 hours)
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: tempMedia, error: tempMediaErr } = await supabase
+      .from('media')
+      .select('id, file_url')
+      .eq('is_permanent', false)
+      .neq('backup_status', 'pending')
+      .lt('created_at', twentyFourHoursAgo);
 
+    if (tempMediaErr) {
+      console.error('[Storage Cleanup] Failed to fetch temporary media:', tempMediaErr.message);
+    } else if (tempMedia && tempMedia.length > 0) {
+      console.log(`[Storage Cleanup] Found ${tempMedia.length} temporary media files older than 24 hours to delete.`);
+      const tempPaths: string[] = [];
+      const tempIds: string[] = [];
+
+      for (const item of tempMedia) {
+        if (item.file_url) {
+          // Extract file path from public URL
+          // publicUrl format: https://.../storage/v1/object/public/media_assets/userId/chat_assets/fileName
+          // we need to extract userId/chat_assets/fileName
+          const parts = item.file_url.split('/media_assets/');
+          if (parts.length > 1) {
+            tempPaths.push(decodeURIComponent(parts[1]));
+          }
+        }
+        tempIds.push(item.id);
+      }
+
+      if (tempPaths.length > 0) {
+        console.log(`[Storage Cleanup] Deleting temporary files from bucket:`, tempPaths);
+        const { error: removeStorageErr } = await supabase.storage
+          .from('media_assets')
+          .remove(tempPaths);
+        if (removeStorageErr) {
+          console.error('[Storage Cleanup] Error removing temporary files from storage:', removeStorageErr.message);
+        }
+      }
+
+      // Delete database records
+      const { error: deleteDbErr } = await supabase
+        .from('media')
+        .delete()
+        .in('id', tempIds);
+      if (deleteDbErr) {
+        console.error('[Storage Cleanup] Error deleting temporary media records:', deleteDbErr.message);
+      } else {
+        console.log('[Storage Cleanup] Successfully deleted temporary media database records.');
+      }
+    }
+
+    // B. PURGE ORPHANED STORAGE ASSETS (Older than 7 days, not referenced anywhere)
+    const supabaseUrl = (supabase as any).supabaseUrl || '';
+    if (!supabaseUrl) {
+      console.error('[Storage Cleanup] Supabase URL is not available on client instance.');
+      return;
+    }
+
+    // Connect to the raw storage schema via a service client if possible, or skip checking objects table directly
+    const storageDbClient = (supabase as any).schema ? (supabase as any).schema('storage') : supabase;
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     // 1. Fetch files in 'media_assets' bucket older than 7 days
-    const { data: objects, error: objErr } = await storageDbClient
+    const { data: objects, error: objErr } = await (storageDbClient as any)
       .from('objects')
       .select('name, created_at')
       .eq('bucket_id', 'media_assets')
@@ -268,14 +321,14 @@ export async function cleanupOrphanedStorageAssets(supabase: SupabaseClient): Pr
     console.log(`[Storage Cleanup] Auditing ${objects.length} assets older than 7 days for orphans...`);
 
     // 2. Fetch all active references from DB
-    const { data: chatAssets } = await supabase.from('chat_assets').select('file_url');
+    const { data: mediaAssets } = await supabase.from('media').select('file_url');
     const { data: posts } = await supabase.from('scheduled_posts').select('media_urls').not('media_urls', 'is', null);
     const { data: rules } = await supabase.from('comment_rules').select('attachment_urls, dm_attachment_urls');
 
     // Extract all referenced URLs
     const activeUrls = new Set<string>();
-    if (chatAssets) {
-      chatAssets.forEach(a => { if (a.file_url) activeUrls.add(a.file_url); });
+    if (mediaAssets) {
+      mediaAssets.forEach(a => { if (a.file_url) activeUrls.add(a.file_url); });
     }
     if (posts) {
       posts.forEach(p => {

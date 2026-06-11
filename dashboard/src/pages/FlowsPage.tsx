@@ -60,6 +60,14 @@ export default function FlowsPage() {
     }
   }, [user]);
 
+  useEffect(() => {
+    const handleReload = () => {
+      loadFlows();
+    };
+    window.addEventListener('agent-data-updated', handleReload);
+    return () => window.removeEventListener('agent-data-updated', handleReload);
+  }, [user]);
+
   async function loadFlows() {
     try {
       setLoading(true);
@@ -169,10 +177,10 @@ export default function FlowsPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
-          <button className="btn-secondary" onClick={() => document.getElementById('import-flow-file-input')?.click()} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button className="btn-import-flow" onClick={() => document.getElementById('import-flow-file-input')?.click()}>
             <Upload size={16} /> Import Flow
           </button>
-          <button className="btn-primary" onClick={() => setShowModal(true)} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button className="btn-create-flow" onClick={() => setShowModal(true)}>
             <Plus size={16} /> Create Flow
           </button>
           <input

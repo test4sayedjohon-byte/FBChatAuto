@@ -17,11 +17,13 @@ interface Provider {
   is_active_summarization: boolean;
   is_active_agent: boolean;
   is_active_vision?: boolean;
+  is_active_image: boolean;
   fallback_chat_order?: number | null;
   fallback_agent_order?: number | null;
   fallback_summarize_order?: number | null;
   fallback_vision_order?: number | null;
   fallback_embedding_order?: number | null;
+  fallback_image_order?: number | null;
   max_tokens: number;
   temperature: number;
   context_window: number;
@@ -63,6 +65,7 @@ export default function ProviderList({ providers, onEdit, onRefresh }: ProviderL
       is_active_summarization: false,
       is_active_agent: false,
       is_active_vision: false,
+      is_active_image: false,
       max_tokens: p.max_tokens,
       temperature: p.temperature,
       context_window: p.context_window,
@@ -290,6 +293,11 @@ export default function ProviderList({ providers, onEdit, onRefresh }: ProviderL
                     Active Vision
                   </span>
                 )}
+                {p.is_active_image && (
+                  <span style={{ fontSize: '10px', background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                    Active Image
+                  </span>
+                )}
 
                 {/* Backups List */}
                 {p.fallback_chat_order && p.fallback_chat_order > 0 ? (
@@ -315,6 +323,11 @@ export default function ProviderList({ providers, onEdit, onRefresh }: ProviderL
                 {p.fallback_embedding_order && p.fallback_embedding_order > 0 ? (
                   <span style={{ fontSize: '10px', background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
                     Backup Embed #{p.fallback_embedding_order}
+                  </span>
+                ) : null}
+                {p.fallback_image_order && p.fallback_image_order > 0 ? (
+                  <span style={{ fontSize: '10px', background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                    Backup Image #{p.fallback_image_order}
                   </span>
                 ) : null}
               </div>

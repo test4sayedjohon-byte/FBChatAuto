@@ -27,6 +27,10 @@ export interface Env {
   // Agent configuration (optional, for highly capable agentic tasks)
   AGENT_API_KEY?: string;
   AGENT_MODEL?: string;
+  IS_LOCAL_DEV?: string;
+
+  // Cloudflare R2 Media Backup Bucket
+  MEDIA_BACKUP_BUCKET?: R2Bucket;
 }
 
 /**

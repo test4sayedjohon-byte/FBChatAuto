@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
-import { MessageSquare, Users, Globe, Power, Clock, ArrowRight, Bot, User as UserIcon, Activity, Plus } from 'lucide-react';
+import { MessageSquare, Users, Globe, Power, Clock, ArrowRight, Bot, User as UserIcon, Activity, Plus, Zap } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateBillingCycle } from '../lib/billing';
 
@@ -62,8 +62,19 @@ export default function DashboardPage() {
   const [toggleLoading, setToggleLoading] = useState(false);
   const [feed, setFeed] = useState<any[]>([]);
   const [pageConnections, setPageConnections] = useState<any[]>([]);
-  const [messagesUsedThisCycle, setMessagesUsedThisCycle] = useState(0);
+
   const [billingCycle, setBillingCycle] = useState<any>(null);
+  const [lowBalanceDismissed, setLowBalanceDismissed] = useState<boolean>(() => {
+    return localStorage.getItem(`dismiss_low_balance`) === 'true';
+  });
+
+  useEffect(() => {
+    if (user?.id) {
+      // Clear dismissal state if credits reset / user changes
+      const dismissed = localStorage.getItem(`dismiss_low_balance_${user.id}`) === 'true';
+      setLowBalanceDismissed(dismissed);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -122,14 +133,7 @@ export default function DashboardPage() {
       const cycle = calculateBillingCycle(user.created_at, pHistory);
       setBillingCycle(cycle);
 
-      const { count: cycleMessagesCount } = await supabase
-        .from('chat_messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .gte('created_at', cycle.startDate.toISOString())
-        .lt('created_at', cycle.endDate.toISOString());
 
-      setMessagesUsedThisCycle(cycleMessagesCount || 0);
 
       setStats({
         messages: totalMessages,
@@ -167,6 +171,11 @@ export default function DashboardPage() {
     setToggleLoading(false);
   };
 
+  const totalLimit = (profile?.monthly_credits_limit ?? 0) + (profile?.extra_credits_balance ?? 0);
+  const creditsUsed = profile?.credits_used_this_month ?? 0;
+  const remainingCredits = Math.max(0, totalLimit - creditsUsed);
+  const creditsPct = totalLimit > 0 ? (remainingCredits / totalLimit) * 100 : 0;
+
   return (
     <div className="animate-slideUp" style={{ paddingBottom: '40px' }}>
       <div className="page-header flex justify-between items-center flex-mobile-col flex-wrap" style={{ marginBottom: '32px', gap: '16px' }}>
@@ -196,6 +205,74 @@ export default function DashboardPage() {
           {isServiceActive ? 'Service Active' : 'Service Paused'}
         </button>
       </div>
+
+      {remainingCredits === 0 && profile && !profile.is_super_admin && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid var(--error)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '16px 20px',
+          marginBottom: '24px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '20px' }}>⚠️</span>
+            <div>
+              <h4 style={{ margin: 0, color: 'var(--error)', fontWeight: 700, fontSize: '14px' }}>Deductions Blocked: Credits Exhausted</h4>
+              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                All AI reply automations, planning tools, and comment analyses have been temporarily paused. Refill your credits to resume service.
+              </p>
+            </div>
+          </div>
+          <button onClick={() => navigate('/store')} className="btn btn-danger" style={{ background: 'var(--error)', border: 'none', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 16px', borderRadius: '4px' }}>
+            Refill Now <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {remainingCredits > 0 && creditsPct <= 20 && !lowBalanceDismissed && profile && !profile.is_super_admin && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.1)',
+          border: '1px solid var(--warning)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '16px 20px',
+          marginBottom: '24px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '20px' }}>⚠️</span>
+            <div>
+              <h4 style={{ margin: 0, color: 'var(--warning)', fontWeight: 700, fontSize: '14px' }}>AI Credits Running Low ({creditsPct.toFixed(0)}% Left)</h4>
+              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                You have only {remainingCredits.toLocaleString()} credits left. Refill soon to prevent automatic pause of your connected channels.
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button 
+              onClick={() => {
+                setLowBalanceDismissed(true);
+                if (user?.id) localStorage.setItem(`dismiss_low_balance_${user.id}`, 'true');
+              }} 
+              className="btn btn-ghost" 
+              style={{ fontSize: '12px', padding: '6px 12px', color: 'var(--text-secondary)' }}
+            >
+              Dismiss
+            </button>
+            <button onClick={() => navigate('/store')} className="btn btn-secondary" style={{ borderColor: 'var(--warning)', color: 'var(--warning)', background: 'rgba(245,158,11,0.08)', fontSize: '12px', padding: '6px 12px' }}>
+              Refill
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="stats-grid" style={{ marginBottom: '24px' }}>
         <div className="card stat-card" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)', border: '1px solid rgba(255,255,255,0.05)' }}>
@@ -315,46 +392,46 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Message Budget Card */}
+        {/* Credits Balance Card */}
         <div className="card" style={{ padding: '24px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <MessageSquare size={18} style={{ color: '#3b82f6' }} />
-              Message Budget Usage
+              <Zap size={18} style={{ color: '#f59e0b' }} />
+              AI Credits Balance
             </h3>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Automated messages remaining this billing cycle.</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Remaining credits for AI responses, agent queries, and images.</p>
           </div>
 
           {loading ? (
-            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading usage stats...</div>
+            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading credits...</div>
           ) : (
             <div>
-              {/* Giant remaining display */}
               {(() => {
-                const messageLimit = profile?.monthly_message_limit ?? 0;
-                const extraMessageLimit = profile?.extra_message_limit ?? 0;
-                const totalMessageLimit = messageLimit === -1 ? -1 : (messageLimit + extraMessageLimit);
-                const remainingMessages = totalMessageLimit === -1 ? -1 : Math.max(0, totalMessageLimit - messagesUsedThisCycle);
+                const limit = profile?.monthly_credits_limit ?? 0;
+                const extra = profile?.extra_credits_balance ?? 0;
+                const used = profile?.credits_used_this_month ?? 0;
+                const total = limit === -1 ? -1 : (limit + extra);
+                const remaining = total === -1 ? -1 : Math.max(0, total - used);
 
                 return (
                   <>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '16px' }}>
                       <span style={{ fontSize: '2.2rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
-                        {totalMessageLimit === -1 ? '∞' : remainingMessages.toLocaleString()}
+                        {total === -1 ? '∞' : remaining.toLocaleString()}
                       </span>
                       <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
-                        messages left
+                        credits left
                       </span>
                     </div>
 
                     {/* Progress Bar */}
-                    {totalMessageLimit !== -1 && totalMessageLimit > 0 && (
+                    {total !== -1 && total > 0 && (
                       <div style={{ marginBottom: '16px' }}>
                         <div style={{ height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
                           <div style={{
                             height: '100%',
-                            width: `${Math.min(100, (messagesUsedThisCycle / totalMessageLimit) * 100)}%`,
-                            background: messagesUsedThisCycle >= totalMessageLimit ? 'var(--error)' : 'linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)',
+                            width: `${Math.min(100, (used / total) * 100)}%`,
+                            background: used >= total ? 'var(--error)' : 'linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%)',
                             borderRadius: '4px',
                             transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)'
                           }} />
@@ -365,19 +442,19 @@ export default function DashboardPage() {
                     {/* Usage Breakdown Details */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Used this period</span>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{messagesUsedThisCycle.toLocaleString()} messages</span>
+                        <span>Credits used this month</span>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{used.toLocaleString()} credits</span>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Total allowed budget</span>
+                        <span>Total allowed balance</span>
                         <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
-                          {messageLimit === -1 ? 'Unlimited' : `${totalMessageLimit.toLocaleString()} messages`}
-                          {extraMessageLimit > 0 && ` (${extraMessageLimit.toLocaleString()} gifted)`}
+                          {limit === -1 ? 'Unlimited' : `${total.toLocaleString()} credits`}
+                          {extra > 0 && ` (${extra.toLocaleString()} extra)`}
                         </span>
                       </div>
                       {billingCycle && (
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                          <span>Current billing period</span>
+                          <span>Billing anchor period</span>
                           <span style={{ color: 'var(--text-primary)', fontWeight: '600', textAlign: 'right' }}>
                             {billingCycle.startDate.toLocaleDateString()} – {billingCycle.endDate.toLocaleDateString()}
                             <div style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', marginTop: '2px', fontWeight: '500' }}>

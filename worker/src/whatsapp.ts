@@ -194,6 +194,11 @@ export async function processWhatsAppWebhookEntries(
         continue;
       }
 
+      if (userRecord?.is_paused) {
+        console.log(`[WhatsApp Webhook] ⏸️ Tenant ${pageConnection.user_id} is paused by administrator. Ignoring messages.`);
+        continue;
+      }
+
       if (userRecord?.settings?.is_bot_active === false) {
         console.log(`[WhatsApp Webhook] ⏸️ Service is paused for tenant: ${pageConnection.user_id}. Ignoring messages.`);
         continue;
@@ -204,27 +209,7 @@ export async function processWhatsAppWebhookEntries(
         continue;
       }
 
-      // Check monthly message limits
-      if (userRecord?.monthly_message_limit !== undefined && userRecord?.monthly_message_limit !== -1) {
-        const extraLimit = userRecord.extra_message_limit ?? 0;
-        const allowedLimit = userRecord.monthly_message_limit + extraLimit;
-
-        if (allowedLimit <= 0) {
-          console.log(`[WhatsApp Webhook] 🚫 Tenant ${pageConnection.user_id} has 0 or less monthly message limit.`);
-          continue;
-        }
-        
-        const { startDate } = calculateBillingCycle(userRecord.billing_cycle_anchor || userRecord.created_at);
-
-        const messagesCount = await getMonthlyMessageCountFallback(env.DB, supabase, pageConnection.user_id, startDate.toISOString());
-
-        if (messagesCount >= allowedLimit) {
-          console.log(
-            `[WhatsApp Webhook] 🚫 Tenant ${pageConnection.user_id} exceeded monthly message limit (${messagesCount}/${allowedLimit}).`
-          );
-          continue;
-        }
-      }
+      // Message quota is now checked atomically during chat reply handling via verifyAndDeductCredits
 
       console.log(`[WhatsApp Webhook] Routed to tenant: ${pageConnection.user_id} (WA Phone ID: ${phoneNumberId})`);
 

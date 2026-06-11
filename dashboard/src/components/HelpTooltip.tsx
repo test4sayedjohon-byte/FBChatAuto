@@ -21,6 +21,11 @@ export const HELP_TEXTS = {
     title: 'Folders & Documents',
     description: 'Data Sources act as folders that you assign to specific Facebook Pages. Documents are the actual text the AI reads.',
     details: 'By keeping documents in specific folders, you ensure the AI only uses relevant knowledge for each connected Facebook Page. Click on a folder to view and add documents to it.'
+  },
+  mediaVault: {
+    title: 'Media Vault',
+    description: 'Centralized repository for all files, PDFs, images, and video assets.',
+    details: 'You can upload assets, define trigger aliases, assign them to Knowledge Base folders, and select where they should be used (Chats, Comments, or the Scheduler).'
   }
 };
 

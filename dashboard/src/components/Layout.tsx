@@ -5,6 +5,7 @@ import { Menu, MessageSquare, AlertTriangle, LogOut } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import FloatingAgentWidget from './FloatingAgentWidget';
 import ContentCopilotWidget from './ContentCopilotWidget';
+import FlowCopilotWidget from './FlowCopilotWidget';
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -129,6 +130,8 @@ export default function Layout() {
 
       {['/planner', '/moderation'].includes(location.pathname) ? (
         <ContentCopilotWidget />
+      ) : location.pathname.startsWith('/flows') ? (
+        <FlowCopilotWidget />
       ) : (
         <FloatingAgentWidget />
       )}

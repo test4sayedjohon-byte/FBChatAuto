@@ -10,66 +10,24 @@ export async function verifyAndDeductCredits(
   cost: number
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // 1. Fetch current credits
-    const { data: user, error: userErr } = await supabase
-      .from('users')
-      .select('monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, burn_rate_alert_sent_at')
-      .eq('id', userId)
-      .single();
+    const { data, error } = await supabase.rpc('verify_and_deduct_user_credits', {
+      p_user_id: userId,
+      p_cost: cost
+    });
 
-    if (userErr || !user) {
-      return { success: false, error: 'User profile not found.' };
+    if (error) {
+      console.error('[Credits] RPC Error:', error);
+      return { success: false, error: error.message };
     }
 
-    const totalAllowed = (user.monthly_credits_limit ?? 1000) + (user.extra_credits_balance ?? 0);
-    const currentUsed = user.credits_used_this_month ?? 0;
-
-    // 2. Check if total monthly limit exceeded
-    if (currentUsed + cost > totalAllowed) {
-      return { success: false, error: 'Monthly credit limit exceeded.' };
-    }
-
-    // 3. Check daily spend cap
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-
-    const { data: dailyLogs, error: logErr } = await supabase
-      .from('comment_logs')
-      .select('credits_deducted')
-      .eq('user_id', userId)
-      .gte('created_at', todayStart.toISOString());
-
-    if (!logErr && dailyLogs) {
-      const dailySpend = dailyLogs.reduce((acc, log) => acc + (log.credits_deducted ?? 0), 0);
-      const dailyCap = user.daily_credit_spend_cap ?? 200;
-
-      if (dailySpend + cost > dailyCap) {
-        return { success: false, error: 'Daily credit spend limit cap reached.' };
-      }
-    }
-
-    // 4. Update credit balance
-    const nextUsed = currentUsed + cost;
-    const updateData: any = { credits_used_this_month: nextUsed };
-
-    // 5. Check 80% usage threshold alert
-    if (nextUsed / totalAllowed >= 0.80 && !user.burn_rate_alert_sent_at) {
-      updateData.burn_rate_alert_sent_at = new Date().toISOString();
-      console.log(`[Credits] Alert: User ${userId} has consumed 80%+ of monthly credits.`);
-      // Trigger notification service if available
-    }
-
-    const { error: updateErr } = await supabase
-      .from('users')
-      .update(updateData)
-      .eq('id', userId);
-
-    if (updateErr) {
-      return { success: false, error: 'Failed to update credit balances.' };
+    if (!data || !data.success) {
+      return { success: false, error: data?.error || 'Failed to deduct credits.' };
     }
 
     return { success: true };
   } catch (err: any) {
+    console.error('[Credits] Exception in verifyAndDeductCredits:', err);
     return { success: false, error: err.message };
   }
 }
+

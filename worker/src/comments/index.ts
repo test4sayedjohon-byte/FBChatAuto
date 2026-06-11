@@ -3,7 +3,7 @@
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getPageConnectionFallback } from '../db';
+import { getPageConnectionFallback, getUserRecord } from '../db';
 import { createSupabaseAdmin } from '../supabase';
 import { verifyAndDeductCredits } from '../credits';
 import { evaluateCommentRules } from './rules';
@@ -33,6 +33,18 @@ export async function processCommentChanges(
 
   const userId = pageConnection.user_id;
 
+  // Load user record to check suspension
+  const userRecord = await getUserRecord(env.DB, supabase, userId);
+  if (userRecord?.is_suspended) {
+    console.warn(`[Comments Webhook] User ${userId} is suspended. Stopping processing.`);
+    return;
+  }
+
+  if (userRecord?.is_paused) {
+    console.warn(`[Comments Webhook] User ${userId} is paused by administrator. Stopping processing.`);
+    return;
+  }
+
   for (const change of changes) {
     let commentId = '';
     let postId = '';
@@ -46,6 +58,8 @@ export async function processCommentChanges(
     let replyMessageText = '';
     let dmSentId = '';
     let ruleResult: any = null;
+    let matchedMediaAsset: any = null;
+    let creditsDeducted = false;
 
     try {
       const { field, value } = change;
@@ -140,13 +154,29 @@ export async function processCommentChanges(
         continue;
       }
 
-      // 6. Cost calculation: Standard = 1 credit, Vision = 3 credits
-      cost = mediaUrl ? 3 : 1;
-
       finalAction = 'no_action';
       replyMessageText = '';
       dmSentId = '';
       const actionsExecuted: string[] = [];
+
+      // 6. Evaluate comment rules first to get correct classification and cost
+      try {
+        ruleResult = await evaluateCommentRules(
+          supabase,
+          userId,
+          pageConnection.page_id,
+          messageText,
+          postId,
+          platform,
+          mediaUrl,
+          env.DB
+        );
+      } catch (err: any) {
+        console.error(`[Comments Webhook] evaluateCommentRules failed: ${err.message}`);
+        ruleResult = { sentiment: 'neutral', toxicityScore: 0, confidence: 1.0, actions: [], cost: 1 };
+      }
+
+      cost = ruleResult.cost;
 
       // 7. Credits check & deduction
       const creditRes = await verifyAndDeductCredits(supabase, userId, cost);
@@ -154,13 +184,38 @@ export async function processCommentChanges(
         console.warn(`[Comments Webhook] Credit deduction failed for user ${userId}: ${creditRes.error}`);
         continue;
       }
+      creditsDeducted = true;
 
-      // 8. Evaluate comment rules
-      try {
-        ruleResult = await evaluateCommentRules(supabase, userId, pageConnection.page_id, messageText, postId, env.DB);
-      } catch (err: any) {
-        console.error(`[Comments Webhook] evaluateCommentRules failed: ${err.message}`);
-        ruleResult = { sentiment: 'neutral', toxicityScore: 0, confidence: 1.0, actions: [] };
+      // Early parse media trigger tag from generated reply if dynamic AI reply was evaluated
+      if (ruleResult.useDynamicAiReply && ruleResult.generated_reply) {
+        const attachMediaRegex = /\[(?:AttachMedia|SendFile|SendMedia):\s*([a-zA-Z0-9_-]+)\s*\]/i;
+        const mediaMatch = ruleResult.generated_reply.match(attachMediaRegex);
+        if (mediaMatch) {
+          const mediaAlias = mediaMatch[1];
+          try {
+            const { data: mediaAsset } = await supabase
+              .from('media')
+              .select('id, name, friendly_name, file_url, file_type, times_sent')
+              .eq('user_id', userId)
+              .eq('name', mediaAlias)
+              .maybeSingle();
+            if (mediaAsset) {
+              matchedMediaAsset = mediaAsset;
+              console.log(`[Comments Webhook] Parsed dynamic media trigger: ${mediaAlias}`);
+              // Fire-and-forget: increment usage counter (non-blocking)
+              supabase
+                .from('media')
+                .update({ times_sent: (mediaAsset.times_sent ?? 0) + 1 })
+                .eq('id', mediaAsset.id)
+                .then(({ error: cntErr }) => {
+                  if (cntErr) console.warn('[Comments Webhook] Failed to increment times_sent:', cntErr.message);
+                });
+            }
+          } catch (mediaErr) {
+            console.error('[Comments Webhook] Failed to query media trigger:', mediaErr);
+          }
+          ruleResult.generated_reply = ruleResult.generated_reply.replace(attachMediaRegex, '').trim();
+        }
       }
 
       const actions = ruleResult.actions || [];
@@ -270,189 +325,12 @@ export async function processCommentChanges(
 
       // E. PUBLIC REPLY
       if (actions.includes('reply') || actions.includes('like_and_reply')) {
-        let replyText = ruleResult.replyTemplate || 'Thanks for commenting!';
-        
-        if (ruleResult.useDynamicAiReply) {
-          // 1. Fetch post context from DB cache or Meta Graph API
-          let postCaption = '';
-          try {
-            const { data: postCtx } = await supabase
-              .from('post_contexts')
-              .select('post_context_data')
-              .eq('meta_post_id', postId)
-              .maybeSingle();
-            
-            postCaption = postCtx?.post_context_data || '';
-            
-            if (!postCaption && postId) {
-              try {
-                postCaption = await fetchPostContext(pageConnection.access_token, postId, platform);
-                // Cache post caption
-                await supabase.from('post_contexts').upsert({
-                  user_id: userId,
-                  page_connection_id: pageConnection.page_id,
-                  meta_post_id: postId,
-                  post_context_data: postCaption,
-                  updated_at: new Date().toISOString()
-                });
-              } catch (ctxErr: any) {
-                console.warn(`[Comments Webhook] fetchPostContext failed: ${ctxErr.message}`);
-              }
-            }
-          } catch (dbErr: any) {
-            console.warn(`[Comments Webhook] Fetch post context DB check failed: ${dbErr.message}`);
-          }
+        let replyText = ruleResult.useDynamicAiReply
+          ? (ruleResult.generated_reply || ruleResult.replyTemplate || 'Thanks for commenting!')
+          : (ruleResult.replyTemplate || 'Thanks for commenting!');
 
-          // 2. Fetch User's Brand Voice Profile
-          let brandVoice = 'Friendly and professional';
-          try {
-            const { data: userProfile } = await supabase
-              .from('users')
-              .select('brand_voice_profile')
-              .eq('id', userId)
-              .single();
-            
-            if (userProfile?.brand_voice_profile) {
-              brandVoice = userProfile.brand_voice_profile;
-            }
-          } catch (voiceErr: any) {
-            console.warn(`[Comments Webhook] Fetch user voice profile failed: ${voiceErr.message}`);
-          }
-
-          // 2b. Fetch active Quick Answers (knowledge fields)
-          let quickAnswersText = '';
-          try {
-            const { data: rawFields } = await supabase
-              .from('knowledge_fields')
-              .select('field_name, field_value, category, page_id')
-              .eq('user_id', userId)
-              .eq('is_active', true)
-              .or(`page_id.eq.${pageConnection.page_id},page_id.is.null`);
-
-            if (rawFields && rawFields.length > 0) {
-              // Deduplicate global fields if page-specific override is present
-              const fieldMap = new Map<string, any>();
-              for (const f of rawFields) {
-                const existing = fieldMap.get(f.field_name);
-                if (!existing || (f.page_id && !existing.page_id)) {
-                  fieldMap.set(f.field_name, f);
-                }
-              }
-              const dedupedFields = Array.from(fieldMap.values());
-              quickAnswersText = '## Business Information / Facts:\n' +
-                dedupedFields.map(f => `- **${f.field_name}:** ${f.field_value}`).join('\n') + '\n\n';
-            }
-          } catch (kfErr: any) {
-            console.warn(`[Comments Webhook] Fetch knowledge fields failed: ${kfErr.message}`);
-          }
-
-          // 2c. Fetch RAG Context (Hybrid retrieval)
-          let ragContextText = '';
-          const isShortComment = messageText.trim().length < 15;
-          if (!isShortComment) {
-            try {
-              // Resolve which folders are active (rule overrides or page defaults)
-              let activeFolderIds: string[] = ruleResult.aiFolderOverrides || [];
-              if (!ruleResult.aiFolderOverrides || ruleResult.aiFolderOverrides.length === 0) {
-                const { data: assignments } = await supabase
-                  .from('folder_page_assignments')
-                  .select('folder_id')
-                  .eq('page_id', pageConnection.page_id);
-                if (assignments) {
-                  activeFolderIds = assignments.map(a => a.folder_id);
-                }
-              }
-
-              if (activeFolderIds.length > 0) {
-                // Fetch document IDs in active folders
-                const { data: folderDocs } = await supabase
-                  .from('documents')
-                  .select('id')
-                  .in('folder_id', activeFolderIds);
-                const activeDocIds = (folderDocs || []).map(d => d.id);
-
-                if (activeDocIds.length > 0) {
-                  const embeddingChain = await getEmbeddingProviderChain(supabase, userId, env.DB);
-                  if (embeddingChain.length > 0) {
-                    const ragResults = await searchDocuments(
-                      supabase,
-                      embeddingChain,
-                      userId,
-                      messageText.trim(),
-                      null, // null queries all tenant chunks, then manually filter by folder doc IDs
-                      0.0,
-                      5
-                    );
-
-                    // Filter only results that belong to documents in active folders
-                    const filteredRag = ragResults.filter(r => activeDocIds.includes(r.documentId));
-                    if (filteredRag.length > 0) {
-                      ragContextText = '## Additional Context (from business knowledge base):\n' +
-                        filteredRag.slice(0, 3).map((r, i) => `[Fact ${i + 1}]\n${r.content}`).join('\n\n') + '\n\n';
-                    }
-                  }
-                }
-              }
-            } catch (ragErr: any) {
-              console.error(`[Comments Webhook] Hybrid RAG retrieval failed: ${ragErr.message}`);
-            }
-          }
-
-          // 3. Call LLM to generate dynamic contextual response
-          try {
-            const chain = await getChatProviderChain(supabase, userId, env.DB);
-            if (chain.length > 0) {
-              const baseInstructions = ruleResult.aiCommentInstruction || 'Write a direct, engaging, helpful reply to this comment based on the post context, brand voice, and business facts.';
-              const isDmHandshakeActive = actions.includes('dm') || actions.includes('like_and_dm');
-              const dmInstruction = isDmHandshakeActive 
-                ? `\n## DM Handshake Active\nA private DM has also been automatically sent to this user's inbox. You MUST explicitly mention in your reply that you've sent them a DM / message / inbox details, prompting them to check their messages.` 
-                : '';
-              
-              const generationPrompt = `You are a social media assistant replying to comments on a post.
-${baseInstructions}${dmInstruction}
-
-Brand Voice Profile: ${brandVoice}
-
-Post Context/Caption: "${postCaption || 'No caption available'}"
-
-${quickAnswersText}${ragContextText}User Comment: "${messageText}"
-
-## Strict Language Policy (Strict Mirroring)
-Detect the language and script/style of the user comment (e.g. Bengali script, Banglish/Latin script, or English). You MUST reply in that EXACT same language and script/style. If the user comment is in Banglish (e.g., "koto", "daam"), reply in Banglish. NEVER reply in Bengali script to a Banglish query, and never reply in English to a Banglish query.
-
-## Formatting Policy (Strict Plain Text)
-Output your reply in STRICT PLAIN TEXT. Do NOT use markdown bold (**text**), headers (#), bullet lists (- item), or numbered lists. Output only 1-2 concise sentences directly addressing the comment. Do not mention you are an AI.`;
-
-              const aiResponse = await callChatCompletionWithFailover(chain, [
-                { role: 'user', content: generationPrompt }
-              ], { temperature: 0.7 });
-
-              const generatedText = aiResponse.choices?.[0]?.message?.content?.trim();
-              if (generatedText) {
-                console.log(`[Comments Webhook] Generated AI reply for comment ${commentId}: "${generatedText}"`);
-                replyText = generatedText;
-
-                // Log token burn to audit logs
-                try {
-                  const promptTokens = Math.ceil(generationPrompt.length / 4);
-                  const completionTokens = Math.ceil(generatedText.length / 4);
-                  const totalTokens = promptTokens + completionTokens;
-                  
-                  await supabase.from('audit_logs').insert({
-                    user_id: userId,
-                    action_type: 'dynamic_reply',
-                    description: `Generated dynamic reply to comment ${commentId} on post ${postId}`,
-                    tokens_burned: totalTokens,
-                    token_type: 'text'
-                  });
-                } catch (logErr: any) {
-                  console.warn(`[Comments Webhook] Failed to log dynamic reply token burn: ${logErr.message}`);
-                }
-              }
-            }
-          } catch (llmErr: any) {
-            console.error(`[Comments Webhook] LLM reply generation failed: ${llmErr.message}`);
-          }
+        if (matchedMediaAsset) {
+          replyText += `\n\nLink: ${matchedMediaAsset.file_url}`;
         }
 
         if (ruleResult.attachmentUrls && ruleResult.attachmentUrls.length > 0) {
@@ -491,6 +369,14 @@ Output your reply in STRICT PLAIN TEXT. Do NOT use markdown bold (**text**), hea
             remainingAttachs = dmAttachs.slice(1);
           } else {
             remainingAttachs = dmAttachs;
+          }
+        }
+
+        if (matchedMediaAsset) {
+          if (matchedMediaAsset.file_type === 'image' && !primaryImageUrl) {
+            primaryImageUrl = matchedMediaAsset.file_url;
+          } else {
+            remainingAttachs.push(matchedMediaAsset.file_url);
           }
         }
 
@@ -674,7 +560,7 @@ Output your reply in STRICT PLAIN TEXT. Do NOT use markdown bold (**text**), hea
       try {
         if (userId && pageConnection && commentId) {
           const fallbackAction = (typeof finalAction !== 'undefined' && finalAction) ? finalAction : 'failed_error';
-          const fallbackCost = (typeof cost !== 'undefined') ? cost : 1;
+          const fallbackCost = creditsDeducted ? cost : 0;
           await supabase
             .from('comment_logs')
             .insert({

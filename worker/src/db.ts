@@ -16,6 +16,7 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         settings TEXT,
         role TEXT,
         is_suspended INTEGER,
+        is_paused INTEGER DEFAULT 0,
         monthly_message_limit INTEGER,
         extra_message_limit INTEGER DEFAULT 0,
         allowed_channels INTEGER,
@@ -23,7 +24,7 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         monthly_token_limit INTEGER,
         strict_token_enforcement INTEGER,
         billing_cycle_anchor TEXT,
-        allow_vision INTEGER DEFAULT 0,
+        allow_vision INTEGER DEFAULT 1,
         vision_monthly_limit INTEGER DEFAULT 30,
         vision_queries_used INTEGER DEFAULT 0,
         vision_extra_queries INTEGER DEFAULT 0,
@@ -36,7 +37,20 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         assigned_embedding_provider_id TEXT,
         assigned_summarization_provider_id TEXT,
         assigned_agent_provider_id TEXT,
-        assigned_vision_provider_id TEXT
+        assigned_vision_provider_id TEXT,
+        assigned_image_provider_id TEXT,
+        monthly_credits_limit INTEGER DEFAULT 1000,
+        extra_credits_balance INTEGER DEFAULT 0,
+        credits_used_this_month INTEGER DEFAULT 0,
+        daily_credit_spend_cap INTEGER DEFAULT 200,
+        allow_comment_analysis INTEGER DEFAULT 1,
+        assigned_comment_analysis_provider_id TEXT,
+        burn_rate_alert_sent_at TEXT,
+        allow_chat INTEGER DEFAULT 1,
+        allow_image_gen INTEGER DEFAULT 1,
+        allow_embeddings INTEGER DEFAULT 1,
+        allow_agent INTEGER DEFAULT 1,
+        allow_summarization INTEGER DEFAULT 1
       );
 
       CREATE TABLE IF NOT EXISTS page_connections (
@@ -103,12 +117,14 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         is_active_summarization INTEGER,
         is_active_agent INTEGER,
         is_active_vision INTEGER,
+        is_active_image INTEGER,
         is_global INTEGER,
         fallback_chat_order INTEGER,
         fallback_agent_order INTEGER,
         fallback_summarize_order INTEGER,
         fallback_vision_order INTEGER,
         fallback_embedding_order INTEGER,
+        fallback_image_order INTEGER,
         extra_headers TEXT,
         max_tokens INTEGER,
         temperature REAL,
@@ -158,7 +174,7 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         created_at TEXT
       );
 
-      CREATE TABLE IF NOT EXISTS chat_assets (
+      CREATE TABLE IF NOT EXISTS media (
         id TEXT PRIMARY KEY,
         user_id TEXT,
         name TEXT,
@@ -170,7 +186,14 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         ai_auto_send INTEGER DEFAULT 1,
         times_sent INTEGER DEFAULT 0,
         created_at TEXT,
-        updated_at TEXT
+        updated_at TEXT,
+        folder_id TEXT,
+        use_in_chat INTEGER DEFAULT 1,
+        use_in_comments INTEGER DEFAULT 0,
+        use_in_scheduler INTEGER DEFAULT 0,
+        is_permanent INTEGER DEFAULT 1,
+        backup_status TEXT DEFAULT 'pending',
+        backup_urls TEXT
       );
 
       CREATE TABLE IF NOT EXISTS dm_flows (
@@ -221,7 +244,70 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
       await db.exec(`ALTER TABLE users ADD COLUMN billing_cycle_anchor TEXT;`);
     } catch (_) {}
     try {
+      await db.exec(`ALTER TABLE users ADD COLUMN monthly_credits_limit INTEGER DEFAULT 1000;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN extra_credits_balance INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN credits_used_this_month INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN daily_credit_spend_cap INTEGER DEFAULT 200;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_comment_analysis INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_comment_analysis_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN burn_rate_alert_sent_at TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN is_paused INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
       await db.exec(`ALTER TABLE ai_providers ADD COLUMN model_reasoning TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE ai_providers ADD COLUMN is_active_image INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE ai_providers ADD COLUMN fallback_image_order INTEGER DEFAULT NULL;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_image_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_chat_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_embedding_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_summarization_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_agent_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_vision_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_chat INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_image_gen INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_embeddings INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_agent INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_summarization INTEGER DEFAULT 1;`);
     } catch (_) {}
     try {
       await db.exec(`ALTER TABLE page_connections ADD COLUMN instagram_account_id TEXT;`);
@@ -261,6 +347,30 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
           created_at TEXT
         );
       `);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE chat_assets RENAME TO media;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN folder_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN use_in_chat INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN use_in_comments INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN use_in_scheduler INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN is_permanent INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN backup_status TEXT DEFAULT 'pending';`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE media ADD COLUMN backup_urls TEXT DEFAULT NULL;`);
     } catch (_) {}
     d1Initialized = true;
     console.log('[D1] Database initialized successfully');
@@ -333,7 +443,7 @@ export async function getUserRecord(
   try {
     const { data, error } = await supabase
       .from('users')
-      .select('settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor')
+      .select('settings, is_suspended, is_paused, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, burn_rate_alert_sent_at, assigned_chat_provider_id, assigned_embedding_provider_id, assigned_summarization_provider_id, assigned_agent_provider_id, assigned_vision_provider_id, assigned_image_provider_id, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision')
       .eq('id', userId)
       .maybeSingle();
 
@@ -341,20 +451,50 @@ export async function getUserRecord(
     if (data) {
       // Replicate on read
       await db.prepare(
-        `INSERT OR REPLACE INTO users (id, settings, is_suspended, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO users (
+          id, settings, is_suspended, is_paused, monthly_message_limit, extra_message_limit,
+          allowed_channels, created_at, monthly_token_limit, strict_token_enforcement,
+          billing_cycle_anchor, monthly_credits_limit, extra_credits_balance,
+          credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis,
+          assigned_comment_analysis_provider_id, burn_rate_alert_sent_at,
+          assigned_chat_provider_id, assigned_embedding_provider_id,
+          assigned_summarization_provider_id, assigned_agent_provider_id,
+          assigned_vision_provider_id, assigned_image_provider_id,
+          allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision
+        )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           userId,
           JSON.stringify(data.settings),
           data.is_suspended ? 1 : 0,
+          data.is_paused ? 1 : 0,
           data.monthly_message_limit ?? null,
           data.extra_message_limit ?? null,
           data.allowed_channels ?? null,
           data.created_at ?? null,
           data.monthly_token_limit ?? null,
           data.strict_token_enforcement ? 1 : 0,
-          data.billing_cycle_anchor ?? null
+          data.billing_cycle_anchor ?? null,
+          data.monthly_credits_limit ?? null,
+          data.extra_credits_balance ?? null,
+          data.credits_used_this_month ?? null,
+          data.daily_credit_spend_cap ?? null,
+          data.allow_comment_analysis ? 1 : 0,
+          data.assigned_comment_analysis_provider_id ?? null,
+          data.burn_rate_alert_sent_at ?? null,
+          data.assigned_chat_provider_id ?? null,
+          data.assigned_embedding_provider_id ?? null,
+          data.assigned_summarization_provider_id ?? null,
+          data.assigned_agent_provider_id ?? null,
+          data.assigned_vision_provider_id ?? null,
+          data.assigned_image_provider_id ?? null,
+          data.allow_chat ? 1 : 0,
+          data.allow_image_gen ? 1 : 0,
+          data.allow_embeddings ? 1 : 0,
+          data.allow_agent ? 1 : 0,
+          data.allow_summarization ? 1 : 0,
+          data.allow_vision ? 1 : 0
         )
           .run();
       return data;
@@ -376,13 +516,33 @@ export async function getUserRecord(
     id: row.id,
     settings: safeJsonParse(row.settings),
     is_suspended: row.is_suspended === 1,
+    is_paused: row.is_paused === 1,
     monthly_message_limit: row.monthly_message_limit,
     extra_message_limit: row.extra_message_limit,
     allowed_channels: row.allowed_channels,
     created_at: row.created_at,
     monthly_token_limit: row.monthly_token_limit,
     strict_token_enforcement: row.strict_token_enforcement === 1,
-    billing_cycle_anchor: row.billing_cycle_anchor
+    billing_cycle_anchor: row.billing_cycle_anchor,
+    monthly_credits_limit: row.monthly_credits_limit,
+    extra_credits_balance: row.extra_credits_balance,
+    credits_used_this_month: row.credits_used_this_month,
+    daily_credit_spend_cap: row.daily_credit_spend_cap,
+    allow_comment_analysis: row.allow_comment_analysis === 1,
+    assigned_comment_analysis_provider_id: row.assigned_comment_analysis_provider_id,
+    burn_rate_alert_sent_at: row.burn_rate_alert_sent_at,
+    assigned_chat_provider_id: row.assigned_chat_provider_id,
+    assigned_embedding_provider_id: row.assigned_embedding_provider_id,
+    assigned_summarization_provider_id: row.assigned_summarization_provider_id,
+    assigned_agent_provider_id: row.assigned_agent_provider_id,
+    assigned_vision_provider_id: row.assigned_vision_provider_id,
+    assigned_image_provider_id: row.assigned_image_provider_id,
+    allow_chat: row.allow_chat === 1,
+    allow_image_gen: row.allow_image_gen === 1,
+    allow_embeddings: row.allow_embeddings === 1,
+    allow_agent: row.allow_agent === 1,
+    allow_summarization: row.allow_summarization === 1,
+    allow_vision: row.allow_vision === 1
   };
 }
 
@@ -549,10 +709,10 @@ export async function getAIProvidersFallback(
         await db.prepare(
           `INSERT OR REPLACE INTO ai_providers (
             id, user_id, provider_name, display_name, base_url, api_key, model_chat, model_embedding,
-            is_active_chat, is_active_embedding, is_active_summarization, is_active_agent, is_active_vision, is_global,
-            fallback_chat_order, fallback_agent_order, fallback_summarize_order, fallback_vision_order, fallback_embedding_order,
+            is_active_chat, is_active_embedding, is_active_summarization, is_active_agent, is_active_vision, is_active_image, is_global,
+            fallback_chat_order, fallback_agent_order, fallback_summarize_order, fallback_vision_order, fallback_embedding_order, fallback_image_order,
             extra_headers, max_tokens, temperature, context_window, model_reasoning
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
           .bind(
             p.id,
@@ -568,12 +728,14 @@ export async function getAIProvidersFallback(
             p.is_active_summarization ? 1 : 0,
             p.is_active_agent ? 1 : 0,
             p.is_active_vision ? 1 : 0,
+            p.is_active_image ? 1 : 0,
             p.is_global ? 1 : 0,
             p.fallback_chat_order ?? null,
             p.fallback_agent_order ?? null,
             p.fallback_summarize_order ?? null,
             p.fallback_vision_order ?? null,
             p.fallback_embedding_order ?? null,
+            p.fallback_image_order ?? null,
             JSON.stringify(p.extra_headers),
             p.max_tokens ?? null,
             p.temperature ?? null,
@@ -609,12 +771,14 @@ export async function getAIProvidersFallback(
     is_active_summarization: r.is_active_summarization === 1,
     is_active_agent: r.is_active_agent === 1,
     is_active_vision: r.is_active_vision === 1,
+    is_active_image: r.is_active_image === 1,
     is_global: r.is_global === 1,
     fallback_chat_order: r.fallback_chat_order,
     fallback_agent_order: r.fallback_agent_order,
     fallback_summarize_order: r.fallback_summarize_order,
     fallback_vision_order: r.fallback_vision_order,
     fallback_embedding_order: r.fallback_embedding_order,
+    fallback_image_order: r.fallback_image_order,
     extra_headers: safeJsonParse(r.extra_headers) || {},
     max_tokens: r.max_tokens,
     temperature: r.temperature,
@@ -962,6 +1126,8 @@ export async function storeIncomingMessageFallback(
 
   let supabaseResult: { sessionId: string; botPaused: boolean } | null = null;
   let supabaseErr: any = null;
+  let fetchedSenderName: string | null = null;
+  let fetchedSenderAvatar: string | null = null;
 
   // 1. Try Supabase
   try {
@@ -1008,9 +1174,59 @@ export async function storeIncomingMessageFallback(
       }
 
       // Fetch profile if needed
+      const { data: sessionInfo } = await supabase
+        .from('chat_sessions')
+        .select('sender_name, sender_avatar, unread_count')
+        .eq('id', sessionId)
+        .single();
+
       let updatePayload: any = {
         last_message_at: new Date().toISOString(),
+        unread_count: (sessionInfo?.unread_count || 0) + 1,
       };
+
+      if (!sessionInfo?.sender_name && accessToken) {
+        try {
+          // Detect if it is Instagram or Facebook Page-Scoped ID
+          // Facebook PSIDs are typically numeric. Instagram IDs can also be numeric, but 
+          // we use the Facebook Graph API which supports both.
+          const isWhatsApp = pageId.length > 15 && !isNaN(Number(pageId)) && pageId.startsWith('10'); // Simple heuristic
+          
+          if (!isWhatsApp) {
+            const fbRes = await fetch(`https://graph.facebook.com/v21.0/${senderId}?fields=first_name,last_name,profile_pic`, {
+              headers: { 'Authorization': `Bearer ${accessToken}` },
+            });
+            if (fbRes.ok) {
+              const fbData: any = await fbRes.json();
+              if (fbData.first_name || fbData.last_name) {
+                updatePayload.sender_name = `${fbData.first_name || ''} ${fbData.last_name || ''}`.trim();
+                fetchedSenderName = updatePayload.sender_name;
+              }
+              if (fbData.profile_pic) {
+                updatePayload.sender_avatar = fbData.profile_pic;
+                fetchedSenderAvatar = updatePayload.sender_avatar;
+              }
+            } else {
+              const fbErrText = await fbRes.text();
+              console.warn(`[Facebook Profile] Failed to fetch profile for ${senderId} (status ${fbRes.status}) — this is expected if app lacks 'Business Asset User Profile Access'. Exact error: ${fbErrText.slice(0, 200)}`);
+              // NOTE: Skipping Instagram fallback — both FB and IG use the same PSID endpoint.
+              // The only difference is the 'fields' param, but if the PSID lookup fails due to
+              // permission restrictions, trying again with different fields will also fail.
+              // The root fix is to apply for 'Business Asset User Profile Access' in Meta App Review.
+            }
+          }
+        } catch (e) {
+          console.error('[Facebook/Instagram] Error fetching profile:', e);
+        }
+      } else if (sessionInfo?.sender_name) {
+        fetchedSenderName = sessionInfo.sender_name;
+        fetchedSenderAvatar = sessionInfo.sender_avatar;
+      }
+
+      await supabase
+        .from('chat_sessions')
+        .update(updatePayload)
+        .eq('id', sessionId);
 
       supabaseResult = { sessionId, botPaused };
     }
@@ -1030,10 +1246,10 @@ export async function storeIncomingMessageFallback(
     
     // Cache the Supabase session in D1
     await db.prepare(
-      `INSERT OR REPLACE INTO chat_sessions (id, user_id, page_id, sender_id, bot_paused, unread_count, last_message_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?)`
+      `INSERT OR REPLACE INTO chat_sessions (id, user_id, page_id, sender_id, bot_paused, unread_count, last_message_at, sender_name, sender_avatar)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`
     )
-      .bind(finalSessionId, userId, pageId, senderId, botPaused ? 1 : 0, now)
+      .bind(finalSessionId, userId, pageId, senderId, botPaused ? 1 : 0, now, fetchedSenderName, fetchedSenderAvatar)
       .run();
   } else {
     // Determine or create session in D1
@@ -1249,9 +1465,9 @@ export async function updateMessageMetadataFallback(
     .run();
 }
 
-// ─── Chat Assets Fallbacks ───────────────────────────────────────────────────
+// ─── Media Vault Fallbacks ───────────────────────────────────────────────────
 
-export async function getChatAssetsFallback(
+export async function getMediaAssetsFallback(
   db: D1Database,
   supabase: SupabaseClient,
   userId: string
@@ -1259,19 +1475,18 @@ export async function getChatAssetsFallback(
   await ensureD1Initialized(db);
   try {
     const { data, error } = await supabase
-      .from('chat_assets')
+      .from('media')
       .select('*')
       .eq('user_id', userId)
-      .eq('ai_auto_send', true);
+      .eq('use_in_chat', true);
 
     if (error) throw error;
     if (data) {
-      // Replicate on read
       for (const asset of data) {
         await db.prepare(
-          `INSERT OR REPLACE INTO chat_assets (
-            id, user_id, name, friendly_name, description, file_url, file_type, facebook_media_id, ai_auto_send, times_sent, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT OR REPLACE INTO media (
+            id, user_id, name, friendly_name, description, file_url, file_type, facebook_media_id, ai_auto_send, times_sent, created_at, updated_at, folder_id, use_in_chat, use_in_comments, use_in_scheduler, is_permanent, backup_status, backup_urls
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
           .bind(
             asset.id,
@@ -1285,32 +1500,54 @@ export async function getChatAssetsFallback(
             asset.ai_auto_send ? 1 : 0,
             asset.times_sent ?? 0,
             asset.created_at ?? null,
-            asset.updated_at ?? null
+            asset.updated_at ?? null,
+            asset.folder_id ?? null,
+            asset.use_in_chat ? 1 : 0,
+            asset.use_in_comments ? 1 : 0,
+            asset.use_in_scheduler ? 1 : 0,
+            asset.is_permanent ? 1 : 0,
+            asset.backup_status ?? 'pending',
+            asset.backup_urls ? (typeof asset.backup_urls === 'object' ? JSON.stringify(asset.backup_urls) : asset.backup_urls) : null
           )
           .run();
       }
       return data;
     }
   } catch (err: any) {
-    console.warn(`[Failover] Supabase chat assets query failed: ${err.message}. Trying D1 fallback.`);
+    console.warn(`[Failover] Supabase media assets query failed: ${err.message}. Trying D1 fallback.`);
   }
 
   // Fallback D1
   const { results } = await db.prepare(
-    `SELECT name, friendly_name, description, file_type FROM chat_assets WHERE user_id = ? AND ai_auto_send = 1`
+    `SELECT * FROM media WHERE user_id = ? AND use_in_chat = 1 AND ai_auto_send = 1`
   )
     .bind(userId)
     .all();
 
   return results.map(r => ({
+    id: r.id,
+    user_id: r.user_id,
     name: r.name,
     friendly_name: r.friendly_name,
     description: r.description,
-    file_type: r.file_type
+    file_url: r.file_url,
+    file_type: r.file_type,
+    facebook_media_id: r.facebook_media_id,
+    ai_auto_send: r.ai_auto_send === 1,
+    times_sent: r.times_sent,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    folder_id: r.folder_id,
+    use_in_chat: r.use_in_chat === 1,
+    use_in_comments: r.use_in_comments === 1,
+    use_in_scheduler: r.use_in_scheduler === 1,
+    is_permanent: r.is_permanent === 1,
+    backup_status: r.backup_status,
+    backup_urls: safeJsonParse(r.backup_urls)
   }));
 }
 
-export async function getChatAssetByNameFallback(
+export async function getMediaAssetByNameFallback(
   db: D1Database,
   supabase: SupabaseClient,
   userId: string,
@@ -1319,7 +1556,7 @@ export async function getChatAssetByNameFallback(
   await ensureD1Initialized(db);
   try {
     const { data, error } = await supabase
-      .from('chat_assets')
+      .from('media')
       .select('*')
       .eq('user_id', userId)
       .eq('name', assetName)
@@ -1329,9 +1566,9 @@ export async function getChatAssetByNameFallback(
     if (data) {
       // Replicate on read
       await db.prepare(
-        `INSERT OR REPLACE INTO chat_assets (
-          id, user_id, name, friendly_name, description, file_url, file_type, facebook_media_id, ai_auto_send, times_sent, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO media (
+          id, user_id, name, friendly_name, description, file_url, file_type, facebook_media_id, ai_auto_send, times_sent, created_at, updated_at, folder_id, use_in_chat, use_in_comments, use_in_scheduler, is_permanent, backup_status, backup_urls
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           data.id,
@@ -1345,34 +1582,53 @@ export async function getChatAssetByNameFallback(
           data.ai_auto_send ? 1 : 0,
           data.times_sent ?? 0,
           data.created_at ?? null,
-          data.updated_at ?? null
+          data.updated_at ?? null,
+          data.folder_id ?? null,
+          data.use_in_chat ? 1 : 0,
+          data.use_in_comments ? 1 : 0,
+          data.use_in_scheduler ? 1 : 0,
+          data.is_permanent ? 1 : 0,
+          data.backup_status ?? 'pending',
+          data.backup_urls ? (typeof data.backup_urls === 'object' ? JSON.stringify(data.backup_urls) : data.backup_urls) : null
         )
         .run();
       return data;
     }
   } catch (err: any) {
-    console.warn(`[Failover] Supabase single chat asset query failed: ${err.message}. Trying D1 fallback.`);
+    console.warn(`[Failover] Supabase single media asset query failed: ${err.message}. Trying D1 fallback.`);
   }
 
   // Fallback D1
   const row = await db.prepare(
-    `SELECT id, name, friendly_name, description, file_url, file_type, facebook_media_id FROM chat_assets WHERE user_id = ? AND name = ?`
+    `SELECT * FROM media WHERE user_id = ? AND name = ?`
   )
     .bind(userId, assetName)
     .first();
 
   return row ? {
     id: row.id,
+    user_id: row.user_id,
     name: row.name,
     friendly_name: row.friendly_name,
     description: row.description,
     file_url: row.file_url,
     file_type: row.file_type,
-    facebook_media_id: row.facebook_media_id
+    facebook_media_id: row.facebook_media_id,
+    ai_auto_send: row.ai_auto_send === 1,
+    times_sent: row.times_sent,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    folder_id: row.folder_id,
+    use_in_chat: row.use_in_chat === 1,
+    use_in_comments: row.use_in_comments === 1,
+    use_in_scheduler: row.use_in_scheduler === 1,
+    is_permanent: row.is_permanent === 1,
+    backup_status: row.backup_status,
+    backup_urls: safeJsonParse(row.backup_urls)
   } : null;
 }
 
-export async function updateChatAssetMediaIdFallback(
+export async function updateMediaAssetMediaIdFallback(
   db: D1Database,
   supabase: SupabaseClient,
   assetId: string,
@@ -1381,19 +1637,19 @@ export async function updateChatAssetMediaIdFallback(
   await ensureD1Initialized(db);
   try {
     await supabase
-      .from('chat_assets')
+      .from('media')
       .update({ facebook_media_id: mediaId })
       .eq('id', assetId);
   } catch (err: any) {
-    console.warn(`[Failover] Supabase chat asset media ID update failed: ${err.message}. Updating D1 only.`);
+    console.warn(`[Failover] Supabase media asset media ID update failed: ${err.message}. Updating D1 only.`);
   }
 
-  await db.prepare(`UPDATE chat_assets SET facebook_media_id = ? WHERE id = ?`)
+  await db.prepare(`UPDATE media SET facebook_media_id = ? WHERE id = ?`)
     .bind(mediaId, assetId)
     .run();
 }
 
-export async function incrementChatAssetTimesSentFallback(
+export async function incrementMediaAssetTimesSentFallback(
   db: D1Database,
   supabase: SupabaseClient,
   assetId: string
@@ -1401,21 +1657,21 @@ export async function incrementChatAssetTimesSentFallback(
   await ensureD1Initialized(db);
   try {
     const { data: currentAsset } = await supabase
-      .from('chat_assets')
+      .from('media')
       .select('times_sent')
       .eq('id', assetId)
       .maybeSingle();
     if (currentAsset) {
       await supabase
-        .from('chat_assets')
+        .from('media')
         .update({ times_sent: (currentAsset.times_sent || 0) + 1 })
         .eq('id', assetId);
     }
   } catch (err: any) {
-    console.warn(`[Failover] Supabase chat asset times_sent increment failed: ${err.message}. Updating D1 only.`);
+    console.warn(`[Failover] Supabase media asset times_sent increment failed: ${err.message}. Updating D1 only.`);
   }
 
-  await db.prepare(`UPDATE chat_assets SET times_sent = times_sent + 1 WHERE id = ?`)
+  await db.prepare(`UPDATE media SET times_sent = times_sent + 1 WHERE id = ?`)
     .bind(assetId)
     .run();
 }

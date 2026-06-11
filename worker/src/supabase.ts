@@ -169,9 +169,12 @@ export async function storeIncomingMessage(
         if (fbData.profile_pic) {
           updatePayload.sender_avatar = fbData.profile_pic;
         }
+      } else {
+        const fbErrText = await fbRes.text();
+        console.warn(`[Facebook Profile] ${senderId} lookup failed (${fbRes.status}) — apply for 'Business Asset User Profile Access' in Meta App Review. Error: ${fbErrText.slice(0, 200)}`);
       }
     } catch (e) {
-      console.error('[Facebook] Error fetching profile:', e);
+      console.error('[Facebook/Instagram] Error fetching profile:', e);
     }
   }
 

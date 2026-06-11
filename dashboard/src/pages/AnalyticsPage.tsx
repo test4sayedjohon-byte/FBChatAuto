@@ -59,7 +59,7 @@ export default function AnalyticsPage() {
         logsData.forEach(l => {
           if (l.action_taken === 'hidden' || l.action_taken === 'trashed') hideCount++;
           if (l.action_taken === 'dm_sent') dmCount++;
-          if (l.credits_deducted === 3) visionCount++; // Vision actions cost 3 credits
+          if (l.credits_deducted === 5) visionCount++; // Vision actions cost 5 credits
         });
       }
 
@@ -144,7 +144,7 @@ export default function AnalyticsPage() {
           <div className="card">
             <h3>Credit Allocation & Limits</h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-              Each automated action consumes credits (Text reply = 1, Moderation = 2, Vision = 3).
+              Each automated action consumes credits (Text reply = 1, Moderation = 2, Vision = 5).
             </p>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '30px', alignItems: 'center' }}>

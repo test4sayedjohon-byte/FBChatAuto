@@ -40,8 +40,25 @@
 * **Earnings:** No guarantees. It’s a powerful tool, like a high-end PC—earnings depend entirely on the user's skill, knowledge, and ability to monetize the automation.
 
 ### B. Social Media Services
-* **Basic Services:** Facebook page follows, custom comments, group joins, page reviews, post reacts, Live views.
-* **Premium Services:** Long-term organic growth (via widewarp.com).
+*Phone Farming Setup and SMM services are two different parts of the business.*
+
+**Post-wise Service (For Engagement Boost):**
+* 250 React + 50 Comment + 30 Share = 250 টাকা
+* 500 React + 100 Comment + 80 Share = 500 টাকা
+* 1000 React + 200 Comment + 150 Share = 920 টাকা
+* Custom packages also available.
+
+**WideWarp Page-wise Growth Service:**
+* 7 Days = 3,500 টাকা
+* 15 Days = 7,000 টাকা
+* 30 Days = 12,000 টাকা
+* Detailed info available at: `widewarp.com`
+
+**Follower Service (Optional):**
+* 1,000 Followers = 200 টাকা
+
+**Ordering Process:**
+To place an order, customers must send the Page/Post Link and their chosen package.
 
 ---
 

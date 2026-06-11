@@ -13,17 +13,21 @@ interface UserProfile {
   monthly_token_limit?: number;
   strict_token_enforcement?: boolean;
   allowed_channels?: number;
-  monthly_message_limit?: number;
-  extra_message_limit?: number;
-  agent_monthly_limit?: number;
-  agent_queries_used?: number;
-  agent_extra_queries?: number;
-  agent_usage_month?: string;
+  monthly_credits_limit?: number;
+  extra_credits_balance?: number;
+  credits_used_this_month?: number;
+  daily_credit_spend_cap?: number;
+  allow_comment_analysis?: boolean;
+  assigned_comment_analysis_provider_id?: string | null;
+  billing_cycle_anchor?: string;
+  sentiment_analysis_scope?: 'global' | 'specific_posts';
+  sentiment_watched_post_ids?: string[] | null;
+  allow_chat?: boolean;
+  allow_image_gen?: boolean;
+  allow_embeddings?: boolean;
+  allow_agent?: boolean;
+  allow_summarization?: boolean;
   allow_vision?: boolean;
-  vision_monthly_limit?: number;
-  vision_queries_used?: number;
-  vision_extra_queries?: number;
-  vision_usage_month?: string;
 }
 
 interface AuthContextType {
@@ -36,6 +40,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, name?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  refreshCreditBalance: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -55,13 +60,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
-    const { data } = await supabase.from('users').select('role, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_message_limit, extra_message_limit, agent_monthly_limit, agent_queries_used, agent_extra_queries, agent_usage_month, allow_vision, vision_monthly_limit, vision_queries_used, vision_extra_queries, vision_usage_month').eq('id', userId).single();
+    const { data } = await supabase.from('users').select('role, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, billing_cycle_anchor, sentiment_analysis_scope, sentiment_watched_post_ids, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision').eq('id', userId).single();
     if (data) {
       setProfile({
         ...data,
         role: (data.role as UserRole) ?? 'user',
         is_super_admin: data.role === 'super_admin',
       });
+    }
+  };
+
+  // Lightweight credit-only refresh — only re-reads balance fields so the sidebar stays live
+  const refreshCreditBalance = async () => {
+    if (!user?.id) return;
+    const { data } = await supabase
+      .from('users')
+      .select('credits_used_this_month, extra_credits_balance, monthly_credits_limit')
+      .eq('id', user.id)
+      .single();
+    if (data) {
+      setProfile(prev =>
+        prev
+          ? {
+              ...prev,
+              credits_used_this_month: data.credits_used_this_month,
+              extra_credits_balance: data.extra_credits_balance,
+              monthly_credits_limit: data.monthly_credits_limit,
+            }
+          : null
+      );
     }
   };
 
@@ -91,6 +118,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
+  // Real-time listener for user profile/credit updates so credits update live everywhere
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`user-profile-realtime-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.new && Object.keys(payload.new).length > 0) {
+            const newData = payload.new as Record<string, any>;
+            setProfile((prev) => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                ...newData,
+                role: (newData.role as UserRole) ?? prev.role,
+                is_super_admin: newData.role === 'super_admin' || prev.role === 'super_admin',
+              };
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [user?.id]);
+
+  // Backup poll credit balance every 60 s so the sidebar reflects live deductions even if socket drops
+  useEffect(() => {
+    if (!user?.id) return;
+    const interval = setInterval(refreshCreditBalance, 60_000);
+    return () => clearInterval(interval);
+  }, [user?.id]);
+
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error as Error | null };
@@ -112,7 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, profile, isAdmin, isSuperAdmin, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, session, profile, isAdmin, isSuperAdmin, loading, signIn, signUp, signOut, refreshCreditBalance }}>
       {children}
     </AuthContext.Provider>
   );

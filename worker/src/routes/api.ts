@@ -7,6 +7,7 @@ import { sendFacebookReply } from '../facebook';
 import { sendWhatsAppReply } from '../whatsapp';
 import { processDocument } from '../rag';
 import { handleAgentChat } from '../agent';
+import { verifyAndDeductCredits } from '../credits';
 import { processAutopilotConfig } from '../comments/autopilot';
 import { runSchedulerJobs } from '../scheduler';
 import { sendCommentReply, likeComment, hideComment, deleteComment } from '../comments/meta-api';
@@ -211,43 +212,29 @@ api.post('/agent/chat', async (c) => {
     const supabase = createSupabaseAdmin(c.env);
     
     // --- Agent Quota Check ---
-    const { data: userProfile, error: profileErr } = await supabase
-      .from('users')
-      .select('agent_monthly_limit, agent_queries_used, agent_extra_queries, agent_usage_month')
-      .eq('id', user.id)
-      .single();
- 
-    if (profileErr) throw profileErr;
- 
-    const currentMonth = new Date().toISOString().slice(0, 7);
-    let { agent_monthly_limit = 30, agent_queries_used = 0, agent_extra_queries = 0, agent_usage_month } = userProfile || {};
- 
-    if (agent_usage_month !== currentMonth) {
-      agent_queries_used = 0;
-      agent_usage_month = currentMonth;
-    }
- 
-    if (agent_queries_used < agent_monthly_limit) {
-      agent_queries_used++;
-    } else if (agent_extra_queries > 0) {
-      agent_extra_queries--;
-    } else {
-      // Limit reached
+    const creditRes = await verifyAndDeductCredits(supabase, user.id, 5);
+    if (!creditRes.success) {
       return c.json({
         message: {
           role: 'assistant',
-          content: "You have reached your monthly AI agent query limit. Please contact the administrator for more queries."
+          content: "You have reached your monthly AI credit limit. Please upgrade or contact the administrator."
         },
         databaseUpdated: false
       });
     }
- 
-    // Update DB with new usage
-    await supabase.from('users').update({
-      agent_queries_used,
-      agent_extra_queries,
-      agent_usage_month
-    }).eq('id', user.id);
+
+    // Log the transaction in audit logs for visibility and daily cap spend checks
+    try {
+      await supabase.from('audit_logs').insert({
+        user_id: user.id,
+        action_type: 'agent_chat',
+        description: 'Agent Copilot chat interaction',
+        tokens_burned: 0,
+        token_type: 'text'
+      });
+    } catch (logErr) {
+      console.warn('[Agent Chat] Failed to insert audit log record:', logErr);
+    }
     
     // Process the chat
     const { message: responseMessage, databaseUpdated } = await handleAgentChat(
@@ -691,11 +678,12 @@ api.post('/comment/reply', async (c) => {
     // Call Facebook Graph API to reply
     const result = await sendCommentReply(pageConnection.access_token, commentId, message);
 
-    // Save to comment_logs / update the action_taken and reply_message
+    // Save to comment_logs / update the action_taken, reply_message, and mark as manual
     await supabase.from('comment_logs')
       .update({
         action_taken: 'replied',
-        reply_message: message
+        reply_message: message,
+        reply_source: 'manual',
       })
       .eq('comment_id', commentId);
 

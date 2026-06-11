@@ -21,12 +21,13 @@ import FacebookAppSettingsPage from './pages/FacebookAppSettingsPage';
 import UsagePage from './pages/UsagePage';
 import StorePage from './pages/StorePage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import CreditsPage from './pages/CreditsPage';
 import ContentPlannerPage from './pages/ContentPlannerPage';
 import AutoModerationPage from './pages/AutoModerationPage';
 import AutoModerationRuleEditPage from './pages/AutoModerationRuleEditPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
-import ChatAssetsPage from './pages/ChatAssetsPage';
+import MediaVaultPage from './pages/MediaVaultPage';
 import FlowsPage from './pages/FlowsPage';
 import FlowBuilderPage from './pages/FlowBuilderPage';
 import ActivityMonitorPage from './pages/ActivityMonitorPage';
@@ -109,7 +110,7 @@ export default function App() {
               <Route path="/inbox" element={<InboxPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
-              <Route path="/chat-assets" element={<ChatAssetsPage />} />
+              <Route path="/media-vault" element={<MediaVaultPage />} />
               <Route path="/providers" element={<ProvidersPage />} />
               <Route path="/pages" element={<PagesPage />} />
               <Route path="/fb-app" element={<FacebookAppSettingsPage />} />
@@ -126,6 +127,7 @@ export default function App() {
               <Route path="/flows/:flowId" element={<FlowBuilderPage />} />
               <Route path="/agent" element={<Navigate to="/" replace />} />
               <Route path="/store" element={<StorePage />} />
+              <Route path="/credits" element={<CreditsPage />} />
               {/* Admin routes — accessible by admin AND super_admin */}
               <Route path="/super-stats" element={<AdminRoute><SuperAdminStatsPage /></AdminRoute>} />
               <Route path="/super-users" element={<AdminRoute><SuperAdminUsersPage /></AdminRoute>} />

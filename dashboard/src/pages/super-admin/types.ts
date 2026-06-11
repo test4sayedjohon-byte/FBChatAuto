@@ -5,6 +5,7 @@ export interface Tenant {
   plan: string;
   created_at: string;
   is_suspended: boolean;
+  is_paused: boolean;
   is_super_admin: boolean;
   assigned_chat_provider_id: string | null;
   assigned_embedding_provider_id: string | null;
@@ -20,8 +21,23 @@ export interface Tenant {
   monthly_token_limit: number;
   strict_token_enforcement: boolean;
   allowed_channels?: number;
-  monthly_message_limit?: number;
-  extra_message_limit?: number;
+  monthly_credits_limit?: number;
+  extra_credits_balance?: number;
+  credits_used_this_month?: number;
+  daily_credit_spend_cap?: number;
+  allow_comment_analysis?: boolean;
+  assigned_comment_analysis_provider_id?: string | null;
+  sentiment_analysis_scope?: 'global' | 'specific_posts';
+  sentiment_watched_post_ids?: string[] | null;
+  brand_voice_profile?: string | null;
+  image_model?: string | null;
+  allow_chat?: boolean;
+  allow_image_gen?: boolean;
+  allow_embeddings?: boolean;
+  allow_agent?: boolean;
+  allow_summarization?: boolean;
+  allow_vision?: boolean;
+  assigned_image_provider_id?: string | null;
 }
 
 export type UserRole = 'user' | 'admin' | 'super_admin';
@@ -34,6 +50,7 @@ export interface SuperAdminUser {
   role: UserRole;
   is_super_admin: boolean;
   is_suspended: boolean;
+  is_paused: boolean;
   created_at: string;
   assigned_chat_provider_id: string | null;
   assigned_fallback_chat_provider_id: string | null;
@@ -41,6 +58,7 @@ export interface SuperAdminUser {
   assigned_summarization_provider_id: string | null;
   assigned_agent_provider_id: string | null;
   assigned_vision_provider_id: string | null;
+  assigned_comment_analysis_provider_id?: string | null;
   pageCount: number;
   documentCount: number;
   fieldCount: number;
@@ -49,8 +67,22 @@ export interface SuperAdminUser {
   monthly_token_limit: number;
   strict_token_enforcement: boolean;
   allowed_channels?: number;
-  monthly_message_limit?: number;
-  extra_message_limit?: number;
+  monthly_credits_limit?: number;
+  extra_credits_balance?: number;
+  credits_used_this_month?: number;
+  daily_credit_spend_cap?: number;
+  allow_comment_analysis?: boolean;
+  sentiment_analysis_scope?: 'global' | 'specific_posts';
+  sentiment_watched_post_ids?: string[] | null;
+  brand_voice_profile?: string | null;
+  image_model?: string | null;
+  allow_chat?: boolean;
+  allow_image_gen?: boolean;
+  allow_embeddings?: boolean;
+  allow_agent?: boolean;
+  allow_summarization?: boolean;
+  allow_vision?: boolean;
+  assigned_image_provider_id?: string | null;
 }
 
 export interface InspectData {

@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
 import { WORKER_URL } from '../lib/workerApi';
-import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save, Edit2 } from 'lucide-react';
+import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save, Edit2, Brain, ToggleLeft, ToggleRight } from 'lucide-react';
 
 interface Rule {
   id: string;
@@ -52,7 +52,9 @@ interface ChatAsset {
 }
 
 export default function AutoModerationPage() {
-  const { user } = useAuth();
+  const { user, profile, refreshCreditBalance } = useAuth();
+  const [analysisEnabled, setAnalysisEnabled] = useState<boolean>(true);
+  const [togglingAnalysis, setTogglingAnalysis] = useState(false);
   const navigate = useNavigate();
   const [rules, setRules] = useState<Rule[]>([]);
   const [logs, setLogs] = useState<CommentLog[]>([]);
@@ -139,7 +141,7 @@ export default function AutoModerationPage() {
         .select('page_id, page_name, whatsapp_phone_number_id');
       // Fetch chat assets
       const { data: chatAssetsData } = await supabase
-        .from('chat_assets')
+        .from('media')
         .select('id, name, friendly_name, file_url, file_type');
       // Fetch DM flows
       const { data: flowsData } = await supabase
@@ -360,6 +362,33 @@ export default function AutoModerationPage() {
     }
   }
 
+  // Sync local toggle state when profile loads
+  useEffect(() => {
+    if (profile !== null) {
+      setAnalysisEnabled(!!profile.allow_comment_analysis);
+    }
+  }, [profile?.allow_comment_analysis]);
+
+  async function toggleCommentAnalysis() {
+    if (!user) return;
+    const newVal = !analysisEnabled;
+    setTogglingAnalysis(true);
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({ allow_comment_analysis: newVal })
+        .eq('id', user.id);
+      if (error) throw error;
+      setAnalysisEnabled(newVal);
+      await refreshCreditBalance();
+      toast.success(newVal ? 'AI Sentiment Analysis enabled — 1 credit per comment.' : 'AI Sentiment Analysis disabled. Keyword rules still active.');
+    } catch (err: any) {
+      toast.error('Failed to update setting: ' + err.message);
+    } finally {
+      setTogglingAnalysis(false);
+    }
+  }
+
   return (
     <div className="animate-slideUp" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '30px' }}>
       
@@ -377,6 +406,72 @@ export default function AutoModerationPage() {
             <Plus size={16} /> Create Trigger Rule
           </button>
         </div>
+      </div>
+
+      {/* AI Sentiment Analysis toggle banner */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '18px 22px',
+        borderRadius: '14px',
+        background: analysisEnabled
+          ? 'linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.08) 100%)'
+          : 'var(--surface)',
+        border: `1.5px solid ${analysisEnabled ? 'rgba(99,102,241,0.35)' : 'var(--border)'}`,
+        gap: '16px',
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: '12px',
+            background: analysisEnabled ? 'linear-gradient(135deg,#6366f1,#8b5cf6)' : 'var(--surface-2)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <Brain size={22} color={analysisEnabled ? '#fff' : 'var(--text-secondary)'} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+              <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>AI Sentiment Analysis</span>
+              <span style={{
+                padding: '2px 8px', borderRadius: '20px', fontSize: '0.72rem', fontWeight: 700,
+                background: analysisEnabled ? 'rgba(99,102,241,0.2)' : 'var(--surface-2)',
+                color: analysisEnabled ? '#818cf8' : 'var(--text-secondary)',
+                textTransform: 'uppercase', letterSpacing: '0.05em',
+              }}>
+                {analysisEnabled ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+              {analysisEnabled
+                ? 'AI reads every comment for sentiment, toxicity & custom triggers. Costs 1 credit per comment.'
+                : 'Disabled — only keyword-match rules run. No AI credits charged for comments.'}
+            </p>
+          </div>
+        </div>
+        <button
+          id="toggle-comment-analysis-btn"
+          onClick={toggleCommentAnalysis}
+          disabled={togglingAnalysis}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '10px 20px', borderRadius: '10px', fontWeight: 600, fontSize: '0.88rem',
+            border: 'none', cursor: togglingAnalysis ? 'not-allowed' : 'pointer',
+            background: analysisEnabled
+              ? 'rgba(239,68,68,0.12)'
+              : 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+            color: analysisEnabled ? '#f87171' : '#fff',
+            transition: 'all 0.2s ease', opacity: togglingAnalysis ? 0.7 : 1,
+            flexShrink: 0,
+          }}
+        >
+          {togglingAnalysis
+            ? <Loader2 size={16} className="spin" />
+            : analysisEnabled
+              ? <ToggleRight size={18} />
+              : <ToggleLeft size={18} />}
+          {analysisEnabled ? 'Disable Analysis' : 'Enable Analysis'}
+        </button>
       </div>
 
       {/* Rules list */}
@@ -947,7 +1042,7 @@ export default function AutoModerationPage() {
 
                                 const assetName = file.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
                                 const { error: dbErr } = await supabase
-                                  .from('chat_assets')
+                                  .from('media')
                                   .insert({
                                     user_id: user.id,
                                     name: `${assetName}_${Date.now()}`,
@@ -962,7 +1057,7 @@ export default function AutoModerationPage() {
                                 toast.success(`Uploaded & attached: ${file.name}`);
                                 
                                 const { data: chatAssetsData } = await supabase
-                                  .from('chat_assets')
+                                  .from('media')
                                   .select('id, name, friendly_name, file_url, file_type');
                                 setChatAssets(chatAssetsData || []);
 
@@ -1112,7 +1207,7 @@ export default function AutoModerationPage() {
 
                                     const assetName = file.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
                                     const { error: dbErr } = await supabase
-                                      .from('chat_assets')
+                                      .from('media')
                                       .insert({
                                         user_id: user.id,
                                         name: `${assetName}_${Date.now()}`,
@@ -1124,10 +1219,10 @@ export default function AutoModerationPage() {
 
                                     if (dbErr) throw dbErr;
 
-                                    toast.success(`Uploaded & attached: ${file.name}`);
+                                      toast.success(`Uploaded & attached: ${file.name}`);
                                     
                                     const { data: chatAssetsData } = await supabase
-                                      .from('chat_assets')
+                                      .from('media')
                                       .select('id, name, friendly_name, file_url, file_type');
                                     setChatAssets(chatAssetsData || []);
 

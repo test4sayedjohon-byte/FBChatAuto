@@ -22,7 +22,8 @@ import {
   BarChart3,
   Paperclip,
   GitBranch,
-  Eye
+  Eye,
+  Pencil
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -86,6 +87,47 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         </button>
       </div>
 
+      {profile && !isSuperAdmin && (() => {
+        const totalCredits = (profile.monthly_credits_limit ?? 0) + (profile.extra_credits_balance ?? 0);
+        const creditsUsed = profile.credits_used_this_month ?? 0;
+        const remainingCredits = Math.max(0, totalCredits - creditsUsed);
+        const pct = totalCredits > 0 ? (remainingCredits / totalCredits) * 100 : 0;
+        const status = remainingCredits === 0 ? 'exhausted' : pct <= 20 ? 'low' : 'normal';
+
+        return (
+          <div 
+            onClick={() => { navigate('/credits'); onClose(); }}
+            className={`sidebar-credit-card ${status}`}
+          >
+            <div className="credit-card-header">
+              <div className="credit-card-user">
+                <span className="user-label">WORKSPACE</span>
+                <span className="user-name-text">{user?.user_metadata?.full_name || user?.email?.split('@')[0]}</span>
+              </div>
+              <div className="credit-card-badge">
+                <Pencil size={12} className="card-zap-icon" />
+              </div>
+            </div>
+            <div className="credit-card-balance">
+              <span className="balance-val">{remainingCredits.toLocaleString()}</span>
+              <span className="balance-lbl">/ {totalCredits.toLocaleString()} left</span>
+            </div>
+            <div className="credit-card-progress-bg">
+              <div 
+                className="credit-card-progress-bar" 
+                style={{ width: `${Math.min(100, pct)}%` }}
+              />
+            </div>
+            {remainingCredits === 0 && (
+              <span className="credit-card-status-label exhausted">⚠️ Quota Exhausted</span>
+            )}
+            {remainingCredits > 0 && pct <= 20 && (
+              <span className="credit-card-status-label low">⚠️ Low Balance</span>
+            )}
+          </div>
+        );
+      })()}
+
       <nav className="sidebar-nav">
         {!isSuperAdmin && (
           <>
@@ -121,9 +163,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               Knowledge Base
             </NavLink>
 
-            <NavLink to="/chat-assets" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+            <NavLink to="/media-vault" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Paperclip className="nav-icon" />
-              Chat Assets
+              Media Vault
             </NavLink>
 
             <span className="sidebar-section-label" style={{ marginTop: '16px' }}>Automation</span>

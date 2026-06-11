@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { workerPost } from '../lib/workerApi';
 import { toast } from '../hooks/useToast';
+import ActivityMonitorSentimentPanel from './ActivityMonitorSentimentPanel';
 import { 
   MessageSquare, MessageCircle, Calendar, CheckCircle, 
   XCircle, EyeOff, Send, Loader2, ArrowLeft, User, Clock, 
@@ -79,6 +80,7 @@ type CommentLog = {
   ai_toxicity_score: number | null;
   action_taken: 'replied' | 'hidden' | 'trashed' | 'no_action' | null;
   reply_message: string | null;
+  reply_source: 'ai' | 'manual' | null; // 'manual' = sent from dashboard, 'ai' = auto-replied by worker
   dm_sent_id: string | null;
   credits_deducted: number | null;
   created_at: string;
@@ -101,7 +103,10 @@ type ScheduledPost = {
 
 export default function ActivityMonitorPage() {
   useDocumentTitle('Activity Monitor — AutometaBot');
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+
+  // Derived from profile — mirrors the DB allow_comment_analysis flag
+  const analysisEnabled = !!profile?.allow_comment_analysis;
   
   // Layout views state (responsive columns view for mobile)
   const [activeTab, setActiveTab] = useState<'dms' | 'comments' | 'posts'>('comments');
@@ -118,6 +123,8 @@ export default function ActivityMonitorPage() {
   
   // Mappings
   const [pagesMap, setPagesMap] = useState<Record<string, { name: string; platform: string }>>({});
+  // Flat list of pages for the sentiment panel
+  const [pagesList, setPagesList] = useState<{ page_id: string; page_name: string; platform: string }[]>([]);
 
   // Core Data States
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -247,20 +254,25 @@ export default function ActivityMonitorPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // Fetch helpers
   const fetchPages = async () => {
     if (!user) return;
     const { data } = await supabase
       .from('page_connections')
-      .select('page_id, page_name, platform')
+      .select('page_id, page_name, whatsapp_phone_number_id, instagram_account_id')
       .eq('user_id', user.id);
 
     if (data) {
       const mapping: Record<string, { name: string; platform: string }> = {};
+      const list: { page_id: string; page_name: string; platform: string }[] = [];
       data.forEach(p => {
-        mapping[p.page_id] = { name: p.page_name || p.page_id, platform: p.platform };
+        const platform = p.whatsapp_phone_number_id ? 'whatsapp' : p.instagram_account_id ? 'instagram' : 'facebook';
+        mapping[p.page_id] = { name: p.page_name || p.page_id, platform };
+        if (platform !== 'whatsapp') {
+          list.push({ page_id: p.page_id, page_name: p.page_name || p.page_id, platform });
+        }
       });
       setPagesMap(mapping);
+      setPagesList(list);
     }
   };
 
@@ -412,7 +424,7 @@ export default function ActivityMonitorPage() {
 
       setCommentLogs(prev => prev.map(c => 
         c.comment_id === replyingComment.comment_id 
-          ? { ...c, action_taken: 'replied', reply_message: replyText } 
+          ? { ...c, action_taken: 'replied', reply_message: replyText, reply_source: 'manual' } 
           : c
       ));
 
@@ -970,6 +982,13 @@ export default function ActivityMonitorPage() {
               </span>
             </div>
 
+            {/* Sentiment Analysis Panel */}
+            <div style={{ padding: '10px 12px 0', flexShrink: 0 }}>
+              <ActivityMonitorSentimentPanel
+                pages={pagesList}
+              />
+            </div>
+
             {/* Comment sub filters */}
             <div style={{ 
               display: 'grid', 
@@ -1034,7 +1053,8 @@ export default function ActivityMonitorPage() {
                     const pageInfo = pagesMap[log.page_connection_id];
                     return (
                       <div 
-                        key={log.id} 
+                        key={log.id}
+                        onClick={() => setReplyingComment(log)}
                         style={{
                           background: 'var(--bg-tertiary)',
                           border: '1px solid var(--border-primary)',
@@ -1044,7 +1064,8 @@ export default function ActivityMonitorPage() {
                           flexDirection: 'column',
                           gap: '10px',
                           transition: 'all 0.2s',
-                          position: 'relative'
+                          position: 'relative',
+                          cursor: 'pointer',
                         }}
                         className="comment-log-card"
                       >
@@ -1067,17 +1088,21 @@ export default function ActivityMonitorPage() {
 
                           {/* Action badges */}
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                            {/* Sentiment badge */}
-                            {log.ai_sentiment && (
+                            {/* Sentiment badge — only shown when analysis is on or a result already exists */}
+                            {analysisEnabled && log.ai_sentiment ? (
                               <span className={`badge ${
                                 log.ai_sentiment === 'positive' ? 'badge-success' :
                                 log.ai_sentiment === 'negative' ? 'badge-error' : 'badge-warning'
                               }`} style={{ fontSize: '9px', textTransform: 'capitalize', padding: '1px 5px' }}>
                                 {log.ai_sentiment}
                               </span>
-                            )}
-                            {/* Toxicity warning */}
-                            {log.ai_toxicity_score !== null && log.ai_toxicity_score > 0.5 && (
+                            ) : !analysisEnabled ? (
+                              <span style={{ fontSize: '8px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', padding: '1px 5px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                                no analysis
+                              </span>
+                            ) : null}
+                            {/* Toxicity warning — only when analysis on */}
+                            {analysisEnabled && log.ai_toxicity_score !== null && log.ai_toxicity_score > 0.5 && (
                               <span className="badge badge-error" style={{ fontSize: '9px', display: 'flex', alignItems: 'center', gap: '2px', padding: '1px 5px' }} title={`Toxicity Score: ${(log.ai_toxicity_score * 100).toFixed(0)}%`}>
                                 <AlertTriangle size={10} /> Toxic
                               </span>
@@ -1102,8 +1127,8 @@ export default function ActivityMonitorPage() {
                           {/* Badges */}
                           <div style={{ display: 'flex', gap: '6px' }}>
                             {log.action_taken === 'replied' && (
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80', fontSize: '11px', padding: '3px 8px', borderRadius: '4px', fontWeight: '500' }}>
-                                <CheckCircle size={12} /> Auto Replied
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: log.reply_source === 'manual' ? 'rgba(59,130,246,0.15)' : 'rgba(34, 197, 94, 0.15)', color: log.reply_source === 'manual' ? '#60a5fa' : '#4ade80', fontSize: '11px', padding: '3px 8px', borderRadius: '4px', fontWeight: '500' }}>
+                                <CheckCircle size={12} /> {log.reply_source === 'manual' ? 'Manually Replied' : 'Auto Replied'}
                               </span>
                             )}
                             {log.action_taken === 'hidden' && (
@@ -1131,7 +1156,7 @@ export default function ActivityMonitorPage() {
                           {/* Quick Manual Actions */}
                           <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
                             <button 
-                              onClick={() => handleLikeComment(log)}
+                              onClick={e => { e.stopPropagation(); handleLikeComment(log); }}
                               className="btn btn-secondary"
                               style={{ padding: '6px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)' }}
                               title="Like Comment"
@@ -1141,7 +1166,7 @@ export default function ActivityMonitorPage() {
                             
                             {log.action_taken !== 'hidden' && (
                               <button 
-                                onClick={() => handleHideComment(log)}
+                                onClick={e => { e.stopPropagation(); handleHideComment(log); }}
                                 className="btn btn-secondary"
                                 style={{ padding: '6px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)' }}
                                 title="Hide Comment"
@@ -1152,7 +1177,7 @@ export default function ActivityMonitorPage() {
 
                             {log.action_taken !== 'trashed' && (
                               <button 
-                                onClick={() => handleDeleteComment(log)}
+                                onClick={e => { e.stopPropagation(); handleDeleteComment(log); }}
                                 className="btn btn-secondary"
                                 style={{ padding: '6px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)', color: 'var(--error)' }}
                                 title="Delete Comment"
@@ -1161,23 +1186,35 @@ export default function ActivityMonitorPage() {
                               </button>
                             )}
 
-                            {/* Link to post context */}
+                            {/* View on platform — prominently labeled */}
                             {log.post_id && (
                               <a 
                                 href={getSocialPostUrl(log.platform, log.post_id)} 
                                 target="_blank" 
                                 rel="noopener noreferrer" 
+                                onClick={e => e.stopPropagation()}
                                 className="btn btn-secondary"
-                                style={{ padding: '6px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)', display: 'inline-flex', alignItems: 'center' }}
-                                title="Open Original Post"
+                                style={{ 
+                                  padding: '5px 10px', 
+                                  borderRadius: '6px', 
+                                  border: '1px solid rgba(255,255,255,0.06)', 
+                                  display: 'inline-flex', 
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 600,
+                                  color: 'var(--text-secondary)'
+                                }}
+                                title="Open original post on platform"
                               >
-                                <ExternalLink size={12} />
+                                <ExternalLink size={11} />
+                                View Post
                               </a>
                             )}
 
                             <button 
                               className="btn btn-secondary"
-                              onClick={() => setReplyingComment(log)}
+                              onClick={e => { e.stopPropagation(); setReplyingComment(log); }}
                               style={{ 
                                 padding: '5px 12px', 
                                 fontSize: '0.75rem', 
@@ -1211,7 +1248,7 @@ export default function ActivityMonitorPage() {
                           }}>
                             <CornerDownRight size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0, marginTop: '2px' }} />
                             <div style={{ wordBreak: 'break-word' }}>
-                              <strong style={{ color: 'var(--text-primary)', fontSize: '0.75rem', display: 'block', marginBottom: '2px' }}>AI Reply sent:</strong>
+                              <strong style={{ color: 'var(--text-primary)', fontSize: '0.75rem', display: 'block', marginBottom: '2px' }}>{log.reply_source === 'manual' ? 'Manual Reply:' : 'AI Reply sent:'}</strong>
                               {log.reply_message}
                             </div>
                           </div>

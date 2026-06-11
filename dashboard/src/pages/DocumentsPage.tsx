@@ -2,7 +2,27 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { toast } from '../hooks/useToast';
 import { supabase } from '../lib/supabase';
 import { workerPost } from '../lib/workerApi';
-import { Plus, Trash2, FileText, Upload, X, Save, Loader2, Folder as FolderIcon, Pencil, ArrowLeft, Database } from 'lucide-react';
+import { 
+  Plus, 
+  Trash2, 
+  FileText, 
+  Upload, 
+  X, 
+  Save, 
+  Loader2, 
+  Folder as FolderIcon, 
+  Pencil, 
+  ArrowLeft, 
+  Database,
+  Image as ImageIcon, 
+  Video as VideoIcon, 
+  Music as AudioIcon, 
+  Globe, 
+  MessageSquare, 
+  Calendar, 
+  Clock, 
+  ExternalLink 
+} from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import HelpTooltip from '../components/HelpTooltip';
@@ -30,6 +50,21 @@ interface Doc {
   folder_id: string;
 }
 
+interface MediaAsset {
+  id: string;
+  friendly_name: string;
+  name: string;
+  description: string | null;
+  file_url: string;
+  file_type: 'image' | 'video' | 'audio' | 'file';
+  created_at: string;
+  folder_id: string | null;
+  use_in_chat: boolean;
+  use_in_comments: boolean;
+  use_in_scheduler: boolean;
+  is_permanent: boolean;
+}
+
 export default function DocumentsPage() {
   useDocumentTitle('Knowledge Base — AutometaBot');
   const { user } = useAuth();
@@ -38,6 +73,7 @@ export default function DocumentsPage() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [pages, setPages] = useState<PageOption[]>([]);
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [media, setMedia] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(true);
 
   // View State
@@ -75,15 +111,17 @@ export default function DocumentsPage() {
     if (!user) return;
     setLoading(true);
 
-    const [foldersRes, assignmentsRes, pagesRes, docsRes] = await Promise.all([
+    const [foldersRes, assignmentsRes, pagesRes, docsRes, mediaRes] = await Promise.all([
       supabase.from('document_folders').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
       supabase.from('folder_page_assignments').select('folder_id, page_id').eq('user_id', user.id),
       supabase.from('page_connections').select('page_id, page_name').eq('user_id', user.id),
       supabase.from('documents').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+      supabase.from('media').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
     ]);
 
     if (pagesRes.data) setPages(pagesRes.data);
     if (docsRes.data) setDocs(docsRes.data);
+    if (mediaRes.data) setMedia(mediaRes.data);
 
     if (foldersRes.data) {
       const assignments = assignmentsRes.data || [];
@@ -188,7 +226,17 @@ export default function DocumentsPage() {
 
   // --- Document Logic ---
   const activeFolderDocs = docs.filter(d => d.folder_id === activeFolderId);
+  const activeFolderMedia = media.filter(m => m.folder_id === activeFolderId);
   const activeFolder = folders.find(f => f.id === activeFolderId);
+
+  const getIcon = (type: string) => {
+    switch (type) {
+      case 'image': return <ImageIcon size={18} style={{ color: '#10b981' }} />;
+      case 'video': return <VideoIcon size={18} style={{ color: '#3b82f6' }} />;
+      case 'audio': return <AudioIcon size={18} style={{ color: '#eab308' }} />;
+      default: return <FileText size={18} style={{ color: '#a855f7' }} />;
+    }
+  };
 
   function handleTopLevelAddDoc() {
     if (folders.length === 0) {
@@ -459,6 +507,83 @@ export default function DocumentsPage() {
                     <button className={`btn btn-sm ${d.is_active ? 'btn-secondary' : 'btn-danger'}`} onClick={() => toggleDocStatus(d)}>{d.is_active ? 'Active' : 'Inactive'}</button>
                     <button className="btn btn-sm btn-secondary" onClick={() => openEditDoc(d)}>Edit</button>
                     <button className="btn-ghost btn-icon" onClick={() => deleteDoc(d.id)}><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Media Files Section */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '32px', marginBottom: '16px', borderTop: '1px solid var(--border-primary)', paddingTop: '24px' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>Media Assets in this folder</h3>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Manage all uploads in the Media Vault</span>
+          </div>
+
+          {activeFolderMedia.length === 0 ? (
+            <div className="card" style={{ padding: '24px', textAlign: 'center', background: 'var(--bg-secondary)', borderStyle: 'dashed' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No media files are assigned to this folder.</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {activeFolderMedia.map((m) => (
+                <div key={m.id} className="list-item list-item-responsive">
+                  <div className="provider-icon" style={{ 
+                    background: 'var(--bg-primary)', 
+                    border: '1px solid var(--border-light)', 
+                    width: '40px', 
+                    height: '40px', 
+                    borderRadius: '6px', 
+                    overflow: 'hidden',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    {m.file_type === 'image' ? (
+                      <img src={m.file_url} alt={m.friendly_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      getIcon(m.file_type)
+                    )}
+                  </div>
+                  <div className="list-item-content">
+                    <div className="list-item-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {m.friendly_name}
+                      <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-secondary)', background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '4px' }}>
+                        [{m.name}]
+                      </span>
+                    </div>
+                    <div className="list-item-subtitle" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                      {m.use_in_chat && (
+                        <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(16,185,129,0.1)', color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', padding: '3px 8px', borderRadius: '99px' }}>
+                          <MessageSquare size={10} /> Chat
+                        </span>
+                      )}
+                      {m.use_in_comments && (
+                        <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', padding: '3px 8px', borderRadius: '99px' }}>
+                          <Globe size={10} /> Comments
+                        </span>
+                      )}
+                      {m.use_in_scheduler && (
+                        <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(234,179,8,0.1)', color: '#eab308', display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', padding: '3px 8px', borderRadius: '99px' }}>
+                          <Calendar size={10} /> Scheduler
+                        </span>
+                      )}
+                      {m.is_permanent ? (
+                        <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(168,85,247,0.1)', color: '#a855f7', display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', padding: '3px 8px', borderRadius: '99px' }}>
+                          <Clock size={10} /> Permanent
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(239,68,68,0.1)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', padding: '3px 8px', borderRadius: '99px' }}>
+                          <Clock size={10} /> Temp (24h)
+                        </span>
+                      )}
+                      <span>•</span>
+                      <span>{new Date(m.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                  <div className="list-item-actions list-item-actions-responsive">
+                    <a href={m.file_url} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <ExternalLink size={12} /> View File
+                    </a>
                   </div>
                 </div>
               ))}

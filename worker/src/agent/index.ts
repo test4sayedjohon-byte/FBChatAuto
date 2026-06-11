@@ -8,8 +8,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AppEnv, PageConnection } from '../types';
 import { callChatCompletionWithFailover, callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage, AITool, AIProviderConfig } from '../ai/types';
-import { getAgentProviderChain, getEmbeddingProviderChain } from '../ai/provider';
+import { getAgentProviderChain, getEmbeddingProviderChain, getImageProviderChain } from '../ai/provider';
 import { processDocument, searchDocuments } from '../rag';
+import { verifyAndDeductCredits } from '../credits';
 
 // Define the available tools for the dashboard agent
 const agentTools: AITool[] = [
@@ -465,6 +466,148 @@ const copilotTools: AITool[] = [
   }
 ];
 
+const flowCopilotTools: AITool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'list_dm_flows',
+      description: 'Lists all visual message flows (sequences) currently created by the user, with their names, descriptions, IDs, and active status.',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_dm_flow',
+      description: 'Fetches detailed structure of a specific visual flow by ID, including all nodes (blocks) and edges (connection links).',
+      parameters: {
+        type: 'object',
+        properties: {
+          flow_id: { type: 'string', description: 'The UUID of the flow to retrieve.' }
+        },
+        required: ['flow_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_dm_flow',
+      description: 'Creates a visual multi-step message flow (sequence) for Messenger, Instagram, or WhatsApp. Nodes contain data for text, buttons, delays, conditions, or actions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Name of the flow.' },
+          description: { type: 'string', description: 'Helpful description of what the flow does.' },
+          nodes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Unique string ID for the node.' },
+                type: { type: 'string', enum: ['message', 'interactive', 'delay', 'condition', 'action', 'ai_route', 'capture_input', 'lead_webhook', 'randomizer', 'goto_flow', 'ai_agent'] },
+                data: { type: 'object', description: 'Config data for the node (text, mediaUrl, mediaType, buttons, quickReplies, delaySeconds, conditionKey, actionType, promptInstructions, etc.).' },
+                position: {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'number', description: 'Horizontal canvas offset coordinate (e.g. 100, 400, 700).' },
+                    y: { type: 'number', description: 'Vertical canvas offset coordinate (e.g. 150, 350).' }
+                  },
+                  required: ['x', 'y']
+                }
+              },
+              required: ['id', 'type', 'data']
+            },
+            description: 'List of node blocks.'
+          },
+          edges: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                source_node_id: { type: 'string' },
+                target_node_id: { type: 'string' },
+                source_handle: { type: 'string', description: 'Handle link (e.g. default, true, false, or button payload).' }
+              },
+              required: ['source_node_id', 'target_node_id']
+            },
+            description: 'List of edge connections between blocks.'
+          }
+        },
+        required: ['name', 'nodes', 'edges']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_dm_flow',
+      description: 'Updates an existing visual flow. Can update flow metadata (name, description, active status), and/or completely replace its nodes (blocks) and edges (links).',
+      parameters: {
+        type: 'object',
+        properties: {
+          flow_id: { type: 'string', description: 'The UUID of the flow to update.' },
+          name: { type: 'string', description: 'Updated name of the flow.' },
+          description: { type: 'string', description: 'Updated description of the flow.' },
+          is_active: { type: 'boolean', description: 'Whether the flow is active or paused.' },
+          nodes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Unique string ID for the node.' },
+                type: { type: 'string', enum: ['message', 'interactive', 'delay', 'condition', 'action', 'ai_route', 'capture_input', 'lead_webhook', 'randomizer', 'goto_flow', 'ai_agent'] },
+                data: { type: 'object', description: 'Config data for the node (text, mediaUrl, mediaType, buttons, quickReplies, delaySeconds, conditionKey, actionType, promptInstructions, etc.).' },
+                position: {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'number', description: 'Horizontal canvas offset coordinate (e.g. 100, 400, 700).' },
+                    y: { type: 'number', description: 'Vertical canvas offset coordinate (e.g. 150, 350).' }
+                  },
+                  required: ['x', 'y']
+                }
+              },
+              required: ['id', 'type', 'data']
+            },
+            description: 'New list of node blocks to replace the existing ones.'
+          },
+          edges: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                source_node_id: { type: 'string' },
+                target_node_id: { type: 'string' },
+                source_handle: { type: 'string', description: 'Handle link (e.g. default, true, false, or button payload).' }
+              },
+              required: ['source_node_id', 'target_node_id']
+            },
+            description: 'New list of edge connections to replace the existing ones.'
+          }
+        },
+        required: ['flow_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_dm_flow',
+      description: 'Deletes an existing visual flow and all its associated nodes and edges.',
+      parameters: {
+        type: 'object',
+        properties: {
+          flow_id: { type: 'string', description: 'The UUID of the flow to delete.' }
+        },
+        required: ['flow_id']
+      }
+    }
+  }
+];
+
 export async function handleAgentChat(
   supabase: SupabaseClient,
   userId: string,
@@ -565,6 +708,59 @@ MODERATION RULES (CRITICAL):
 Be creative, friendly, and structured. Help write engaging captions, hashtags, first comments (e.g. to hide links or hashtags in comments), and set up robust comment safety policies.
 
 ${pagesContext}`
+    };
+  } else if (agentType === 'flow_copilot') {
+    filteredTools = [...flowCopilotTools];
+    systemMessage = {
+      role: 'system',
+      content: `You are the Autometa Bot Flow Copilot, an expert virtual assistant for visual message flow-chart automation (sequences) for Messenger, Instagram, or WhatsApp. 
+You have autonomous capabilities to create, retrieve, modify, and delete flow charts for visual DM automations.
+
+FLOW NODE TYPES & DATA SCHEMAS:
+1. 'message': Sends a plain or media message.
+   - data: { text: string, mediaUrl?: string, mediaType?: 'image' | 'video' | 'audio' | 'file' }
+2. 'interactive': A message with buttons, quick replies, or WhatsApp lists.
+   - data: { 
+       text: string, 
+       mediaUrl?: string, 
+       mediaType?: 'image' | 'video' | 'audio' | 'file',
+       buttons?: Array<{ type: 'web_url' | 'postback' | 'phone_number', title: string, url?: string, payload?: string }>,
+       quickReplies?: Array<{ title: string, payload: string }>,
+       whatsappType?: 'button' | 'list',
+       whatsappButtons?: Array<{ id: string, title: string }>,
+       whatsappList?: { buttonText: string, sections: Array<{ title: string, rows: Array<{ id: string, title: string, description?: string }> }> }
+     }
+3. 'delay': Pauses execution before sending the next node.
+   - data: { delaySeconds: number }
+4. 'condition': Branches based on custom attributes or variables.
+   - data: { conditionKey: string, conditionOperator: 'equals' | 'contains' | 'exists', conditionValue?: string }
+5. 'action': Performs backend actions like tags, attribute assignments, webhooks.
+   - data: { actionType: 'add_tag' | 'remove_tag' | 'set_attribute' | 'pause_bot' | 'resume_bot' | 'trigger_webhook', actionParams?: Record<string, any> }
+6. 'ai_agent': Invokes an LLM-powered response node.
+   - data: { promptInstructions: string, aiModel?: string }
+7. 'capture_input': Asks the user a question and saves the response.
+   - data: { captureKey: string, captureType: 'email' | 'phone' | 'text', validationErrorMessage?: string }
+8. 'lead_webhook': Triggers an external API webhook with lead details.
+   - data: { webhookUrl: string }
+9. 'randomizer': Splits paths randomly.
+   - data: {}
+10. 'goto_flow': Jumps to another visual flow.
+    - data: { targetFlowId: string }
+
+FLOW EDGES (CONNECTIONS):
+- Edges link nodes together from source_node_id to target_node_id.
+- The source_handle specifies the branch:
+  - For standard linear flows, use 'default'.
+  - For condition nodes, use 'true' or 'false'.
+  - For interactive nodes, use the button's payload or quickReply payload (or button/reply title if payload is not set) so that the correct branch is taken based on which button the user clicks.
+  - For capture_input, delay, or action nodes, use 'default'.
+
+IMPORTANT GRAPH CONSTRAINTS (CRITICAL):
+1. Ensure the first starting block (has no incoming links) is present.
+2. Nodes must be positioned reasonably on a 2D coordinate system. Place the starter node around x:100, y:200, and place subsequent nodes sequentially (e.g., spacing by x:+300 pixels horizontally for subsequent steps, or y:+200 pixels vertically for branches) so the graph doesn't overlap and is clean.
+3. Every node ID must be a unique UUID. You (the AI agent) must generate random UUIDs for all new nodes you create; do not ask the user to provide them.
+
+You can create a flow from scratch, list flows to see existing ones, fetch a flow by ID, modify a flow (adding/removing/updating nodes or edges), or delete a flow. Help the user design the best customer acquisition and automation flows. Make your answers concise, clear, and focused on visual flow design.`
     };
   } else {
     if (channelId && channelId !== 'global') {
@@ -990,18 +1186,19 @@ The Knowledge Base can have multiple documents, each covering a different topic.
           resultStr = data && data.length > 0 ? JSON.stringify(data) : "No moderation action logs found.";
         }
         else if (fnName === 'generate_ideas') {
+          const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+          if (!creditRes.success) {
+            throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
+          }
+
           const { data: userProfile, error: userErr } = await supabase
             .from('users')
-            .select('text_token_balance, brand_voice_profile')
+            .select('brand_voice_profile')
             .eq('id', userId)
             .single();
 
           if (userErr || !userProfile) {
             throw new Error('User profile not found.');
-          }
-
-          if (userProfile.text_token_balance <= 0) {
-            throw new Error('Insufficient text token balance. Balance is 0 or negative.');
           }
 
           let relevantDocs = '';
@@ -1056,11 +1253,7 @@ Return the ideas as a JSON array of objects, where each object has:
           const responseText = response.choices[0].message.content || '[]';
 
           const tokensBurned = response.usage?.total_tokens || 1000;
-          const nextBalance = Math.max(0, userProfile.text_token_balance - tokensBurned);
-          await supabase
-            .from('users')
-            .update({ text_token_balance: nextBalance })
-            .eq('id', userId);
+          // Deducted 5 credits atomically via verifyAndDeductCredits above
 
           await supabase
             .from('audit_logs')
@@ -1080,18 +1273,19 @@ Return the ideas as a JSON array of objects, where each object has:
           databaseUpdated = true;
         }
         else if (fnName === 'evaluate_best_post') {
+          const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+          if (!creditRes.success) {
+            throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
+          }
+
           const { data: userProfile, error: userErr } = await supabase
             .from('users')
-            .select('text_token_balance')
+            .select('id')
             .eq('id', userId)
             .single();
 
           if (userErr || !userProfile) {
             throw new Error('User profile not found.');
-          }
-
-          if (userProfile.text_token_balance <= 0) {
-            throw new Error('Insufficient text token balance. Balance is 0.');
           }
 
           const variations = args.variations;
@@ -1133,11 +1327,7 @@ Ensure you output valid JSON only.`;
           const responseText = response.choices[0].message.content || '{}';
 
           const tokensBurned = response.usage?.total_tokens || 500;
-          const nextBalance = Math.max(0, userProfile.text_token_balance - tokensBurned);
-          await supabase
-            .from('users')
-            .update({ text_token_balance: nextBalance })
-            .eq('id', userId);
+          // Deducted 5 credits atomically via verifyAndDeductCredits above
 
           await supabase
             .from('audit_logs')
@@ -1152,9 +1342,14 @@ Ensure you output valid JSON only.`;
           resultStr = responseText;
         }
         else if (fnName === 'generate_image') {
+          const creditRes = await verifyAndDeductCredits(supabase, userId, 15);
+          if (!creditRes.success) {
+            throw new Error(`Insufficient credits: ${creditRes.error || 'limit exceeded'}.`);
+          }
+
           const { data: userProfile, error: userErr } = await supabase
             .from('users')
-            .select('image_gen_credits, image_model')
+            .select('image_model')
             .eq('id', userId)
             .single();
 
@@ -1162,38 +1357,21 @@ Ensure you output valid JSON only.`;
             throw new Error('User profile not found.');
           }
 
-          if (userProfile.image_gen_credits <= 0) {
-            throw new Error('Insufficient image generation credits. Balance is 0.');
-          }
-
-          const { data: providers } = await supabase
-            .from('ai_providers')
-            .select('*')
-            .or(`user_id.eq.${userId},is_global.eq.true`)
-            .eq('is_active_image', true);
-
-          let activeImageProvider = null;
-          if (providers && providers.length > 0) {
-            activeImageProvider = providers.find(p => p.user_id === userId) || providers.find(p => p.is_global === true) || providers[0];
-          }
+          const imageChain = await getImageProviderChain(supabase, userId, db);
+          const activeImageProvider = imageChain[0];
 
           if (!activeImageProvider) {
             throw new Error('No active image provider configured.');
           }
 
-          const imageProvider = {
-            baseUrl: activeImageProvider.base_url.replace(/\/+$/, ''),
-            apiKey: activeImageProvider.api_key,
-            extraHeaders: activeImageProvider.extra_headers || {}
-          };
           const modelToUse = args.model_override || userProfile.image_model || 'flux';
 
-          const imageRes = await fetch(`${imageProvider.baseUrl}/images/generations`, {
+          const imageRes = await fetch(`${activeImageProvider.baseUrl}/images/generations`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${imageProvider.apiKey}`,
-              ...imageProvider.extraHeaders
+              'Authorization': `Bearer ${activeImageProvider.apiKey}`,
+              ...activeImageProvider.extraHeaders
             },
             body: JSON.stringify({
               prompt: args.prompt,
@@ -1214,12 +1392,6 @@ Ensure you output valid JSON only.`;
           if (!imageUrl) {
             throw new Error('No image URL returned from provider.');
           }
-
-          const nextCredits = Math.max(0, userProfile.image_gen_credits - 1);
-          await supabase
-            .from('users')
-            .update({ image_gen_credits: nextCredits })
-            .eq('id', userId);
 
           await supabase
             .from('audit_logs')
@@ -1261,28 +1433,169 @@ Ensure you output valid JSON only.`;
 
           if (fErr || !flow) throw new Error(`Failed to create flow: ${fErr?.message}`);
 
-          const nodesToInsert = args.nodes.map((n: any) => ({
-            flow_id: flow.id,
-            id: n.id,
-            type: n.type,
-            data: n.data,
-            position: n.position || { x: 0, y: 0 }
-          }));
+          try {
+            const nodesToInsert = args.nodes.map((n: any) => ({
+              flow_id: flow.id,
+              id: n.id,
+              type: n.type,
+              data: n.data,
+              position: n.position || { x: 0, y: 0 }
+            }));
 
-          const { error: nErr } = await supabase.from('dm_flow_nodes').insert(nodesToInsert);
-          if (nErr) throw nErr;
+            const { error: nErr } = await supabase.from('dm_flow_nodes').insert(nodesToInsert);
+            if (nErr) throw nErr;
 
-          const edgesToInsert = args.edges.map((e: any) => ({
-            flow_id: flow.id,
-            source_node_id: e.source_node_id,
-            target_node_id: e.target_node_id,
-            source_handle: e.source_handle || 'default'
-          }));
+            const edgesToInsert = args.edges.map((e: any) => ({
+              flow_id: flow.id,
+              source_node_id: e.source_node_id,
+              target_node_id: e.target_node_id,
+              source_handle: e.source_handle || 'default'
+            }));
 
-          const { error: eErr } = await supabase.from('dm_flow_edges').insert(edgesToInsert);
-          if (eErr) throw eErr;
+            const { error: eErr } = await supabase.from('dm_flow_edges').insert(edgesToInsert);
+            if (eErr) throw eErr;
+          } catch (err: any) {
+            // Rollback: delete the visual flow to prevent zombie empty flows in DB
+            await supabase.from('dm_flows').delete().eq('id', flow.id);
+            throw err;
+          }
 
           resultStr = `Successfully created flow "${args.name}" with ID: ${flow.id}.`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'list_dm_flows') {
+          const { data: flows, error } = await supabase
+            .from('dm_flows')
+            .select('id, name, description, is_active, created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
+
+          if (error) throw error;
+          resultStr = JSON.stringify(flows || []);
+        }
+        else if (fnName === 'get_dm_flow') {
+          const { data: flow, error: fErr } = await supabase
+            .from('dm_flows')
+            .select('*')
+            .eq('id', args.flow_id)
+            .eq('user_id', userId)
+            .single();
+
+          if (fErr || !flow) throw new Error(`Flow not found: ${fErr?.message}`);
+
+          const { data: nodes, error: nErr } = await supabase
+            .from('dm_flow_nodes')
+            .select('*')
+            .eq('flow_id', args.flow_id);
+
+          if (nErr) throw nErr;
+
+          const { data: edges, error: eErr } = await supabase
+            .from('dm_flow_edges')
+            .select('*')
+            .eq('flow_id', args.flow_id);
+
+          if (eErr) throw eErr;
+
+          resultStr = JSON.stringify({
+            flow,
+            nodes: nodes || [],
+            edges: edges || []
+          });
+        }
+        else if (fnName === 'update_dm_flow') {
+          // Verify ownership first
+          const { data: flow, error: fErr } = await supabase
+            .from('dm_flows')
+            .select('id')
+            .eq('id', args.flow_id)
+            .eq('user_id', userId)
+            .single();
+
+          if (fErr || !flow) throw new Error(`Flow not found or unauthorized.`);
+
+          const metadataUpdates: any = {};
+          if (args.name !== undefined) metadataUpdates.name = args.name;
+          if (args.description !== undefined) metadataUpdates.description = args.description;
+          if (args.is_active !== undefined) metadataUpdates.is_active = args.is_active;
+
+          if (Object.keys(metadataUpdates).length > 0) {
+            const { error: fErr } = await supabase
+              .from('dm_flows')
+              .update(metadataUpdates)
+              .eq('id', args.flow_id)
+              .eq('user_id', userId);
+            if (fErr) throw fErr;
+          }
+
+          if (args.nodes !== undefined) {
+            if (args.edges !== undefined) {
+              const incomingNodeIds = new Set(args.edges.map((e: any) => e.target_node_id));
+              const startingNodes = args.nodes.filter((n: any) => !incomingNodeIds.has(n.id));
+              if (args.nodes.length > 0 && startingNodes.length === 0) {
+                throw new Error('Graph loop detected! Ensure at least one starting block exists (has no incoming links).');
+              }
+            }
+
+            const { error: delErr } = await supabase
+              .from('dm_flow_nodes')
+              .delete()
+              .eq('flow_id', args.flow_id);
+            if (delErr) throw delErr;
+
+            if (args.nodes.length > 0) {
+              const nodesToInsert = args.nodes.map((n: any) => ({
+                flow_id: args.flow_id,
+                id: n.id,
+                type: n.type,
+                data: n.data,
+                position: n.position || { x: 100, y: 100 }
+              }));
+              const { error: nErr } = await supabase.from('dm_flow_nodes').insert(nodesToInsert);
+              if (nErr) throw nErr;
+            }
+          }
+
+          if (args.edges !== undefined) {
+            const { error: delEdgesErr } = await supabase
+              .from('dm_flow_edges')
+              .delete()
+              .eq('flow_id', args.flow_id);
+            if (delEdgesErr) throw delEdgesErr;
+
+            if (args.edges.length > 0) {
+              const edgesToInsert = args.edges.map((e: any) => ({
+                flow_id: args.flow_id,
+                source_node_id: e.source_node_id,
+                target_node_id: e.target_node_id,
+                source_handle: e.source_handle || 'default'
+              }));
+              const { error: eErr } = await supabase.from('dm_flow_edges').insert(edgesToInsert);
+              if (eErr) throw eErr;
+            }
+          }
+
+          resultStr = `Successfully updated flow "${args.flow_id}".`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'delete_dm_flow') {
+          const { data: flow, error: fErr } = await supabase
+            .from('dm_flows')
+            .select('id')
+            .eq('id', args.flow_id)
+            .eq('user_id', userId)
+            .single();
+
+          if (fErr || !flow) throw new Error(`Flow not found or unauthorized: ${fErr?.message}`);
+
+          const { error: delErr } = await supabase
+            .from('dm_flows')
+            .delete()
+            .eq('id', args.flow_id);
+
+          if (delErr) throw delErr;
+
+          resultStr = `Successfully deleted flow "${args.flow_id}".`;
           databaseUpdated = true;
         }
         else if (fnName === 'update_system_prompt') {
@@ -1719,19 +2032,19 @@ export async function executeWeeklyPlanner(
   db?: D1Database
 ): Promise<{ success: boolean; message: string; scheduledPostId?: string }> {
   try {
-    // 1. Fetch user details
+    const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+    if (!creditRes.success) {
+      throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
+    }
+
     const { data: userProfile, error: userErr } = await supabase
       .from('users')
-      .select('text_token_balance, brand_voice_profile, image_model, image_gen_credits')
+      .select('brand_voice_profile, image_model')
       .eq('id', userId)
       .single();
 
     if (userErr || !userProfile) {
       throw new Error(`User profile not found for user ${userId}.`);
-    }
-
-    if (userProfile.text_token_balance <= 0) {
-      throw new Error(`Insufficient text token balance. Balance is 0 or negative.`);
     }
 
     // 2. Fetch connected channels (page_connections)
@@ -1912,12 +2225,7 @@ Ensure you output valid JSON only.`;
     const textTokensForScoring = scoreResponse.usage?.total_tokens || 500;
     const totalTextTokensBurned = textTokensForIdeas + textTokensForScoring;
 
-    // Deduct text token balance
-    const nextTextBalance = Math.max(0, userProfile.text_token_balance - totalTextTokensBurned);
-    await supabase
-      .from('users')
-      .update({ text_token_balance: nextTextBalance })
-      .eq('id', userId);
+    // Deducted 5 credits atomically via verifyAndDeductCredits above
 
     await supabase
       .from('audit_logs')
@@ -1943,68 +2251,52 @@ Ensure you output valid JSON only.`;
 
     // 7. Generate image if credits are available
     let imageUrl: string | null = null;
-    if (userProfile.image_gen_credits > 0 && bestPost.image_prompt) {
-      const { data: providers } = await supabase
-        .from('ai_providers')
-        .select('*')
-        .or(`user_id.eq.${userId},is_global.eq.true`)
-        .eq('is_active_image', true);
+    if (bestPost.image_prompt) {
+      const creditRes = await verifyAndDeductCredits(supabase, userId, 15);
+      if (creditRes.success) {
+        const imageChain = await getImageProviderChain(supabase, userId, db);
+        const activeImageProvider = imageChain[0];
 
-      let activeImageProvider = null;
-      if (providers && providers.length > 0) {
-        activeImageProvider = providers.find(p => p.user_id === userId) || providers.find(p => p.is_global === true) || providers[0];
-      }
+        if (activeImageProvider) {
+          const imageModel = userProfile.image_model || 'flux';
 
-      if (activeImageProvider) {
-        const imageProvider = {
-          baseUrl: activeImageProvider.base_url.replace(/\/+$/, ''),
-          apiKey: activeImageProvider.api_key,
-          extraHeaders: activeImageProvider.extra_headers || {}
-        };
-        const imageModel = userProfile.image_model || 'flux';
+          try {
+            const imageRes = await fetch(`${activeImageProvider.baseUrl}/images/generations`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${activeImageProvider.apiKey}`,
+                ...activeImageProvider.extraHeaders
+              },
+              body: JSON.stringify({
+                prompt: bestPost.image_prompt,
+                n: 1,
+                size: '1024x1024',
+                model: imageModel
+              }),
+              signal: AbortSignal.timeout(60_000)
+            });
 
-        try {
-          const imageRes = await fetch(`${imageProvider.baseUrl}/images/generations`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${imageProvider.apiKey}`,
-              ...imageProvider.extraHeaders
-            },
-            body: JSON.stringify({
-              prompt: bestPost.image_prompt,
-              n: 1,
-              size: '1024x1024',
-              model: imageModel
-            }),
-            signal: AbortSignal.timeout(60_000)
-          });
-
-          if (imageRes.ok) {
-            const imageJson = await imageRes.json() as any;
-            imageUrl = imageJson.data?.[0]?.url || null;
-            if (imageUrl) {
-              const nextImageCredits = Math.max(0, userProfile.image_gen_credits - 1);
-              await supabase
-                .from('users')
-                .update({ image_gen_credits: nextImageCredits })
-                .eq('id', userId);
-
-              await supabase
-                .from('audit_logs')
-                .insert({
-                  user_id: userId,
-                  action_type: 'generate_image',
-                  description: `Headless generated image for weekly post using model ${imageModel}.`,
-                  tokens_burned: 1,
-                  token_type: 'image_gen'
-                });
+            if (imageRes.ok) {
+              const imageJson = await imageRes.json() as any;
+              imageUrl = imageJson.data?.[0]?.url || null;
+              if (imageUrl) {
+                await supabase
+                  .from('audit_logs')
+                  .insert({
+                    user_id: userId,
+                    action_type: 'generate_image',
+                    description: `Headless generated image for weekly post using model ${imageModel}.`,
+                    tokens_burned: 1,
+                    token_type: 'image_gen'
+                  });
+              }
+            } else {
+              console.error('[executeWeeklyPlanner] Image provider returned error status:', imageRes.status);
             }
-          } else {
-            console.error('[executeWeeklyPlanner] Image provider returned error status:', imageRes.status);
+          } catch (imgErr) {
+            console.error('[executeWeeklyPlanner] Failed to generate image:', imgErr);
           }
-        } catch (imgErr) {
-          console.error('[executeWeeklyPlanner] Failed to generate image:', imgErr);
         }
       }
     }
@@ -2061,19 +2353,19 @@ export async function executeVariationsPlanner(
   db?: D1Database
 ): Promise<{ success: boolean; message: string }> {
   try {
-    // 1. Fetch user details
+    const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+    if (!creditRes.success) {
+      throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
+    }
+
     const { data: userProfile, error: userErr } = await supabase
       .from('users')
-      .select('text_token_balance, brand_voice_profile, image_model, image_gen_credits')
+      .select('brand_voice_profile, image_model')
       .eq('id', userId)
       .single();
 
     if (userErr || !userProfile) {
       throw new Error(`User profile not found for user ${userId}.`);
-    }
-
-    if (userProfile.text_token_balance <= 0) {
-      throw new Error(`Insufficient text token balance. Balance is 0 or negative.`);
     }
 
     // 2. Fetch the draft scheduled post
@@ -2255,12 +2547,7 @@ Ensure you output valid JSON only.`;
     const textTokensForScoring = scoreResponse.usage?.total_tokens || 500;
     const totalTextTokensBurned = textTokensForVariations + textTokensForScoring;
 
-    // Deduct text token balance
-    const nextTextBalance = Math.max(0, userProfile.text_token_balance - totalTextTokensBurned);
-    await supabase
-      .from('users')
-      .update({ text_token_balance: nextTextBalance })
-      .eq('id', userId);
+    // Deducted 5 credits atomically via verifyAndDeductCredits above
 
     await supabase
       .from('audit_logs')
@@ -2286,66 +2573,50 @@ Ensure you output valid JSON only.`;
 
     // 7. Generate image if credits are available
     let imageUrl: string | null = null;
-    if (userProfile.image_gen_credits > 0 && bestPost.image_prompt) {
-      const { data: providers } = await supabase
-        .from('ai_providers')
-        .select('*')
-        .or(`user_id.eq.${userId},is_global.eq.true`)
-        .eq('is_active_image', true);
+    if (bestPost.image_prompt) {
+      const creditRes = await verifyAndDeductCredits(supabase, userId, 15);
+      if (creditRes.success) {
+        const imageChain = await getImageProviderChain(supabase, userId, db);
+        const activeImageProvider = imageChain[0];
 
-      let activeImageProvider = null;
-      if (providers && providers.length > 0) {
-        activeImageProvider = providers.find(p => p.user_id === userId) || providers.find(p => p.is_global === true) || providers[0];
-      }
+        if (activeImageProvider) {
+          const imageModel = userProfile.image_model || 'flux';
 
-      if (activeImageProvider) {
-        const imageProvider = {
-          baseUrl: activeImageProvider.base_url.replace(/\/+$/, ''),
-          apiKey: activeImageProvider.api_key,
-          extraHeaders: activeImageProvider.extra_headers || {}
-        };
-        const imageModel = userProfile.image_model || 'flux';
+          try {
+            const imageRes = await fetch(`${activeImageProvider.baseUrl}/images/generations`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${activeImageProvider.apiKey}`,
+                ...activeImageProvider.extraHeaders
+              },
+              body: JSON.stringify({
+                prompt: bestPost.image_prompt,
+                n: 1,
+                size: '1024x1024',
+                model: imageModel
+              }),
+              signal: AbortSignal.timeout(60_000)
+            });
 
-        try {
-          const imageRes = await fetch(`${imageProvider.baseUrl}/images/generations`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${imageProvider.apiKey}`,
-              ...imageProvider.extraHeaders
-            },
-            body: JSON.stringify({
-              prompt: bestPost.image_prompt,
-              n: 1,
-              size: '1024x1024',
-              model: imageModel
-            }),
-            signal: AbortSignal.timeout(60_000)
-          });
-
-          if (imageRes.ok) {
-            const imageJson = await imageRes.json() as any;
-            imageUrl = imageJson.data?.[0]?.url || null;
-            if (imageUrl) {
-              const nextImageCredits = Math.max(0, userProfile.image_gen_credits - 1);
-              await supabase
-                .from('users')
-                .update({ image_gen_credits: nextImageCredits })
-                .eq('id', userId);
-
-              await supabase
-                .from('audit_logs')
-                .insert({
-                  user_id: userId,
-                  action_type: 'generate_image',
-                  description: `Headless generated image for idea variations using model ${imageModel}.`,
-                  tokens_burned: 1,
-                  token_type: 'image_gen'
-                });
+            if (imageRes.ok) {
+              const imageJson = await imageRes.json() as any;
+              imageUrl = imageJson.data?.[0]?.url || null;
+              if (imageUrl) {
+                await supabase
+                  .from('audit_logs')
+                  .insert({
+                    user_id: userId,
+                    action_type: 'generate_image',
+                    description: `Headless generated image for idea variations using model ${imageModel}.`,
+                    tokens_burned: 1,
+                    token_type: 'image_gen'
+                  });
+              }
             }
+          } catch (imgErr) {
+            console.error('[executeVariationsPlanner] Failed to generate image:', imgErr);
           }
-        } catch (imgErr) {
-          console.error('[executeVariationsPlanner] Failed to generate image:', imgErr);
         }
       }
     }

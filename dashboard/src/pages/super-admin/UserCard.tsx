@@ -10,6 +10,8 @@ import {
   Ban,
   Eye,
   Gift,
+  Pause,
+  Play,
 } from 'lucide-react';
 import type { SuperAdminUser } from './types';
 
@@ -22,6 +24,7 @@ interface UserCardProps {
   currentUserId?: string;
   onManage: (user: SuperAdminUser) => void;
   onToggleSuspension: (userId: string, currentStatus: boolean) => void;
+  onTogglePause: (userId: string, currentStatus: boolean) => void;
   onImpersonate: (user: SuperAdminUser) => void;
   onGiftQueries?: (user: SuperAdminUser, type: 'agent_queries' | 'messages') => void;
 }
@@ -111,6 +114,7 @@ const UserCard: React.FC<UserCardProps> = ({
   currentUserId,
   onManage,
   onToggleSuspension,
+  onTogglePause,
   onImpersonate,
   onGiftQueries,
 }) => {
@@ -174,7 +178,7 @@ const UserCard: React.FC<UserCardProps> = ({
   const cardStyle: React.CSSProperties = {
     position: 'relative',
     background: 'var(--bg-secondary, #1a1d21)',
-    border: `1px solid ${suspended ? 'rgba(239,68,68,0.35)' : 'var(--border-primary, rgba(255,255,255,0.06))'}`,
+    border: `1px solid ${suspended ? 'rgba(239,68,68,0.35)' : user.is_paused ? 'rgba(156,163,175,0.35)' : 'var(--border-primary, rgba(255,255,255,0.06))'}`,
     borderRadius: 'var(--radius-md, 12px)',
     padding: '20px',
     display: 'flex',
@@ -185,7 +189,7 @@ const UserCard: React.FC<UserCardProps> = ({
     boxShadow: hovered
       ? '0 8px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(99,102,241,0.10)'
       : 'var(--shadow-md, 0 4px 12px rgba(0,0,0,0.3))',
-    opacity: suspended ? 0.72 : 1,
+    opacity: (suspended || user.is_paused) ? 0.72 : 1,
     cursor: 'default',
     overflow: 'visible',
   };
@@ -222,10 +226,12 @@ const UserCard: React.FC<UserCardProps> = ({
     width: 8,
     height: 8,
     borderRadius: '50%',
-    background: suspended ? 'var(--error, #ef4444)' : '#22c55e',
+    background: suspended ? 'var(--error, #ef4444)' : user.is_paused ? '#9ca3af' : '#22c55e',
     boxShadow: suspended
       ? '0 0 6px rgba(239,68,68,0.5)'
-      : '0 0 6px rgba(34,197,94,0.5)',
+      : user.is_paused
+        ? '0 0 6px rgba(156,163,175,0.5)'
+        : '0 0 6px rgba(34,197,94,0.5)',
     animation: suspended ? 'uc-pulse 2s ease-in-out infinite' : 'none',
     flexShrink: 0,
   };
@@ -241,20 +247,44 @@ const UserCard: React.FC<UserCardProps> = ({
         <div style={avatarStyle}>{getInitials(user.display_name)}</div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-            <span
-              style={{
-                fontSize: 15,
-                fontWeight: 600,
-                color: 'var(--text-primary, #f3f4f6)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <span
+                style={{
+                  fontSize: 15,
+                  fontWeight: 600,
+                  color: 'var(--text-primary, #f3f4f6)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {user.display_name || 'Unnamed'}
+              </span>
+              <div style={statusDot} title={suspended ? 'Suspended' : user.is_paused ? 'Paused' : 'Active'} />
+            </div>
+            
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePause(user.id, user.is_paused);
               }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: user.is_paused ? 'var(--accent-primary, #6366f1)' : 'var(--text-secondary, #9ca3af)',
+                padding: '4px',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s',
+              }}
+              title={user.is_paused ? 'Resume Activity' : 'Pause Activity'}
             >
-              {user.display_name || 'Unnamed'}
-            </span>
-            <div style={statusDot} title={suspended ? 'Suspended' : 'Active'} />
+              {user.is_paused ? <Play size={14} /> : <Pause size={14} />}
+            </button>
           </div>
 
           <p
@@ -278,6 +308,18 @@ const UserCard: React.FC<UserCardProps> = ({
             <span style={{ ...badgeBase, ...planBadge(user.plan) }}>
               {user.plan || 'Free'}
             </span>
+            {user.is_paused && (
+              <span
+                style={{
+                  ...badgeBase,
+                  background: 'rgba(156,163,175,0.12)',
+                  color: '#9ca3af',
+                  border: '1px solid rgba(156,163,175,0.20)',
+                }}
+              >
+                Paused
+              </span>
+            )}
             {suspended && (
               <span
                 style={{

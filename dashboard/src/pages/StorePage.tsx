@@ -8,12 +8,10 @@ import {
   CheckCircle2, 
   XCircle, 
   Globe, 
-  MessageSquare, 
   ArrowUpRight,
   Plus,
-  Bot,
   Gift,
-  Eye
+  Zap
 } from 'lucide-react';
 import PricingModal from '../components/PricingModal';
 import { calculateBillingCycle } from '../lib/billing';
@@ -58,7 +56,6 @@ export default function StorePage() {
   const [loading, setLoading] = useState(true);
   const [showPricingModal, setShowPricingModal] = useState(false);
   const [pageConnections, setPageConnections] = useState<any[]>([]);
-  const [messagesUsedThisCycle, setMessagesUsedThisCycle] = useState(0);
   const [billingCycle, setBillingCycle] = useState<any>(null);
 
   // Fetch purchases and connected channels
@@ -91,16 +88,6 @@ export default function StorePage() {
       const cycle = calculateBillingCycle(user.created_at, pHistory);
       setBillingCycle(cycle);
 
-      // Fetch messages used in cycle
-      const { count: cycleMessagesCount } = await supabase
-        .from('chat_messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .gte('created_at', cycle.startDate.toISOString())
-        .lt('created_at', cycle.endDate.toISOString());
-
-      setMessagesUsedThisCycle(cycleMessagesCount || 0);
-
     } catch (err) {
       console.error('Failed to load store data:', err);
     } finally {
@@ -113,24 +100,11 @@ export default function StorePage() {
   }, [user]);
 
   const allowedChannels = profile?.allowed_channels || 0;
-  const messageLimit = profile?.monthly_message_limit ?? 0;
-  const extraMessageLimit = profile?.extra_message_limit ?? 0;
-  const totalMessageLimit = messageLimit === -1 ? -1 : (messageLimit + extraMessageLimit);
-
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const isNewMonthAgent = profile?.agent_usage_month !== currentMonth;
-  const agentUsed = isNewMonthAgent ? 0 : (profile?.agent_queries_used ?? 0);
-  const agentExtra = isNewMonthAgent ? 0 : (profile?.agent_extra_queries ?? 0);
-  const agentLimit = profile?.agent_monthly_limit ?? 30;
-  const agentTotalAllowed = agentLimit + agentExtra;
-  const agentRemaining = Math.max(0, agentTotalAllowed - agentUsed);
-
-  const isNewMonthVision = profile?.vision_usage_month !== currentMonth;
-  const visionUsed = isNewMonthVision ? 0 : (profile?.vision_queries_used ?? 0);
-  const visionExtra = isNewMonthVision ? 0 : (profile?.vision_extra_queries ?? 0);
-  const visionLimit = profile?.vision_monthly_limit ?? 30;
-  const visionTotalAllowed = visionLimit + visionExtra;
-  const visionRemaining = Math.max(0, visionTotalAllowed - visionUsed);
+  const monthlyCreditsLimit = profile?.monthly_credits_limit ?? 1000;
+  const extraCreditsBalance = profile?.extra_credits_balance ?? 0;
+  const creditsUsedThisMonth = profile?.credits_used_this_month ?? 0;
+  const totalAllowedCredits = monthlyCreditsLimit === -1 ? -1 : (monthlyCreditsLimit + extraCreditsBalance);
+  const creditsRemaining = totalAllowedCredits === -1 ? -1 : Math.max(0, totalAllowedCredits - creditsUsedThisMonth);
 
   return (
     <div className="page-container animate-fadeIn" style={{ maxWidth: '1200px', margin: '0 auto' }}>
@@ -240,186 +214,105 @@ export default function StorePage() {
           </div>
         </div>
 
-        {/* Message Limits Card */}
-        <div className="card" style={{ padding: '24px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* AI Credits Balance Card */}
+        <div className="card" style={{ padding: '24px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '16px', gridColumn: 'span 2' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <MessageSquare size={18} style={{ color: '#3b82f6' }} />
-              Message Budget Usage
+              <Zap size={18} style={{ color: '#eab308', fill: '#eab308' }} />
+              Unified AI Credits Balance
             </h3>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Total monthly AI automation message budget status.</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Consolidated balance used for comment moderation, chatbot replies, AI agents, and image generation.</p>
           </div>
 
           {loading ? (
-            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading usage stats...</div>
+            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading credit stats...</div>
           ) : (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '12px' }}>
-                <span style={{ fontSize: '2.2rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
-                  {totalMessageLimit === -1 ? '∞' : Math.max(0, totalMessageLimit - messagesUsedThisCycle).toLocaleString()}
-                </span>
-                <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
-                  messages left
-                </span>
-              </div>
-
-              {/* Progress Bar */}
-              {totalMessageLimit !== -1 && totalMessageLimit > 0 && (
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${Math.min(100, (messagesUsedThisCycle / totalMessageLimit) * 100)}%`,
-                      background: messagesUsedThisCycle >= totalMessageLimit ? 'var(--error)' : 'linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)',
-                      borderRadius: '3px',
-                      transition: 'width 0.5s ease'
-                    }} />
-                  </div>
-                </div>
-              )}
-
-              {/* Breakdown Details */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Used this period</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{messagesUsedThisCycle.toLocaleString()} messages</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Total allowed budget</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
-                    {messageLimit === -1 ? 'Unlimited' : `${totalMessageLimit.toLocaleString()} messages`}
-                    {extraMessageLimit > 0 && ` (${extraMessageLimit.toLocaleString()} gifted)`}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '24px', alignItems: 'start' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '12px' }}>
+                  <span style={{ fontSize: '2.5rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
+                    {totalAllowedCredits === -1 ? '∞' : creditsRemaining.toLocaleString()}
+                  </span>
+                  <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
+                    credits left
                   </span>
                 </div>
-                {billingCycle && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span>Current billing period</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: '600', textAlign: 'right' }}>
-                      {billingCycle.startDate.toLocaleDateString()} – {billingCycle.endDate.toLocaleDateString()}
-                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', marginTop: '2px', fontWeight: '500' }}>
-                        ({billingCycle.daysRemaining} days left)
-                      </div>
-                    </span>
+
+                {/* Progress Bar */}
+                {totalAllowedCredits !== -1 && totalAllowedCredits > 0 && (
+                  <div style={{ marginBottom: '14px' }}>
+                    <div style={{ height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${Math.min(100, (creditsUsedThisMonth / totalAllowedCredits) * 100)}%`,
+                        background: creditsUsedThisMonth >= totalAllowedCredits ? 'var(--error)' : 'linear-gradient(90deg, #eab308 0%, #facc15 100%)',
+                        borderRadius: '4px',
+                        transition: 'width 0.5s ease'
+                      }} />
+                    </div>
                   </div>
                 )}
-              </div>
-            </div>
-          )}
-        </div>
 
-        {/* AI Chat Agent Quota Card */}
-        <div className="card" style={{ padding: '24px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Bot size={18} style={{ color: 'var(--accent-primary)' }} />
-              AI Chat Agent Quota
-            </h3>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Remaining monthly queries for your built-in AI assistant.</p>
-          </div>
-
-          {loading ? (
-            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading usage stats...</div>
-          ) : (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '12px' }}>
-                <span style={{ fontSize: '2.2rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
-                  {agentRemaining}
-                </span>
-                <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
-                  queries left
-                </span>
-              </div>
-
-              {/* Progress Bar */}
-              {agentTotalAllowed > 0 && (
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${Math.min(100, (agentUsed / agentTotalAllowed) * 100)}%`,
-                      background: agentUsed >= agentTotalAllowed ? 'var(--error)' : 'linear-gradient(90deg, var(--accent-primary) 0%, #a855f7 100%)',
-                      borderRadius: '3px',
-                      transition: 'width 0.5s ease'
-                    }} />
+                {/* Breakdown Details */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Used this cycle</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{creditsUsedThisMonth.toLocaleString()} credits</span>
                   </div>
-                </div>
-              )}
-
-              {/* Breakdown Details */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Monthly Base Quota</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{agentLimit} queries</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Extra / Gifted Queries</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>+{agentExtra} queries</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Queries used this month</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{agentUsed} queries</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Image Processing (Vision) Quota Card */}
-        <div className="card" style={{ padding: '24px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Eye size={18} style={{ color: '#10b981' }} />
-              Image Vision Quota
-            </h3>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Remaining monthly image processing/vision queries.</p>
-          </div>
-
-          {loading ? (
-            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading usage stats...</div>
-          ) : !profile?.allow_vision ? (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px dashed var(--border-primary)', borderRadius: '8px', gap: '8px' }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>Image Processing Disabled</span>
-              <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>Contact support or admin to enable vision AI capability for your account.</p>
-            </div>
-          ) : (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '12px' }}>
-                <span style={{ fontSize: '2.2rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
-                  {visionRemaining}
-                </span>
-                <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
-                  queries left
-                </span>
-              </div>
-
-              {/* Progress Bar */}
-              {visionTotalAllowed > 0 && (
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${Math.min(100, (visionUsed / visionTotalAllowed) * 100)}%`,
-                      background: visionUsed >= visionTotalAllowed ? 'var(--error)' : 'linear-gradient(90deg, #10b981 0%, #34d399 100%)',
-                      borderRadius: '3px',
-                      transition: 'width 0.5s ease'
-                    }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Monthly limit</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
+                      {monthlyCreditsLimit === -1 ? 'Unlimited' : `${monthlyCreditsLimit.toLocaleString()} credits`}
+                    </span>
                   </div>
+                  {extraCreditsBalance > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Extra credits (gifted/purchased)</span>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>+{extraCreditsBalance.toLocaleString()} credits</span>
+                    </div>
+                  )}
+                  {billingCycle && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <span>Billing period</span>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: '600', textAlign: 'right' }}>
+                        {billingCycle.startDate.toLocaleDateString()} – {billingCycle.endDate.toLocaleDateString()}
+                        <div style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', marginTop: '2px', fontWeight: '500' }}>
+                          ({billingCycle.daysRemaining} days left)
+                        </div>
+                      </span>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
-              {/* Breakdown Details */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Monthly Base Quota</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{visionLimit} queries</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Extra / Gifted Queries</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>+{visionExtra} queries</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Queries used this month</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{visionUsed} queries</span>
+              {/* Credit consumption rates */}
+              <div style={{ background: 'var(--bg-primary)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>Credit Cost Rates</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
+                    <span>AI Comment / Chat Reply (Text)</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>1 credit</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
+                    <span>AI Comment Analysis (Sentiment/Safety)</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>1 credit</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
+                    <span>AI Chat Agent Query (Dashboard)</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>5 credits</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
+                    <span>AI Vision / Image Reply (Chat)</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>5 credits</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
+                    <span>AI Image Generation</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>15 credits</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '2px' }}>
+                    <span>Keyword rules & static replies</span>
+                    <span style={{ color: '#10b981', fontWeight: '700' }}>FREE</span>
+                  </div>
                 </div>
               </div>
             </div>

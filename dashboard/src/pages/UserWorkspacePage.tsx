@@ -37,6 +37,9 @@ import {
   Loader2,
   Gift,
   X,
+  Pause,
+  Play,
+  Image,
 } from 'lucide-react';
 import type { SuperAdminUser, UserRole, InspectData } from './super-admin/types';
 import { getPresetChatModels } from '../lib/models';
@@ -140,20 +143,29 @@ export default function UserWorkspacePage() {
   // Quota state
   const [monthlyLimitInput, setMonthlyLimitInput] = useState(500000);
   const [strictEnforcementInput, setStrictEnforcementInput] = useState(true);
-  const [monthlyMessageLimitInput, setMonthlyMessageLimitInput] = useState(0);
-  const [extraMessageLimitInput, setExtraMessageLimitInput] = useState(0);
   const [allowedChannelsInput, setAllowedChannelsInput] = useState(0);
-  
-  // Agent limits
-  const [agentMonthlyLimitInput, setAgentMonthlyLimitInput] = useState(30);
-  const [agentExtraQueriesInput, setAgentExtraQueriesInput] = useState(0);
-  const [agentQueriesUsed, setAgentQueriesUsed] = useState(0);
-  
-  // Vision limits
-  const [allowVisionInput, setAllowVisionInput] = useState(false);
-  const [visionMonthlyLimitInput, setVisionMonthlyLimitInput] = useState(30);
-  const [visionExtraQueriesInput, setVisionExtraQueriesInput] = useState(0);
-  const [visionQueriesUsed, setVisionQueriesUsed] = useState(0);
+
+  // Credits system state
+  const [monthlyCreditsLimitInput, setMonthlyCreditsLimitInput] = useState(0);
+  const [extraCreditsBalanceInput, setExtraCreditsBalanceInput] = useState(0);
+  const [dailyCreditSpendCapInput, setDailyCreditSpendCapInput] = useState(0);
+
+  // Missing user settings states
+  const [allowCommentAnalysisInput, setAllowCommentAnalysisInput] = useState(true);
+  const [sentimentAnalysisScopeInput, setSentimentAnalysisScopeInput] = useState<'global' | 'specific_posts'>('global');
+  const [sentimentWatchedPostIdsInput, setSentimentWatchedPostIdsInput] = useState('');
+  const [brandVoiceProfileInput, setBrandVoiceProfileInput] = useState('');
+  const [imageModelInput, setImageModelInput] = useState('flux');
+  const [allowChatInput, setAllowChatInput] = useState(true);
+  const [allowImageGenInput, setAllowImageGenInput] = useState(true);
+  const [allowEmbeddingsInput, setAllowEmbeddingsInput] = useState(true);
+  const [allowAgentInput, setAllowAgentInput] = useState(true);
+  const [allowSummarizationInput, setAllowSummarizationInput] = useState(true);
+  const [allowVisionInput, setAllowVisionInput] = useState(true);
+
+  // Database mirror for selective input synchronization
+  const [dbValues, setDbValues] = useState<any>(null);
+
   
   const [savingQuota, setSavingQuota] = useState(false);
 
@@ -190,10 +202,10 @@ export default function UserWorkspacePage() {
 
   // Gifting state
   const [giftModalOpen, setGiftModalOpen] = useState(false);
-  const [giftType, setGiftType] = useState<'agent_queries' | 'messages' | 'vision_queries'>('agent_queries');
-  const [giftAmount, setGiftAmount] = useState<number>(50);
+
+  const [giftAmount, setGiftAmount] = useState<number>(100);
   const [giftCurrency, setGiftCurrency] = useState<'USD' | 'BTT'>('USD');
-  const [giftPrice, setGiftPrice] = useState<string>('0.50');
+  const [giftPrice, setGiftPrice] = useState<string>('5.00');
   const [giftNotes, setGiftNotes] = useState<string>('');
   const [giftSubmitting, setGiftSubmitting] = useState(false);
 
@@ -203,32 +215,14 @@ export default function UserWorkspacePage() {
       return;
     }
     let calculated = 0;
-    if (giftType === 'agent_queries') {
-      if (giftCurrency === 'USD') {
-        calculated = giftAmount * 1.0;
-        setGiftPrice(calculated.toFixed(2));
-      } else {
-        calculated = giftAmount * 130;
-        setGiftPrice(Math.round(calculated).toString());
-      }
-    } else if (giftType === 'vision_queries') {
-      if (giftCurrency === 'USD') {
-        calculated = giftAmount * 0.10;
-        setGiftPrice(calculated.toFixed(2));
-      } else {
-        calculated = giftAmount * 13;
-        setGiftPrice(Math.round(calculated).toString());
-      }
+    if (giftCurrency === 'USD') {
+      calculated = giftAmount * 0.05;
+      setGiftPrice(calculated.toFixed(2));
     } else {
-      if (giftCurrency === 'USD') {
-        calculated = giftAmount <= 500 ? giftAmount * 0.01 : giftAmount * 0.008;
-        setGiftPrice(calculated.toFixed(2));
-      } else {
-        calculated = giftAmount <= 500 ? giftAmount * 1.3 : giftAmount * 1.04;
-        setGiftPrice(Math.round(calculated).toString());
-      }
+      calculated = giftAmount * 6.5;
+      setGiftPrice(Math.round(calculated).toString());
     }
-  }, [giftAmount, giftCurrency, giftType]);
+  }, [giftAmount, giftCurrency]);
 
   async function handleGiftSubmit(e: FormEvent) {
     e.preventDefault();
@@ -238,14 +232,7 @@ export default function UserWorkspacePage() {
       const finalPrice = parseFloat(giftPrice) || 0;
 
       // Determine the message_addon string based on gift type
-      let addonString = '';
-      if (giftType === 'agent_queries') {
-        addonString = `Gift: +${giftAmount} AI Queries`;
-      } else if (giftType === 'vision_queries') {
-        addonString = `Gift: +${giftAmount} Vision Queries`;
-      } else {
-        addonString = `Gift: +${giftAmount} Messages`;
-      }
+      const addonString = `Gift: +${giftAmount} Credits`;
 
       // Insert into purchases — the DB trigger (trg_purchase_approval) handles
       // updating all user limits automatically. No direct users update needed here.
@@ -268,9 +255,7 @@ export default function UserWorkspacePage() {
       await supabase.from('admin_audit_log').insert({
         admin_id: currentUser?.id,
         target_id: userData.id,
-        action: giftType === 'agent_queries' ? 'gift_agent_queries'
-              : giftType === 'vision_queries' ? 'gift_vision_queries'
-              : 'gift_messages',
+        action: 'gift_credits',
         details: { amount: giftAmount, price: finalPrice, currency: giftCurrency, notes: giftNotes }
       });
 
@@ -288,6 +273,162 @@ export default function UserWorkspacePage() {
   useEffect(() => {
     if (userId) loadUserData();
   }, [userId]);
+
+  // Real-time listener for the inspected user's profile and credits updates
+  useEffect(() => {
+    if (!userId) return;
+
+    const channel = supabase
+      .channel(`admin-inspect-user-realtime-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+          filter: `id=eq.${userId}`,
+        },
+        (payload) => {
+          if (payload.new && Object.keys(payload.new).length > 0) {
+            const newData = payload.new as Record<string, any>;
+            setUserData((prev) => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                ...newData,
+              };
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [userId]);
+
+  // Keep inputs in sync with userData updates in real-time,
+  // but selectively update only fields that the admin has not manually edited.
+  useEffect(() => {
+    if (!userData) return;
+    
+    // If dbValues is not initialized yet, initialize it and inputs
+    if (!dbValues) {
+      setDbValues(userData);
+      setMonthlyLimitInput(userData.monthly_token_limit ?? 500000);
+      setStrictEnforcementInput(userData.strict_token_enforcement ?? true);
+      setAllowedChannelsInput(userData.allowed_channels ?? 0);
+      setMonthlyCreditsLimitInput(userData.monthly_credits_limit ?? 0);
+      setExtraCreditsBalanceInput(userData.extra_credits_balance ?? 0);
+      setDailyCreditSpendCapInput(userData.daily_credit_spend_cap ?? 0);
+      setAllowCommentAnalysisInput(userData.allow_comment_analysis ?? true);
+      setSentimentAnalysisScopeInput(userData.sentiment_analysis_scope ?? 'global');
+      setSentimentWatchedPostIdsInput(Array.isArray(userData.sentiment_watched_post_ids) ? userData.sentiment_watched_post_ids.join(', ') : '');
+      setBrandVoiceProfileInput(userData.brand_voice_profile ?? '');
+      setImageModelInput(userData.image_model ?? 'flux');
+      setAllowChatInput(userData.allow_chat ?? true);
+      setAllowImageGenInput(userData.allow_image_gen ?? true);
+      setAllowEmbeddingsInput(userData.allow_embeddings ?? true);
+      setAllowAgentInput(userData.allow_agent ?? true);
+      setAllowSummarizationInput(userData.allow_summarization ?? true);
+      setAllowVisionInput(userData.allow_vision ?? true);
+      return;
+    }
+
+    // Otherwise, check each field for background DB changes and sync if untouched
+    if (userData.monthly_token_limit !== dbValues.monthly_token_limit) {
+      if (monthlyLimitInput === (dbValues.monthly_token_limit ?? 500000)) {
+        setMonthlyLimitInput(userData.monthly_token_limit ?? 500000);
+      }
+    }
+    if (userData.strict_token_enforcement !== dbValues.strict_token_enforcement) {
+      if (strictEnforcementInput === (dbValues.strict_token_enforcement ?? true)) {
+        setStrictEnforcementInput(userData.strict_token_enforcement ?? true);
+      }
+    }
+    if (userData.allowed_channels !== dbValues.allowed_channels) {
+      if (allowedChannelsInput === (dbValues.allowed_channels ?? 0)) {
+        setAllowedChannelsInput(userData.allowed_channels ?? 0);
+      }
+    }
+    if (userData.monthly_credits_limit !== dbValues.monthly_credits_limit) {
+      if (monthlyCreditsLimitInput === (dbValues.monthly_credits_limit ?? 0)) {
+        setMonthlyCreditsLimitInput(userData.monthly_credits_limit ?? 0);
+      }
+    }
+    if (userData.extra_credits_balance !== dbValues.extra_credits_balance) {
+      if (extraCreditsBalanceInput === (dbValues.extra_credits_balance ?? 0)) {
+        setExtraCreditsBalanceInput(userData.extra_credits_balance ?? 0);
+      }
+    }
+    if (userData.daily_credit_spend_cap !== dbValues.daily_credit_spend_cap) {
+      if (dailyCreditSpendCapInput === (dbValues.daily_credit_spend_cap ?? 0)) {
+        setDailyCreditSpendCapInput(userData.daily_credit_spend_cap ?? 0);
+      }
+    }
+    if (userData.allow_comment_analysis !== dbValues.allow_comment_analysis) {
+      if (allowCommentAnalysisInput === (dbValues.allow_comment_analysis ?? true)) {
+        setAllowCommentAnalysisInput(userData.allow_comment_analysis ?? true);
+      }
+    }
+    if (userData.sentiment_analysis_scope !== dbValues.sentiment_analysis_scope) {
+      if (sentimentAnalysisScopeInput === (dbValues.sentiment_analysis_scope ?? 'global')) {
+        setSentimentAnalysisScopeInput(userData.sentiment_analysis_scope ?? 'global');
+      }
+    }
+    
+    const oldWatchedPostIdsStr = Array.isArray(dbValues.sentiment_watched_post_ids) ? dbValues.sentiment_watched_post_ids.join(', ') : '';
+    if (JSON.stringify(userData.sentiment_watched_post_ids) !== JSON.stringify(dbValues.sentiment_watched_post_ids)) {
+      if (sentimentWatchedPostIdsInput === oldWatchedPostIdsStr) {
+        setSentimentWatchedPostIdsInput(Array.isArray(userData.sentiment_watched_post_ids) ? userData.sentiment_watched_post_ids.join(', ') : '');
+      }
+    }
+
+    if (userData.brand_voice_profile !== dbValues.brand_voice_profile) {
+      if (brandVoiceProfileInput === (dbValues.brand_voice_profile ?? '')) {
+        setBrandVoiceProfileInput(userData.brand_voice_profile ?? '');
+      }
+    }
+    if (userData.image_model !== dbValues.image_model) {
+      if (imageModelInput === (dbValues.image_model ?? 'flux')) {
+        setImageModelInput(userData.image_model ?? 'flux');
+      }
+    }
+    if (userData.allow_chat !== dbValues.allow_chat) {
+      if (allowChatInput === (dbValues.allow_chat ?? true)) {
+        setAllowChatInput(userData.allow_chat ?? true);
+      }
+    }
+    if (userData.allow_image_gen !== dbValues.allow_image_gen) {
+      if (allowImageGenInput === (dbValues.allow_image_gen ?? true)) {
+        setAllowImageGenInput(userData.allow_image_gen ?? true);
+      }
+    }
+    if (userData.allow_embeddings !== dbValues.allow_embeddings) {
+      if (allowEmbeddingsInput === (dbValues.allow_embeddings ?? true)) {
+        setAllowEmbeddingsInput(userData.allow_embeddings ?? true);
+      }
+    }
+    if (userData.allow_agent !== dbValues.allow_agent) {
+      if (allowAgentInput === (dbValues.allow_agent ?? true)) {
+        setAllowAgentInput(userData.allow_agent ?? true);
+      }
+    }
+    if (userData.allow_summarization !== dbValues.allow_summarization) {
+      if (allowSummarizationInput === (dbValues.allow_summarization ?? true)) {
+        setAllowSummarizationInput(userData.allow_summarization ?? true);
+      }
+    }
+    if (userData.allow_vision !== dbValues.allow_vision) {
+      if (allowVisionInput === (dbValues.allow_vision ?? true)) {
+        setAllowVisionInput(userData.allow_vision ?? true);
+      }
+    }
+
+    // Keep the sync tracker in sync
+    setDbValues(userData);
+  }, [userData]);
 
   async function loadUserData() {
     setLoading(true);
@@ -347,18 +488,28 @@ export default function UserWorkspacePage() {
       // Initialize quota inputs
       setMonthlyLimitInput(user.monthly_token_limit ?? 500000);
       setStrictEnforcementInput(user.strict_token_enforcement ?? true);
-      setMonthlyMessageLimitInput(user.monthly_message_limit ?? 0);
-      setExtraMessageLimitInput(user.extra_message_limit ?? 0);
       setAllowedChannelsInput(user.allowed_channels ?? 0);
       
-      setAgentMonthlyLimitInput(user.agent_monthly_limit ?? 30);
-      setAgentExtraQueriesInput(user.agent_extra_queries ?? 0);
-      setAgentQueriesUsed(user.agent_queries_used ?? 0);
+      setMonthlyCreditsLimitInput(user.monthly_credits_limit ?? 0);
+      setExtraCreditsBalanceInput(user.extra_credits_balance ?? 0);
+      setDailyCreditSpendCapInput(user.daily_credit_spend_cap ?? 0);
 
-      setAllowVisionInput(user.allow_vision ?? false);
-      setVisionMonthlyLimitInput(user.vision_monthly_limit ?? 30);
-      setVisionExtraQueriesInput(user.vision_extra_queries ?? 0);
-      setVisionQueriesUsed(user.vision_queries_used ?? 0);
+      // Initialize missing settings
+      setAllowCommentAnalysisInput(user.allow_comment_analysis ?? true);
+      setSentimentAnalysisScopeInput(user.sentiment_analysis_scope ?? 'global');
+      setSentimentWatchedPostIdsInput(Array.isArray(user.sentiment_watched_post_ids) ? user.sentiment_watched_post_ids.join(', ') : '');
+      setBrandVoiceProfileInput(user.brand_voice_profile ?? '');
+      setImageModelInput(user.image_model ?? 'flux');
+      setAllowChatInput(user.allow_chat ?? true);
+      setAllowImageGenInput(user.allow_image_gen ?? true);
+      setAllowEmbeddingsInput(user.allow_embeddings ?? true);
+      setAllowAgentInput(user.allow_agent ?? true);
+      setAllowSummarizationInput(user.allow_summarization ?? true);
+      setAllowVisionInput(user.allow_vision ?? true);
+
+      // Initialize dbValues to avoid initial triggers overwriting inputs
+      setDbValues(user);
+
     } catch (err) {
       console.error('Failed to load user:', err);
       toast.error('Failed to load user data');
@@ -373,20 +524,63 @@ export default function UserWorkspacePage() {
     if (!userData) return;
     setSavingQuota(true);
     try {
-      const { error } = await supabase.from('users').update({
+      // 1. Calculate extra credits balance difference to log adjustment
+      const oldExtraBalance = userData.extra_credits_balance ?? 0;
+      const diffExtraBalance = extraCreditsBalanceInput - oldExtraBalance;
+
+      // 2. Parse watched post IDs array
+      const watchedPostIds = sentimentWatchedPostIdsInput
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
+
+      // 3. Save directly to user record
+      // Note: we do NOT save extra_credits_balance here if diffExtraBalance is non-zero,
+      // because the approved purchase record trigger will automatically handle it!
+      // But if diffExtraBalance is zero, we keep it as is.
+      const updatePayload: any = {
         monthly_token_limit: monthlyLimitInput,
         strict_token_enforcement: strictEnforcementInput,
-        monthly_message_limit: monthlyMessageLimitInput,
-        extra_message_limit: extraMessageLimitInput,
         allowed_channels: allowedChannelsInput,
-        agent_monthly_limit: agentMonthlyLimitInput,
-        agent_extra_queries: agentExtraQueriesInput,
+        monthly_credits_limit: monthlyCreditsLimitInput,
+        daily_credit_spend_cap: dailyCreditSpendCapInput,
+        allow_comment_analysis: allowCommentAnalysisInput,
+        sentiment_analysis_scope: sentimentAnalysisScopeInput,
+        sentiment_watched_post_ids: watchedPostIds,
+        brand_voice_profile: brandVoiceProfileInput,
+        image_model: imageModelInput,
+        allow_chat: allowChatInput,
+        allow_image_gen: allowImageGenInput,
+        allow_embeddings: allowEmbeddingsInput,
+        allow_agent: allowAgentInput,
+        allow_summarization: allowSummarizationInput,
         allow_vision: allowVisionInput,
-        vision_monthly_limit: visionMonthlyLimitInput,
-        vision_extra_queries: visionExtraQueriesInput,
-      }).eq('id', userData.id);
+      };
 
+      if (diffExtraBalance === 0) {
+        updatePayload.extra_credits_balance = extraCreditsBalanceInput;
+      }
+
+      const { error } = await supabase.from('users').update(updatePayload).eq('id', userData.id);
       if (error) throw error;
+
+      // 4. Log credit adjustment transaction if diff is non-zero
+      if (diffExtraBalance !== 0) {
+        const addonString = `Admin Adjustment: ${diffExtraBalance > 0 ? '+' : ''}${diffExtraBalance} Credits`;
+        const { error: purchaseErr } = await supabase
+          .from('purchases')
+          .insert({
+            user_id: userData.id,
+            channels_count: 0,
+            message_addon: addonString,
+            currency: 'USD',
+            total_amount: 0,
+            payment_method: 'admin_adjustment',
+            status: 'approved',
+            admin_notes: 'Manual balance adjustment by administrator'
+          });
+        if (purchaseErr) throw purchaseErr;
+      }
 
       // Log audit
       await supabase.from('admin_audit_log').insert({
@@ -396,30 +590,35 @@ export default function UserWorkspacePage() {
         details: { 
           monthly_token_limit: monthlyLimitInput, 
           strict_token_enforcement: strictEnforcementInput, 
-          monthly_message_limit: monthlyMessageLimitInput, 
-          extra_message_limit: extraMessageLimitInput,
           allowed_channels: allowedChannelsInput,
-          agent_monthly_limit: agentMonthlyLimitInput,
-          agent_extra_queries: agentExtraQueriesInput,
+          monthly_credits_limit: monthlyCreditsLimitInput,
+          extra_credits_balance: extraCreditsBalanceInput,
+          daily_credit_spend_cap: dailyCreditSpendCapInput,
+          allow_comment_analysis: allowCommentAnalysisInput,
+          sentiment_analysis_scope: sentimentAnalysisScopeInput,
+          sentiment_watched_post_ids: watchedPostIds,
+          brand_voice_profile: brandVoiceProfileInput,
+          image_model: imageModelInput,
+          allow_chat: allowChatInput,
+          allow_image_gen: allowImageGenInput,
+          allow_embeddings: allowEmbeddingsInput,
+          allow_agent: allowAgentInput,
+          allow_summarization: allowSummarizationInput,
           allow_vision: allowVisionInput,
-          vision_monthly_limit: visionMonthlyLimitInput,
-          vision_extra_queries: visionExtraQueriesInput,
+          credit_adjustment: diffExtraBalance,
         },
       });
 
-      setUserData(prev => prev ? { ...prev, 
-        monthly_token_limit: monthlyLimitInput, 
-        strict_token_enforcement: strictEnforcementInput, 
-        monthly_message_limit: monthlyMessageLimitInput, 
-        extra_message_limit: extraMessageLimitInput,
-        allowed_channels: allowedChannelsInput,
-        agent_monthly_limit: agentMonthlyLimitInput,
-        agent_extra_queries: agentExtraQueriesInput,
-        allow_vision: allowVisionInput,
-        vision_monthly_limit: visionMonthlyLimitInput,
-        vision_extra_queries: visionExtraQueriesInput,
-      } : null);
-      toast.success('Quota settings updated');
+      const updatedUser = {
+        ...(userData || {}),
+        ...updatePayload,
+        extra_credits_balance: diffExtraBalance === 0 ? extraCreditsBalanceInput : ((userData as any).extra_credits_balance ?? 0) + diffExtraBalance,
+      } as SuperAdminUser;
+
+      setUserData(updatedUser);
+      setDbValues(updatedUser);
+      
+      toast.success('Quota and settings updated');
     } catch (err: any) {
       toast.error('Error: ' + err.message);
     } finally {
@@ -484,6 +683,29 @@ export default function UserWorkspacePage() {
     });
   }
 
+  // ── Pause ────────────────────────────────────────────────────────────
+  async function togglePause() {
+    if (!userData) return;
+    const nextStatus = !userData.is_paused;
+
+    setConfirmDialog({
+      open: true, variant: nextStatus ? 'warning' : 'info',
+      title: nextStatus ? 'Pause User Activity' : 'Resume User Activity',
+      desc: nextStatus
+        ? `Pause all activity for ${userData.display_name || userData.email}? Chatbot responses and comments automation will stop.`
+        : `Resume all activity for ${userData.display_name || userData.email}?`,
+      onConfirm: async () => {
+        const { error } = await supabase.from('users').update({ is_paused: nextStatus }).eq('id', userData.id);
+        if (error) { toast.error('Error: ' + error.message); return; }
+
+        await supabase.from('admin_audit_log').insert({ admin_id: currentUser?.id, target_id: userData.id, action: nextStatus ? 'pause' : 'unpause', details: {} });
+        setUserData(prev => prev ? { ...prev, is_paused: nextStatus } : null);
+        toast.success(nextStatus ? 'User activity paused' : 'User activity resumed');
+        setConfirmDialog(d => ({ ...d, open: false }));
+      },
+    });
+  }
+
   // ── Impersonation ─────────────────────────────────────────────────────────
   async function handleImpersonate() {
     if (!userData) return;
@@ -532,6 +754,8 @@ export default function UserWorkspacePage() {
     { key: 'assigned_summarization_provider_id', label: 'Summarization', desc: 'Customer profile summaries' },
     { key: 'assigned_agent_provider_id', label: 'Agent', desc: 'Super admin AI agent model' },
     { key: 'assigned_vision_provider_id', label: 'Vision', desc: 'Processes image and multimodal queries' },
+    { key: 'assigned_comment_analysis_provider_id', label: 'Comment Analysis', desc: 'Processes auto-moderation and comment analysis' },
+    { key: 'assigned_image_provider_id', label: 'Image Generation', desc: 'Processes text-to-image requests' },
   ] as const;
 
   async function assignProvider(field: string, providerId: string) {
@@ -773,6 +997,9 @@ export default function UserWorkspacePage() {
               )}>
                 {userData.plan.charAt(0).toUpperCase() + userData.plan.slice(1)}
               </span>
+              {userData.is_paused && <span style={styles.badge('#9ca3af', 'rgba(156,163,175,0.15)')}>
+                <Pause size={10} /> Paused
+              </span>}
               {userData.is_suspended && <span style={styles.badge('#ef4444', 'rgba(239,68,68,0.15)')}>
                 <Ban size={10} /> Suspended
               </span>}
@@ -786,6 +1013,10 @@ export default function UserWorkspacePage() {
               <Eye size={14} /> Impersonate
             </button>
           )}
+          <button className="btn btn-outline" onClick={togglePause} style={{ fontSize: '13px', padding: '8px 14px', borderColor: userData.is_paused ? 'rgba(34,197,94,0.3)' : 'rgba(156,163,175,0.3)', color: userData.is_paused ? '#22c55e' : '#9ca3af' }}>
+            {userData.is_paused ? <Play size={14} /> : <Pause size={14} />}
+            {userData.is_paused ? 'Resume' : 'Pause'}
+          </button>
           <button className="btn btn-outline" onClick={toggleSuspension} style={{ fontSize: '13px', padding: '8px 14px', borderColor: userData.is_suspended ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)', color: userData.is_suspended ? '#22c55e' : '#ef4444' }}>
             {userData.is_suspended ? <UserCheck size={14} /> : <Ban size={14} />}
             {userData.is_suspended ? 'Unsuspend' : 'Suspend'}
@@ -800,6 +1031,11 @@ export default function UserWorkspacePage() {
         <div style={styles.stat}><span style={styles.statVal}>{userData.fieldCount}</span><span style={styles.statLabel}>KB Facts</span></div>
         <div style={styles.stat}><span style={styles.statVal}>{userData.sessionCount}</span><span style={styles.statLabel}>Sessions</span></div>
         <div style={styles.stat}><span style={styles.statVal}>{userData.messageCount.toLocaleString()}</span><span style={styles.statLabel}>Messages</span></div>
+        <div style={styles.stat}><span style={styles.statVal}>{(() => {
+          const total = (userData.monthly_credits_limit ?? 0) + (userData.extra_credits_balance ?? 0);
+          const remaining = Math.max(0, total - (userData.credits_used_this_month ?? 0));
+          return remaining.toLocaleString();
+        })()}</span><span style={styles.statLabel}>Credits Left</span></div>
         <div style={styles.stat}><span style={styles.statVal}>{inspectData.usage.totalMonthTokens.toLocaleString()}</span><span style={styles.statLabel}>Tokens (MTD)</span></div>
       </div>
 
@@ -849,149 +1085,336 @@ export default function UserWorkspacePage() {
               <input className="form-input" type="number" value={monthlyLimitInput} onChange={e => setMonthlyLimitInput(Number(e.target.value))} />
             </div>
             <div style={styles.formRow}>
-              <label style={styles.formLabel}>Monthly Message Limit (0 = unlimited)</label>
-              <input className="form-input" type="number" value={monthlyMessageLimitInput} onChange={e => setMonthlyMessageLimitInput(Number(e.target.value))} />
-            </div>
-            <div style={styles.formRow}>
-              <label style={styles.formLabel}>Extra Message Limit (Gifted)</label>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <input 
-                  className="form-input" 
-                  type="number" 
-                  value={extraMessageLimitInput} 
-                  onChange={e => setExtraMessageLimitInput(Number(e.target.value))} 
-                  style={{ flex: 1 }}
-                />
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => {
-                    setGiftType('messages');
-                    setGiftAmount(200);
-                    setGiftCurrency('USD');
-                    setGiftNotes('Gifted message quota');
-                    setGiftModalOpen(true);
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '11px',
-                    padding: '4px 10px',
-                    height: '38px',
-                    borderRadius: '6px',
-                    borderColor: 'var(--accent-primary)',
-                    color: 'var(--accent-primary)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <Gift size={12} /> Gift 🎁
-                </button>
-              </div>
-            </div>
-            <div style={styles.formRow}>
               <label style={styles.formLabel}>Allowed Channels (0 = unlimited)</label>
               <input className="form-input" type="number" value={allowedChannelsInput} onChange={e => setAllowedChannelsInput(Number(e.target.value))} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
               <input type="checkbox" id="strictEnf" checked={strictEnforcementInput} onChange={e => setStrictEnforcementInput(e.target.checked)} />
               <label htmlFor="strictEnf" style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Strict token enforcement</label>
             </div>
-            
+
             <div style={{ marginTop: '20px', marginBottom: '12px', borderTop: '1px solid var(--border-primary)', paddingTop: '16px' }}>
-              <div style={{ ...styles.cardTitle, marginBottom: '12px' }}><Cpu size={16} /> Dashboard Agent Limits</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>
-                  Limits how many queries the user can make to their built-in AI agent (per calendar month).
-                  <br/><strong>Current Usage this month:</strong> {agentQueriesUsed}
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => {
-                    setGiftType('agent_queries');
-                    setGiftAmount(50);
-                    setGiftCurrency('USD');
-                    setGiftNotes('Gifted bonus queries');
-                    setGiftModalOpen(true);
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '11px',
-                    padding: '4px 10px',
-                    height: '28px',
-                    lineHeight: '1',
-                    borderRadius: '6px',
-                    borderColor: 'var(--accent-primary)',
-                    color: 'var(--accent-primary)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <Gift size={12} /> Gift Queries 🎁
-                </button>
-              </div>
+              <div style={{ ...styles.cardTitle, marginBottom: '12px' }}><Zap size={16} /> Credit Quotas</div>
               
               <div style={styles.formRow}>
-                <label style={styles.formLabel}>Agent Monthly Limit</label>
-                <input className="form-input" type="number" value={agentMonthlyLimitInput} onChange={e => setAgentMonthlyLimitInput(Number(e.target.value))} />
-              </div>
-              
-              <div style={styles.formRow}>
-                <label style={styles.formLabel}>Extra Queries (Reset at end of month)</label>
-                <input className="form-input" type="number" value={agentExtraQueriesInput} onChange={e => setAgentExtraQueriesInput(Number(e.target.value))} />
-              </div>
-            </div>
-
-            <div style={{ marginTop: '20px', marginBottom: '16px', borderTop: '1px solid var(--border-primary)', paddingTop: '16px' }}>
-              <div style={{ ...styles.cardTitle, marginBottom: '12px' }}><Eye size={16} /> Image Processing (Vision) Limits</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>
-                  Controls if the user can process image attachments. If enabled, limits their monthly/extra vision query usage.
-                  <br/><strong>Current Usage this month:</strong> {visionQueriesUsed}
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => {
-                    setGiftType('vision_queries');
-                    setGiftAmount(50);
-                    setGiftCurrency('USD');
-                    setGiftNotes('Gifted vision queries');
-                    setGiftModalOpen(true);
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '11px',
-                    padding: '4px 10px',
-                    height: '28px',
-                    lineHeight: '1',
-                    borderRadius: '6px',
-                    borderColor: '#10b981',
-                    color: '#10b981',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <Gift size={12} /> Gift Vision Queries 🎁
-                </button>
+                <label style={styles.formLabel}>Monthly Credits Limit</label>
+                <input className="form-input" type="number" value={monthlyCreditsLimitInput} onChange={e => setMonthlyCreditsLimitInput(Number(e.target.value))} />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                <input type="checkbox" id="allowVisionInput" checked={allowVisionInput} onChange={e => setAllowVisionInput(e.target.checked)} />
-                <label htmlFor="allowVisionInput" style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Enable Image Processing (allow_vision)</label>
-              </div>
-              
               <div style={styles.formRow}>
-                <label style={styles.formLabel}>Vision Monthly Limit</label>
-                <input className="form-input" type="number" value={visionMonthlyLimitInput} onChange={e => setVisionMonthlyLimitInput(Number(e.target.value))} />
+                <label style={styles.formLabel}>Extra Credits Balance</label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input 
+                    className="form-input" 
+                    type="number" 
+                    value={extraCreditsBalanceInput} 
+                    onChange={e => setExtraCreditsBalanceInput(Number(e.target.value))} 
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => {
+                      setGiftAmount(100);
+                      setGiftCurrency('USD');
+                      setGiftNotes('Gifted credits');
+                      setGiftModalOpen(true);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '11px',
+                      padding: '4px 10px',
+                      height: '38px',
+                      borderRadius: '6px',
+                      borderColor: 'var(--accent-primary)',
+                      color: 'var(--accent-primary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Gift size={12} /> Gift Credits 🎁
+                  </button>
+                </div>
               </div>
-              
+
               <div style={styles.formRow}>
-                <label style={styles.formLabel}>Extra Vision Queries (Reset at end of month)</label>
-                <input className="form-input" type="number" value={visionExtraQueriesInput} onChange={e => setVisionExtraQueriesInput(Number(e.target.value))} />
+                <label style={styles.formLabel}>Daily Credit Spend Cap (0 = unlimited)</label>
+                <input className="form-input" type="number" value={dailyCreditSpendCapInput} onChange={e => setDailyCreditSpendCapInput(Number(e.target.value))} />
+              </div>
+
+              <div style={{ marginTop: '20px', marginBottom: '12px', borderTop: '1px solid var(--border-primary)', paddingTop: '16px' }}>
+                <div style={{ ...styles.cardTitle, marginBottom: '12px' }}><Settings size={14} /> Feature Access & Permissions</div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '12px', marginBottom: '16px' }}>
+                  Toggle which AI services this user is allowed to access. Default is enabled.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                  {/* Chatbot Responses */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowChatInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowChatInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <MessageSquare size={16} style={{ color: allowChatInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Chat Responses
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowChatInput} 
+                        onChange={e => setAllowChatInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      DM & chat automated replies.
+                    </span>
+                  </label>
+
+                  {/* Comments Automation */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowCommentAnalysisInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowCommentAnalysisInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <Zap size={16} style={{ color: allowCommentAnalysisInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Comments Reply
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowCommentAnalysisInput} 
+                        onChange={e => setAllowCommentAnalysisInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Post comment scanning & responses.
+                    </span>
+                  </label>
+
+                  {/* Vision Processing */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowVisionInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowVisionInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <Eye size={16} style={{ color: allowVisionInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Vision Queries
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowVisionInput} 
+                        onChange={e => setAllowVisionInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      AI understanding of user photos.
+                    </span>
+                  </label>
+
+                  {/* Image Generation */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowImageGenInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowImageGenInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <Image size={16} style={{ color: allowImageGenInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Image Generation
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowImageGenInput} 
+                        onChange={e => setAllowImageGenInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      FLUX & creative asset generation.
+                    </span>
+                  </label>
+
+                  {/* Embeddings / RAG */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowEmbeddingsInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowEmbeddingsInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <BookOpen size={16} style={{ color: allowEmbeddingsInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Embeddings & RAG
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowEmbeddingsInput} 
+                        onChange={e => setAllowEmbeddingsInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Knowledge base document indexing.
+                    </span>
+                  </label>
+
+                  {/* Super Admin Agent */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowAgentInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowAgentInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <Cpu size={16} style={{ color: allowAgentInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Autopilot Agent
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowAgentInput} 
+                        onChange={e => setAllowAgentInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Autonomous agent task runner.
+                    </span>
+                  </label>
+
+                  {/* Summarization */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowSummarizationInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowSummarizationInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <FileText size={16} style={{ color: allowSummarizationInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Summarization
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowSummarizationInput} 
+                        onChange={e => setAllowSummarizationInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Session & profile auto summaries.
+                    </span>
+                  </label>
+                </div>
+
+                {allowCommentAnalysisInput && (
+                  <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-primary)' }}>
+                    <div style={styles.formRow}>
+                      <label style={styles.formLabel}>Sentiment Analysis Scope</label>
+                      <select 
+                        className="form-input" 
+                        value={sentimentAnalysisScopeInput} 
+                        onChange={e => setSentimentAnalysisScopeInput(e.target.value as 'global' | 'specific_posts')}
+                      >
+                        <option value="global">Scan All Posts (Global)</option>
+                        <option value="specific_posts">Scan Only Watched Posts</option>
+                      </select>
+                    </div>
+
+                    {sentimentAnalysisScopeInput === 'specific_posts' && (
+                      <div style={{ ...styles.formRow, marginBottom: 0, marginTop: '12px' }}>
+                        <label style={styles.formLabel}>Watched Facebook/Instagram Post IDs (comma-separated)</label>
+                        <input 
+                          className="form-input" 
+                          type="text" 
+                          placeholder="e.g. 12345678, 87654321" 
+                          value={sentimentWatchedPostIdsInput} 
+                          onChange={e => setSentimentWatchedPostIdsInput(e.target.value)} 
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={styles.formRow}>
+                  <label style={styles.formLabel}>Image Generation Model Override</label>
+                  <select 
+                    className="form-input" 
+                    value={imageModelInput} 
+                    onChange={e => setImageModelInput(e.target.value)}
+                  >
+                    <option value="flux">FLUX (Recommended)</option>
+                    <option value="dall-e-3">DALL-E 3</option>
+                    <option value="stable-diffusion-xl">Stable Diffusion XL</option>
+                    <option value="recraft">Recraft (Vector/Creative)</option>
+                  </select>
+                </div>
+
+                <div style={styles.formRow}>
+                  <label style={styles.formLabel}>Brand Voice Profile & Language Rules</label>
+                  <textarea 
+                    className="form-input" 
+                    rows={4}
+                    style={{ resize: 'vertical', minHeight: '80px', fontFamily: 'inherit' }}
+                    placeholder="e.g. Friendly and professional. Speak in French when comments are in French. Avoid emojis."
+                    value={brandVoiceProfileInput} 
+                    onChange={e => setBrandVoiceProfileInput(e.target.value)} 
+                  />
+                </div>
               </div>
             </div>
 
@@ -1414,8 +1837,8 @@ export default function UserWorkspacePage() {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                <Gift size={20} style={{ color: giftType === 'agent_queries' ? 'var(--accent-primary, #6366f1)' : giftType === 'vision_queries' ? '#10b981' : '#3b82f6' }} />
-                Gift Extra {giftType === 'agent_queries' ? 'AI Queries' : giftType === 'vision_queries' ? 'Vision Queries' : 'Messages'}
+                <Gift size={20} style={{ color: 'var(--accent-primary, #6366f1)' }} />
+                Gift Extra AI Credits
               </h3>
               <button 
                 type="button"
@@ -1427,84 +1850,14 @@ export default function UserWorkspacePage() {
               </button>
             </div>
 
-            {/* Gift Type Switcher */}
-            <div style={{ display: 'flex', background: 'var(--bg-secondary)', padding: '4px', borderRadius: '8px', marginBottom: '16px', gap: '4px' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setGiftType('agent_queries');
-                  setGiftAmount(50);
-                  setGiftNotes('Gifted bonus queries');
-                }}
-                style={{
-                  flex: 1,
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: giftType === 'agent_queries' ? 'var(--accent-primary, #6366f1)' : 'transparent',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  transition: 'all 0.2s'
-                }}
-              >
-                AI Queries
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setGiftType('vision_queries');
-                  setGiftAmount(50);
-                  setGiftNotes('Gifted vision queries');
-                }}
-                style={{
-                  flex: 1,
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: giftType === 'vision_queries' ? '#10b981' : 'transparent',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  transition: 'all 0.2s'
-                }}
-              >
-                Vision Queries
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setGiftType('messages');
-                  setGiftAmount(200);
-                  setGiftNotes('Gifted message quota');
-                }}
-                style={{
-                  flex: 1,
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: giftType === 'messages' ? '#3b82f6' : 'transparent',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  transition: 'all 0.2s'
-                }}
-              >
-                Monthly Messages
-              </button>
-            </div>
-
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: 1.4 }}>
-              Add extra {giftType === 'agent_queries' ? 'AI Agent queries' : giftType === 'vision_queries' ? 'Vision/Image queries' : 'Monthly messages'} for <strong>{userData.display_name || userData.email}</strong>. The price will be calculated automatically but you can modify it as needed.
+              Add extra AI Credits for <strong>{userData.display_name || userData.email}</strong>. The price will be calculated automatically but you can modify it as needed.
             </p>
 
             <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>
-                  {giftType === 'agent_queries' ? 'Queries Amount' : giftType === 'vision_queries' ? 'Vision Queries Amount' : 'Messages Amount'}
+                  Credits Amount
                 </label>
                 <input 
                   type="number"

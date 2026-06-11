@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { X, ArrowUp, ArrowDown, ShieldAlert, Sparkles, MessageSquare, Binary, FileText, Eye } from 'lucide-react';
+import { X, ArrowUp, ArrowDown, ShieldAlert, Sparkles, MessageSquare, Binary, FileText, Eye, Image } from 'lucide-react';
 
 interface Provider {
   id: string;
@@ -16,11 +16,13 @@ interface Provider {
   is_active_summarization: boolean;
   is_active_agent: boolean;
   is_active_vision?: boolean;
+  is_active_image: boolean;
   fallback_chat_order?: number | null;
   fallback_agent_order?: number | null;
   fallback_summarize_order?: number | null;
   fallback_vision_order?: number | null;
   fallback_embedding_order?: number | null;
+  fallback_image_order?: number | null;
   max_tokens: number;
   temperature: number;
   context_window: number;
@@ -32,13 +34,13 @@ interface FailoverMatrixProps {
 }
 
 interface RoleConfig {
-  id: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision';
+  id: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision' | 'image';
   title: string;
   description: string;
   icon: any;
   color: string;
-  activeField: 'is_active_chat' | 'is_active_agent' | 'is_active_summarization' | 'is_active_embedding' | 'is_active_vision';
-  fallbackOrderField: 'fallback_chat_order' | 'fallback_agent_order' | 'fallback_summarize_order' | 'fallback_embedding_order' | 'fallback_vision_order';
+  activeField: 'is_active_chat' | 'is_active_agent' | 'is_active_summarization' | 'is_active_embedding' | 'is_active_vision' | 'is_active_image';
+  fallbackOrderField: 'fallback_chat_order' | 'fallback_agent_order' | 'fallback_summarize_order' | 'fallback_embedding_order' | 'fallback_vision_order' | 'fallback_image_order';
 }
 
 const ROLES: RoleConfig[] = [
@@ -86,6 +88,15 @@ const ROLES: RoleConfig[] = [
     color: '#06b6d4',
     activeField: 'is_active_vision',
     fallbackOrderField: 'fallback_vision_order',
+  },
+  {
+    id: 'image',
+    title: 'Image Generation',
+    description: 'Handles text-to-image generation tasks (e.g., Flux, Stable Diffusion, DALL-E) for scheduled posts and campaigns.',
+    icon: Image,
+    color: '#a855f7',
+    activeField: 'is_active_image',
+    fallbackOrderField: 'fallback_image_order',
   },
 ];
 

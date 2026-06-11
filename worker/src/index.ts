@@ -51,10 +51,11 @@ app.use('*', cors({
 
 app.use('/api/*', async (c, next) => {
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || c.env.IS_LOCAL_DEV === 'true';
   console.log(`[Bypass Debug] hostname=${url.hostname}, x-bypass=${c.req.header('X-Bypass-Auth')}`);
   if (isLocal && c.req.header('X-Bypass-Auth') === 'true') {
-    c.set('authUser', { id: 'e71afde7-ec06-4c0d-9982-3e665e294817', email: 'test@example.com' });
+    const bypassUserId = c.req.header('X-Bypass-User-Id') || 'e71afde7-ec06-4c0d-9982-3e665e294817';
+    c.set('authUser', { id: bypassUserId, email: 'test@example.com' });
     return await next();
   }
   return await requireAuth(c, next);
@@ -62,9 +63,10 @@ app.use('/api/*', async (c, next) => {
 
 app.use('/test-chat', async (c, next) => {
   const url = new URL(c.req.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1' || c.env.IS_LOCAL_DEV === 'true';
   if (isLocal && c.req.header('X-Bypass-Auth') === 'true') {
-    c.set('authUser', { id: 'e71afde7-ec06-4c0d-9982-3e665e294817', email: 'test@example.com' });
+    const bypassUserId = c.req.header('X-Bypass-User-Id') || 'e71afde7-ec06-4c0d-9982-3e665e294817';
+    c.set('authUser', { id: bypassUserId, email: 'test@example.com' });
     return await next();
   }
   return await requireAuth(c, next);
@@ -238,31 +240,43 @@ export default {
         .lt('last_message_at', twoHoursAgo)
         .gt('last_message_at', fourHoursAgo);
 
-      if (!sessions || sessions.length === 0) return;
+      // NOTE: Do NOT 'return' here — that would skip steps 3-5 below!
+      if (sessions && sessions.length > 0) {
+        // Limit to at most 3 sessions per cron run to avoid hitting Cloudflare's 50 subrequest limit
+        const sessionsToSweep = sessions.slice(0, 3);
 
-      // Limit to at most 5 sessions per cron run to prevent hitting Cloudflare's subrequest limit of 50
-      const sessionsToSweep = sessions.slice(0, 5);
+        for (const session of sessionsToSweep) {
+          // get pageConnection
+          const pageConnection = await getPageConnectionFallback(env.DB, supabase, session.page_id);
+          if (!pageConnection || !pageConnection.enable_customer_profiling) continue;
 
-      for (const session of sessionsToSweep) {
-        // get pageConnection
-        const pageConnection = await getPageConnectionFallback(env.DB, supabase, session.page_id);
-        if (!pageConnection || !pageConnection.enable_customer_profiling) continue;
+          // check message count
+          const { count } = await supabase
+            .from('chat_messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('session_id', session.id);
 
-        // check message count
-        const { count } = await supabase
-          .from('chat_messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('session_id', session.id);
+          // If perfectly summarized or 0, skip
+          if (!count || count % 10 === 0) continue; 
 
-        // If perfectly summarized or 0, skip
-        if (!count || count % 10 === 0) continue; 
-
-        console.log(`[Cron] Summarizing leftover messages for session ${session.id}`);
-        // Summarize leftover
-        await triggerSlidingWindowSummarization(supabase, session.id, pageConnection, session.sender_id, true);
+          console.log(`[Cron] Summarizing leftover messages for session ${session.id}`);
+          // Summarize leftover
+          await triggerSlidingWindowSummarization(supabase, session.id, pageConnection, session.sender_id, true);
+        }
       }
     } catch (cronErr: any) {
       console.warn(`[Cron] Summarization sweep skipped due to connectivity issue: ${cronErr.message}`);
+    }
+
+    // 2.5. Storage Backup Sync: Upload pending media assets to R2/Drive
+    try {
+      const { syncPendingBackups } = await import('./utils/backup');
+      const backupCount = await syncPendingBackups(supabase, env);
+      if (backupCount > 0) {
+        console.log(`[Cron] Backed up ${backupCount} pending media files.`);
+      }
+    } catch (backupErr: any) {
+      console.error('[Cron] Backup synchronization failed:', backupErr.message);
     }
 
     // 3. Post Scheduler: Publish due posts
@@ -279,11 +293,15 @@ export default {
       console.error('[Cron] Token Health check failed:', healthErr.message);
     }
 
-    // 4.5. Storage Sweeper: Clean up orphaned files older than 7 days
-    try {
-      await cleanupOrphanedStorageAssets(supabase);
-    } catch (cleanupErr: any) {
-      console.error('[Cron] Storage cleanup sweeper failed:', cleanupErr.message);
+    // 4.5. Storage Sweeper: Only run every other tick (every ~10 min) to avoid subrequest overload
+    // The storage cleanup alone uses many subrequests; combined with other tasks it hits Cloudflare's limit.
+    const scheduledMinute = new Date(event.scheduledTime).getMinutes();
+    if (scheduledMinute % 10 === 0) {
+      try {
+        await cleanupOrphanedStorageAssets(supabase);
+      } catch (cleanupErr: any) {
+        console.error('[Cron] Storage cleanup sweeper failed:', cleanupErr.message);
+      }
     }
 
     // 5. Weekly content generation scheduling (Auto Mode)

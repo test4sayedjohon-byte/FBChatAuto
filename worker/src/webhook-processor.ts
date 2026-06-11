@@ -16,8 +16,8 @@ import {
   getChatSessionFallback,
   getLatestMessageRoleFallback,
   storeAssistantMessageFallback,
-  updateChatAssetMediaIdFallback,
-  incrementChatAssetTimesSentFallback
+  updateMediaAssetMediaIdFallback,
+  incrementMediaAssetTimesSentFallback
 } from './db';
 import { processCommentChanges } from './comments';
 import { processFeedChanges } from './feed-processor';
@@ -181,6 +181,11 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
       continue;
     }
       
+    if (userRecord?.is_paused) {
+      console.log(`[Webhook] ⏸️ Tenant ${pageConnection.user_id} is paused by administrator. Ignoring messages.`);
+      continue;
+    }
+      
     if (userRecord?.settings?.is_bot_active === false) {
       console.log(`[Webhook] ⏸️ Service is paused for tenant: ${pageConnection.user_id}. Ignoring messages.`);
       continue;
@@ -191,35 +196,7 @@ export async function processWebhookEntries(event: FacebookWebhookEvent | WhatsA
       continue;
     }
 
-    if (userRecord?.monthly_message_limit !== undefined && userRecord?.monthly_message_limit !== -1) {
-      const extraLimit = userRecord.extra_message_limit ?? 0;
-      const allowedLimit = userRecord.monthly_message_limit + extraLimit;
-
-      if (allowedLimit <= 0) {
-         console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} has 0 or less allowed message limit.`);
-         continue;
-      }
-      
-      let pHistory: any[] = [];
-      try {
-        const { data } = await supabase
-          .from('purchases')
-          .select('created_at, status, payment_method')
-          .eq('user_id', pageConnection.user_id);
-        pHistory = data || [];
-      } catch (err: any) {
-        console.warn(`[Failover] Purchases fetch failed for user ${pageConnection.user_id}: ${err.message}. Using default billing anchor.`);
-      }
-
-      const { startDate } = calculateBillingCycle(userRecord.created_at, pHistory);
-
-      const messagesCount = await getMonthlyMessageCountFallback(env.DB, supabase, pageConnection.user_id, startDate.toISOString());
-
-      if (messagesCount >= allowedLimit) {
-        console.log(`[Webhook] 🚫 Tenant ${pageConnection.user_id} exceeded monthly message limit (${messagesCount}/${allowedLimit}).`);
-        continue;
-      }
-    }
+    // Message quota is now checked atomically during chat reply handling via verifyAndDeductCredits
 
     console.log(`[Webhook] Routed to tenant: ${pageConnection.user_id} (Page: ${pageConnection.page_name})`);
 
@@ -578,10 +555,10 @@ async function handleMessagingEvent(
         if (sendAttRes.mediaId && !chatResult.attachment.facebookMediaId) {
           try {
             if (env.DB) {
-              await updateChatAssetMediaIdFallback(env.DB, supabase, chatResult.attachment.id, sendAttRes.mediaId);
+              await updateMediaAssetMediaIdFallback(env.DB, supabase, chatResult.attachment.id, sendAttRes.mediaId);
             } else {
               await supabase
-                .from('chat_assets')
+                .from('media')
                 .update({ facebook_media_id: sendAttRes.mediaId })
                 .eq('id', chatResult.attachment.id);
             }
@@ -594,16 +571,16 @@ async function handleMessagingEvent(
         // Increment times_sent
         try {
           if (env.DB) {
-            await incrementChatAssetTimesSentFallback(env.DB, supabase, chatResult.attachment.id);
+            await incrementMediaAssetTimesSentFallback(env.DB, supabase, chatResult.attachment.id);
           } else {
             const { data: currentAsset } = await supabase
-              .from('chat_assets')
+              .from('media')
               .select('times_sent')
               .eq('id', chatResult.attachment.id)
               .maybeSingle();
             if (currentAsset) {
               await supabase
-                .from('chat_assets')
+                .from('media')
                 .update({ times_sent: (currentAsset.times_sent || 0) + 1 })
                 .eq('id', chatResult.attachment.id);
             }

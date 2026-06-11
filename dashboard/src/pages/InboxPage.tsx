@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { workerPost } from '../lib/workerApi';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft, FileText } from 'lucide-react';
+import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft, FileText, Copy } from 'lucide-react';
 
 function timeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -48,6 +48,12 @@ export default function InboxPage() {
   const { user } = useAuth();
   const location = useLocation();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  
+  const handleCopyId = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(id);
+    toast.success('ID copied to clipboard!');
+  };
   const [activeSessionId, setActiveSessionId] = useState<string | null>((location.state as any)?.sessionId || null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
@@ -326,8 +332,25 @@ export default function InboxPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                     <div style={{ fontWeight: '500', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {session.sender_name || 'Anonymous User'}
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 'normal', marginTop: '2px' }}>
-                        Page: {pages[session.page_id] || 'Unknown'}
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 'normal', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <div>Page: {pages[session.page_id] || 'Unknown'}</div>
+                        <div 
+                          onClick={(e) => handleCopyId(e, session.sender_id)}
+                          style={{ 
+                            fontSize: '10px', 
+                            color: 'var(--accent-primary)', 
+                            cursor: 'pointer', 
+                            display: 'inline-flex', 
+                            alignItems: 'center', 
+                            gap: '4px',
+                            marginTop: '2px',
+                            width: 'fit-content'
+                          }}
+                          title="Click to copy Facebook User ID"
+                        >
+                          <Copy size={10} />
+                          ID: {session.sender_id}
+                        </div>
                       </div>
                     </div>
                     <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', marginLeft: '8px' }}>
@@ -409,8 +432,31 @@ export default function InboxPage() {
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <h3 style={{ margin: 0, fontSize: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeSession.sender_name || 'Anonymous User'}</h3>
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {activeSession.bot_paused ? 'Bot is paused' : 'Bot is active'} • Page: {pages[activeSession.page_id] || 'Unknown'}
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+                    <span>{activeSession.bot_paused ? 'Bot is paused' : 'Bot is active'}</span>
+                    <span>•</span>
+                    <span>Page: {pages[activeSession.page_id] || 'Unknown'}</span>
+                    <span>•</span>
+                    <button 
+                      onClick={(e) => handleCopyId(e as any, activeSession.sender_id)}
+                      style={{ 
+                        background: 'rgba(255,255,255,0.05)', 
+                        border: '1px solid rgba(255,255,255,0.1)', 
+                        borderRadius: '4px', 
+                        color: 'var(--accent-primary)', 
+                        cursor: 'pointer', 
+                        fontSize: '11px', 
+                        display: 'inline-flex', 
+                        alignItems: 'center', 
+                        gap: '4px',
+                        padding: '2px 6px',
+                        transition: 'all 0.2s'
+                      }}
+                      title="Click to copy Facebook User ID"
+                    >
+                      <Copy size={10} />
+                      ID: {activeSession.sender_id}
+                    </button>
                   </div>
                 </div>
               </div>

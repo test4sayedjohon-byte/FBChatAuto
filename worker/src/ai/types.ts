@@ -25,11 +25,13 @@ export interface AIProviderConfig {
   fallbackSummarizeOrder?: number | null;
   fallbackVisionOrder?: number | null;
   fallbackEmbeddingOrder?: number | null;
+  fallbackImageOrder?: number | null;
   is_active_chat?: boolean;
   is_active_embedding?: boolean;
   is_active_summarization?: boolean;
   is_active_agent?: boolean;
   is_active_vision?: boolean;
+  is_active_image?: boolean;
 }
 
 /**

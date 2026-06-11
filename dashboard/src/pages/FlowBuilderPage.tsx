@@ -127,6 +127,16 @@ export default function FlowBuilderPage() {
     }
   }, [flowId]);
 
+  useEffect(() => {
+    const handleReload = () => {
+      if (flowId) {
+        loadFlowData();
+      }
+    };
+    window.addEventListener('agent-data-updated', handleReload);
+    return () => window.removeEventListener('agent-data-updated', handleReload);
+  }, [flowId]);
+
   async function loadFlowData() {
     try {
       setLoading(true);

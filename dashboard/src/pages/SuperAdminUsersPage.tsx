@@ -29,7 +29,7 @@ import type { SuperAdminUser } from './super-admin/types';
 // ── Filter types ─────────────────────────────────────────────────────────
 type PlanFilter = 'all' | 'free' | 'pro' | 'enterprise';
 type RoleFilter = 'all' | 'user' | 'admin' | 'super_admin';
-type StatusFilter = 'all' | 'active' | 'suspended';
+type StatusFilter = 'all' | 'active' | 'suspended' | 'paused';
 type DateFilter = 'all' | '24h' | '7d' | '30d' | 'custom';
 
 export default function SuperAdminUsersPage() {
@@ -164,6 +164,29 @@ export default function SuperAdminUsersPage() {
     toast.success(nextStatus ? 'User suspended' : 'Suspension lifted');
   }
 
+  // ── Pause handler ───────────────────────────────────────────────────
+  async function handleTogglePause(userId: string, currentStatus: boolean) {
+    const nextStatus = !currentStatus;
+
+    const message = nextStatus
+      ? "Pause all activity for this user? Chatbot responses and comments automation will stop."
+      : "Resume all activity for this user?";
+    if (!confirm(message)) return;
+
+    const { error } = await supabase.from('users').update({ is_paused: nextStatus }).eq('id', userId);
+    if (error) { toast.error('Error: ' + error.message); return; }
+
+    await supabase.from('admin_audit_log').insert({
+      admin_id: currentUser?.id,
+      target_id: userId,
+      action: nextStatus ? 'pause' : 'unpause',
+      details: {},
+    });
+
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, is_paused: nextStatus } : u));
+    toast.success(nextStatus ? 'User activity paused' : 'User activity resumed');
+  }
+
   // ── Gifting handler ────────────────────────────────────────────────────
   const [giftModalOpen, setGiftModalOpen] = useState(false);
   const [giftTargetUser, setGiftTargetUser] = useState<SuperAdminUser | null>(null);
@@ -285,8 +308,9 @@ export default function SuperAdminUsersPage() {
     if (roleFilter !== 'all' && u.role !== roleFilter) return false;
 
     // Status filter
-    if (statusFilter === 'active' && u.is_suspended) return false;
+    if (statusFilter === 'active' && (u.is_suspended || u.is_paused)) return false;
     if (statusFilter === 'suspended' && !u.is_suspended) return false;
+    if (statusFilter === 'paused' && !u.is_paused) return false;
 
     // Date filter
     if (dateFilter !== 'all' && dateFilter !== 'custom') {
@@ -304,8 +328,9 @@ export default function SuperAdminUsersPage() {
   const hasMore = paginatedUsers.length < filteredUsers.length;
 
   // Stats
-  const totalActive = users.filter(u => !u.is_suspended).length;
+  const totalActive = users.filter(u => !u.is_suspended && !u.is_paused).length;
   const totalSuspended = users.filter(u => u.is_suspended).length;
+  const totalPaused = users.filter(u => u.is_paused).length;
   const activeFilters = [planFilter, roleFilter, statusFilter, dateFilter].filter(f => f !== 'all').length;
 
   // ── Access guard ──────────────────────────────────────────────────────
@@ -340,7 +365,7 @@ export default function SuperAdminUsersPage() {
             Users
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
-            {users.length} total • {totalActive} active • {totalSuspended} suspended
+            {users.length} total • {totalActive} active • {totalSuspended} suspended • {totalPaused} paused
           </p>
         </div>
 
@@ -421,6 +446,7 @@ export default function SuperAdminUsersPage() {
               <option value="all">All Status</option>
               <option value="active">Active</option>
               <option value="suspended">Suspended</option>
+              <option value="paused">Paused</option>
             </select>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -471,6 +497,7 @@ export default function SuperAdminUsersPage() {
                 currentUserId={currentUser?.id}
                 onManage={(u) => navigate(`/super-users/${u.id}`)}
                 onToggleSuspension={handleToggleSuspension}
+                onTogglePause={handleTogglePause}
                 onImpersonate={handleImpersonate}
                 onGiftQueries={openGiftModal}
               />

@@ -19,6 +19,7 @@
 // ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { verifyAndDeductCredits } from '../credits';
 import { getAllChatProviders, getEmbeddingProviderChain, getProviderById, getActiveVisionProvider } from '../ai/provider';
 import { callChatCompletion, AIProviderError } from '../ai/client';
 import type { ChatMessage } from '../ai/types';
@@ -30,7 +31,7 @@ import {
   getSessionContextFallback,
   storeAssistantMessageFallback,
   updateMessageMetadataFallback,
-  getChatAssetByNameFallback
+  getMediaAssetByNameFallback
 } from '../db';
 
 export interface ChatHandlerResult {
@@ -98,58 +99,7 @@ export async function handleChatMessage(
     };
   }
 
-  // 1b. Check user monthly token limits
-  try {
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const userData = db
-      ? await getUserRecord(db, supabase, userId)
-      : (await supabase
-          .from('users')
-          .select('monthly_token_limit, strict_token_enforcement')
-          .eq('id', userId)
-          .maybeSingle()).data;
-
-    const monthlyLimit = userData?.monthly_token_limit ?? 500000;
-    const strictEnforcement = userData?.strict_token_enforcement ?? true;
-
-    // Get total token usage for the month
-    let currentUsage = 0;
-    if (db) {
-      const row = await db.prepare(
-        `SELECT SUM(token_count) as total FROM chat_messages WHERE user_id = ? AND role = 'assistant' AND created_at >= ?`
-      )
-        .bind(userId, startOfMonth.toISOString())
-        .first();
-      currentUsage = (row?.total as number) ?? 0;
-    } else {
-      const { data: usageResult } = await supabase.rpc('get_monthly_token_usage', {
-        p_user_id: userId,
-        p_month_start: startOfMonth.toISOString(),
-      });
-      currentUsage = typeof usageResult === 'number' ? usageResult : 0;
-    }
-
-    if (currentUsage >= monthlyLimit) {
-      console.warn(`[Chat] Tenant ${userId} has exceeded monthly token limit: ${currentUsage} >= ${monthlyLimit}`);
-      if (strictEnforcement) {
-        return {
-          reply: "System notice: monthly AI response quota exceeded. Please contact support.",
-          sessionId,
-          ragUsed: false,
-          provider: 'limit-enforced',
-          model: 'none',
-          tokensUsed: 0,
-        };
-      }
-    }
-  } catch (quotaErr) {
-    console.error('[Chat] Failed checking token quota limits, continuing execution:', quotaErr);
-  }
-
-  // 2. Retrieve conversation history (context window)
+  // 2. Retrieve conversation history (context window) first to determine if vision/attachments are present
   let rows: any[] = [];
   if (db) {
     rows = await getSessionContextFallback(db, supabase, sessionId, chatProviders[0].contextWindow);
@@ -171,6 +121,23 @@ export async function handleChatMessage(
       needsVision = true;
       break;
     }
+  }
+
+  // Calculate cost based on presence of vision/image attachment
+  const cost = needsVision ? 5 : 1;
+
+  // Verify and deduct credits before invoking LLM
+  const creditRes = await verifyAndDeductCredits(supabase, userId, cost);
+  if (!creditRes.success) {
+    console.warn(`[Chat] Tenant ${userId} failed credit check for cost ${cost}: ${creditRes.error}`);
+    return {
+      reply: "System notice: monthly AI response quota exceeded. Please contact support.",
+      sessionId,
+      ragUsed: false,
+      provider: 'limit-enforced',
+      model: 'none',
+      tokensUsed: 0,
+    };
   }
 
   // Convert DB rows to ChatMessage format (reverse to chronological order)
@@ -254,78 +221,14 @@ export async function handleChatMessage(
     const visionCannedReply = async (reason: string): Promise<ChatHandlerResult> => {
       const msg = getRandomVisionReply();
       console.warn(`[Chat] ⚠️ Vision failed: ${reason}. Returning canned reply.`);
-      await storeMsg('assistant', msg, null, { provider: 'vision-failed', model: 'canned', rag_used: false, reason });
+      await storeMsg('assistant', msg, null, { provider: 'vision-failed', model: 'canned', rag_used: false, reason, credits_deducted: cost });
       return { reply: msg, sessionId, ragUsed: false, provider: 'vision-failed', model: 'canned' };
     };
 
     if (!visionProvider) {
       const noConfigMsg = getRandomVisionReply();
-      await storeMsg('assistant', noConfigMsg, null, { provider: 'vision-not-configured', model: 'canned', rag_used: false });
+      await storeMsg('assistant', noConfigMsg, null, { provider: 'vision-not-configured', model: 'canned', rag_used: false, credits_deducted: cost });
       return { reply: noConfigMsg, sessionId, ragUsed: false, provider: 'vision-not-configured', model: 'canned' };
-    }
-
-    // Check vision quota limits
-    try {
-      let userProfile = null;
-      if (db) {
-        userProfile = await getUserRecord(db, supabase, userId);
-      } else {
-        const { data } = await supabase
-          .from('users')
-          .select('vision_monthly_limit, vision_queries_used, vision_extra_queries, vision_usage_month')
-          .eq('id', userId)
-          .maybeSingle();
-        userProfile = data;
-      }
-
-      const currentMonth = new Date().toISOString().slice(0, 7);
-      let {
-        vision_monthly_limit = 30,
-        vision_queries_used = 0,
-        vision_extra_queries = 0,
-        vision_usage_month
-      } = userProfile || {};
-
-      if (vision_usage_month !== currentMonth) {
-        vision_queries_used = 0;
-        vision_extra_queries = 0;
-        vision_usage_month = currentMonth;
-      }
-
-      let hasQuota = false;
-      if (vision_queries_used < vision_monthly_limit) {
-        vision_queries_used++;
-        hasQuota = true;
-      } else if (vision_extra_queries > 0) {
-        vision_extra_queries--;
-        hasQuota = true;
-      }
-
-      if (!hasQuota) {
-        const quotaMsg = getRandomVisionReply();
-        await storeMsg('assistant', quotaMsg, null, { provider: 'vision-limit-exceeded', model: 'canned', rag_used: false });
-        return { reply: quotaMsg, sessionId, ragUsed: false, provider: 'vision-limit-exceeded', model: 'canned' };
-      }
-
-      // Update vision usage in database
-      if (db) {
-        await db.prepare(
-          `UPDATE users SET vision_queries_used = ?, vision_extra_queries = ?, vision_usage_month = ? WHERE id = ?`
-        )
-          .bind(vision_queries_used, vision_extra_queries, vision_usage_month, userId)
-          .run();
-      } else {
-        await supabase
-          .from('users')
-          .update({
-            vision_queries_used,
-            vision_extra_queries,
-            vision_usage_month
-          })
-          .eq('id', userId);
-      }
-    } catch (quotaErr) {
-      console.error('[Chat] Failed checking vision quota limits, continuing execution:', quotaErr);
     }
 
     // Try ONLY the vision provider — fail fast instead of cascading through text providers
@@ -344,6 +247,7 @@ export async function handleChatMessage(
         model: response.model,
         tokens: response.usage,
         rag_used: false,
+        credits_deducted: cost,
       };
 
       if (attachment) {
@@ -478,6 +382,7 @@ export async function handleChatMessage(
         model: response.model,
         tokens: response.usage,
         rag_used: ragUsed,
+        credits_deducted: cost,
       };
 
       if (attachment) {
@@ -631,7 +536,7 @@ async function extractDynamicAttachment(
   let finalReply = reply;
   let matchedAttachment: any = undefined;
 
-  const sendFileRegex = /\[SendFile:\s*([a-zA-Z0-9_-]+)\s*\]/i;
+  const sendFileRegex = /\[Send(?:File|Media):\s*([a-zA-Z0-9_-]+)\s*\]/i;
   const match = finalReply.match(sendFileRegex);
   if (match) {
     const assetName = match[1];
@@ -640,10 +545,10 @@ async function extractDynamicAttachment(
     let asset = null;
     try {
       if (db) {
-        asset = await getChatAssetByNameFallback(db, supabase, userId, assetName);
+        asset = await getMediaAssetByNameFallback(db, supabase, userId, assetName);
       } else {
         const { data } = await supabase
-          .from('chat_assets')
+          .from('media')
           .select('id, name, friendly_name, description, file_url, file_type, facebook_media_id')
           .eq('user_id', userId)
           .eq('name', assetName)
@@ -651,7 +556,7 @@ async function extractDynamicAttachment(
         asset = data;
       }
     } catch (dbErr) {
-      console.error('[Chat] Error querying chat asset details:', dbErr);
+      console.error('[Chat] Error querying media details:', dbErr);
     }
 
     if (asset) {

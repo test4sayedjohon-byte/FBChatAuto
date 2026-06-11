@@ -9,7 +9,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PageConnection } from '../types';
-import { getKnowledgeFieldsFallback, getCustomerProfileFallback, getChatAssetsFallback } from '../db';
+import { getKnowledgeFieldsFallback, getCustomerProfileFallback, getMediaAssetsFallback } from '../db';
 
 /**
  * Knowledge field from the database.
@@ -117,21 +117,41 @@ export async function buildSystemPrompt(
     }
   }
 
-  // 1c. Fetch active chat assets for the user/tenant
+  // 1c. Fetch active media assets for the user/tenant
   let chatAssets: any[] = [];
   try {
+    let allMedia: any[] = [];
     if (db) {
-      chatAssets = await getChatAssetsFallback(db, supabase, userId);
+      allMedia = await getMediaAssetsFallback(db, supabase, userId);
     } else {
+      // IMPORTANT: filter only by use_in_chat — ai_auto_send is a legacy field and
+      // is intentionally NOT used here so both D1 and Supabase paths behave identically.
       const { data } = await supabase
-        .from('chat_assets')
-        .select('name, friendly_name, description, file_type')
+        .from('media')
+        .select('*')
         .eq('user_id', userId)
-        .eq('ai_auto_send', true);
-      chatAssets = data || [];
+        .eq('use_in_chat', true);
+      allMedia = data || [];
     }
+
+    // Resolve which folders are assigned to this page
+    let activeFolderIds: string[] = [];
+    try {
+      const { data: assignments } = await supabase
+        .from('folder_page_assignments')
+        .select('folder_id')
+        .eq('page_id', pageId);
+      if (assignments) {
+        activeFolderIds = assignments.map(a => a.folder_id);
+      }
+    } catch (err) {
+      console.warn('[Prompt] Failed to fetch folder page assignments:', err);
+    }
+
+    // Filter media: keep global ones OR those belonging to assigned folders
+    chatAssets = allMedia.filter(m => !m.folder_id || activeFolderIds.includes(m.folder_id));
   } catch (err) {
-    console.error('[Prompt] Failed to load chat assets for prompt:', err);
+    console.error('[Prompt] Failed to load media assets for prompt:', err);
   }
 
   // 2. Build the base prompt
@@ -214,7 +234,7 @@ export async function buildSystemPrompt(
   // 4b. Inject Chat Assets instructions if available
   if (chatAssets && chatAssets.length > 0) {
     parts.push('## Sharing Files & Media');
-    parts.push('You have access to the following files/media that you can share with the customer. If they ask for any of these, or if you feel it is highly relevant to answer their query, you MUST append `[SendFile: name]` (exactly in this format, replacing `name` with the asset alias name) at the very end of your response text. Only send the file if they ask for it or if it directly addresses their question.');
+    parts.push('You have access to the following files/media that you can share with the customer. If they ask for any of these, or if you feel it is highly relevant to answer their query, you MUST append `[SendMedia: name]` (exactly in this format, replacing `name` with the asset alias name) at the very end of your response text. Only send the file if they ask for it or if it directly addresses their question.');
     parts.push('');
     for (const asset of chatAssets) {
       parts.push(`- **Alias:** \`${asset.name}\` (Description: ${asset.description || asset.friendly_name})`);

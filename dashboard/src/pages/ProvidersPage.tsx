@@ -22,11 +22,13 @@ interface Provider {
   is_active_summarization: boolean;
   is_active_agent: boolean;
   is_active_vision?: boolean;
+  is_active_image: boolean;
   fallback_chat_order?: number | null;
   fallback_agent_order?: number | null;
   fallback_summarize_order?: number | null;
   fallback_vision_order?: number | null;
   fallback_embedding_order?: number | null;
+  fallback_image_order?: number | null;
   max_tokens: number;
   temperature: number;
   context_window: number;

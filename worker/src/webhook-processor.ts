@@ -573,7 +573,8 @@ async function handleMessagingEvent(
         chatResult.attachment.fileType,
         chatResult.attachment.fileUrl,
         chatResult.attachment.facebookMediaId,
-        pageConnection.page_id
+        pageConnection.page_id,
+        chatResult.attachment.friendlyName || undefined
       );
 
       if (sendAttRes.success) {

@@ -110,7 +110,8 @@ export default function MediaVaultPage() {
     setUploading(true);
     try {
       const fileExt = file.name.split('.').pop() || '';
-      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const baseName = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fileName = `${baseName}_${Math.random().toString(36).substring(2, 6)}.${fileExt}`;
       const filePath = `${user.id}/media/${fileName}`;
 
       const { error } = await supabase.storage

@@ -59,7 +59,7 @@ export default function AnalyticsPage() {
         logsData.forEach(l => {
           if (l.action_taken === 'hidden' || l.action_taken === 'trashed') hideCount++;
           if (l.action_taken === 'dm_sent') dmCount++;
-          if (l.credits_deducted === 5) visionCount++; // Vision actions cost 5 credits
+          if (l.credits_deducted === 15 || l.credits_deducted === 5) visionCount++; // Vision actions cost 15 credits (previously 5)
         });
       }
 

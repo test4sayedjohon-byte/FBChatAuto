@@ -106,4 +106,229 @@ webhook.post('/webhook/:userId', async (c) => {
   return c.json({ status: 'received' }, 200);
 });
 
+// ─── Telegram Webhook Handler (POST) ──────────────────────────────────────────
+// Handles updates from our Telegram bot (messages, callbacks, inline buttons).
+// We return 200 OK for all events so Telegram doesn't keep retrying on errors.
+
+webhook.post('/webhook-telegram', async (c) => {
+  try {
+    const body = await c.req.json() as any;
+    console.log('[Telegram Webhook] Received payload:', JSON.stringify(body));
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // 1. Fetch Super Admin config from Supabase
+    const { data: superAdmin, error: adminErr } = await supabase
+      .from('users')
+      .select('id, email, settings')
+      .eq('is_super_admin', true)
+      .limit(1)
+      .maybeSingle();
+
+    if (adminErr || !superAdmin) {
+      console.error('[Telegram Webhook] Super admin not found or error:', adminErr);
+      return c.json({ error: 'Super Admin configuration missing' }, 200);
+    }
+
+    const settings = (superAdmin.settings || {}) as any;
+    const botToken = settings.telegram_bot_token;
+    const adminChatId = settings.telegram_admin_chat_id;
+    const botEnabled = settings.telegram_bot_enabled === true || settings.telegram_bot_enabled === 'true';
+
+    if (!botToken || !adminChatId) {
+      console.warn('[Telegram Webhook] Telegram credentials not configured in DB.');
+      return c.json({ error: 'Bot credentials missing' }, 200);
+    }
+
+    // 2. Handle incoming Message
+    if (body.message) {
+      const chatId = body.message.chat.id;
+      const text = body.message.text;
+
+      if (text === '/start') {
+        const replyText = `👋 <b>Hello!</b>\n\nYour Telegram Chat ID is: <code>${chatId}</code>\n\nPlease copy this Chat ID and send it to me in the chat so I can hardcode it in the backend for you!`;
+        
+        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: 'HTML'
+          })
+        });
+      }
+      return c.json({ ok: true });
+    }
+
+    // 3. Handle Callback Query (Approve/Reject buttons)
+    if (body.callback_query) {
+      const callbackQueryId = body.callback_query.id;
+      const senderId = body.callback_query.from.id;
+      const callbackData = body.callback_query.data; // e.g. "approve:purchase-id"
+      const message = body.callback_query.message;
+      const messageId = message.message_id;
+      const messageChatId = message.chat.id;
+      const originalText = message.text || '';
+
+      // Verify sender is the authorized admin
+      if (!botEnabled || !adminChatId || String(senderId) !== String(adminChatId)) {
+        console.warn(`[Telegram Webhook] Unauthorized attempt from sender ${senderId}`);
+        await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: callbackQueryId,
+            text: '❌ Unauthorized. You are not the configured admin.',
+            show_alert: true
+          })
+        });
+        return c.json({ ok: true });
+      }
+
+      const [action, purchaseId] = callbackData.split(':');
+      if (!purchaseId) {
+        return c.json({ ok: true });
+      }
+
+      // Fetch purchase
+      const { data: purchase, error: purchaseErr } = await supabase
+        .from('purchases')
+        .select('*')
+        .eq('id', purchaseId)
+        .maybeSingle();
+
+      if (purchaseErr || !purchase) {
+        await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: callbackQueryId,
+            text: '❌ Purchase record not found.',
+            show_alert: true
+          })
+        });
+        return c.json({ ok: true });
+      }
+
+      if (purchase.status !== 'pending') {
+        await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: callbackQueryId,
+            text: `⚠️ Request already processed (${purchase.status}).`,
+            show_alert: true
+          })
+        });
+
+        // Remove the inline buttons from the old message
+        await fetch(`https://api.telegram.org/bot${botToken}/editMessageReplyMarkup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: messageChatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [] }
+          })
+        });
+        return c.json({ ok: true });
+      }
+
+      // Process Action
+      if (action === 'approve') {
+        const { error: updateErr } = await supabase
+          .from('purchases')
+          .update({ 
+            status: 'approved', 
+            admin_notes: 'Approved via Telegram Bot', 
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', purchaseId);
+
+        if (updateErr) {
+          throw updateErr;
+        }
+
+        // Log to Billing Ledger
+        await supabase.from('billing_ledger').insert({
+          id: crypto.randomUUID(),
+          user_id: purchase.user_id,
+          transaction_type: 'purchase_approved',
+          amount: purchase.total_amount,
+          currency: purchase.currency,
+          description: `Purchase ${purchaseId} approved via Telegram. Channels: +${purchase.channels_count}, Addons: ${purchase.message_addon || ''}`,
+          created_at: new Date().toISOString()
+        });
+
+        // Edit Telegram message to show approved status
+        const updatedText = `${originalText}\n\n✅ <b>Approved via Telegram</b>`;
+        await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: messageChatId,
+            message_id: messageId,
+            text: updatedText,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [] }
+          })
+        });
+
+        // Toast in Telegram
+        await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: callbackQueryId,
+            text: '✅ Purchase Approved successfully!'
+          })
+        });
+      } else if (action === 'reject') {
+        const { error: updateErr } = await supabase
+          .from('purchases')
+          .update({ 
+            status: 'rejected', 
+            admin_notes: 'Rejected via Telegram Bot', 
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', purchaseId);
+
+        if (updateErr) {
+          throw updateErr;
+        }
+
+        // Edit Telegram message to show rejected status
+        const updatedText = `${originalText}\n\n❌ <b>Rejected via Telegram</b>`;
+        await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: messageChatId,
+            message_id: messageId,
+            text: updatedText,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [] }
+          })
+        });
+
+        // Toast in Telegram
+        await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: callbackQueryId,
+            text: '❌ Purchase Rejected.'
+          })
+        });
+      }
+    }
+
+    return c.json({ ok: true });
+  } catch (err: any) {
+    console.error('[Telegram Webhook Error]:', err);
+    return c.json({ error: err.message }, 200);
+  }
+});
+
 export default webhook;

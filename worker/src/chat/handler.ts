@@ -151,7 +151,7 @@ export async function handleChatMessage(
   }
 
   // Calculate cost based on presence of vision/image attachment and whether vision is allowed
-  const cost = (needsVision && allowVision) ? 5 : 1;
+  const cost = (needsVision && allowVision) ? 15 : 1;
 
   // Verify and deduct credits before invoking LLM
   const creditRes = await verifyAndDeductCredits(supabase, userId, cost);

@@ -481,6 +481,7 @@ const copilotTools: AITool[] = [
           reply_templates: { type: 'array', items: { type: 'string' }, description: 'Rotating reply messages for text action or text before media.' },
           reply_text_after: { type: 'string', description: 'Optional text reply to send AFTER the media file (if action_type is media).' },
           ai_prompt_directive: { type: 'string', description: 'Dynamic prompt directive to inject into the LLM system prompt (if action_type is ai_push).' },
+          reply_mode: { type: 'string', enum: ['random', 'all'], description: 'Whether to send a random reply or all replies in sequence (for text action).' },
           dm_flow_id: { type: 'string', description: 'Optional UUID of the DM flow to trigger (if action_type is flow).' },
           media_id: { type: 'string', description: 'Optional UUID of the Media Vault asset to attach (if action_type is media).' },
           priority: { type: 'integer', description: 'Priority for matching (higher runs first).' }
@@ -1239,7 +1240,7 @@ The Knowledge Base can have multiple documents, each covering a different topic.
           resultStr = data && data.length > 0 ? JSON.stringify(data) : "No moderation action logs found.";
         }
         else if (fnName === 'generate_ideas') {
-          const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+          const creditRes = await verifyAndDeductCredits(supabase, userId, 10);
           if (!creditRes.success) {
             throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
           }
@@ -1306,7 +1307,7 @@ Return the ideas as a JSON array of objects, where each object has:
           const responseText = response.choices[0].message.content || '[]';
 
           const tokensBurned = response.usage?.total_tokens || 1000;
-          // Deducted 5 credits atomically via verifyAndDeductCredits above
+          // Deducted 10 credits atomically via verifyAndDeductCredits above
 
           await supabase
             .from('audit_logs')
@@ -1326,7 +1327,7 @@ Return the ideas as a JSON array of objects, where each object has:
           databaseUpdated = true;
         }
         else if (fnName === 'evaluate_best_post') {
-          const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+          const creditRes = await verifyAndDeductCredits(supabase, userId, 10);
           if (!creditRes.success) {
             throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
           }
@@ -1380,7 +1381,7 @@ Ensure you output valid JSON only.`;
           const responseText = response.choices[0].message.content || '{}';
 
           const tokensBurned = response.usage?.total_tokens || 500;
-          // Deducted 5 credits atomically via verifyAndDeductCredits above
+          // Deducted 10 credits atomically via verifyAndDeductCredits above
 
           await supabase
             .from('audit_logs')
@@ -1395,7 +1396,7 @@ Ensure you output valid JSON only.`;
           resultStr = responseText;
         }
         else if (fnName === 'generate_image') {
-          const creditRes = await verifyAndDeductCredits(supabase, userId, 15);
+          const creditRes = await verifyAndDeductCredits(supabase, userId, 30);
           if (!creditRes.success) {
             throw new Error(`Insufficient credits: ${creditRes.error || 'limit exceeded'}.`);
           }
@@ -1665,6 +1666,7 @@ Ensure you output valid JSON only.`;
               reply_templates: args.reply_templates || [],
               reply_text_after: args.reply_text_after || null,
               ai_prompt_directive: args.ai_prompt_directive || null,
+              reply_mode: args.reply_mode || 'random',
               dm_flow_id: args.dm_flow_id || null,
               media_id: args.media_id || null,
               priority: args.priority || 0,
@@ -2138,7 +2140,7 @@ export async function executeWeeklyPlanner(
   db?: D1Database
 ): Promise<{ success: boolean; message: string; scheduledPostId?: string }> {
   try {
-    const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+    const creditRes = await verifyAndDeductCredits(supabase, userId, 30);
     if (!creditRes.success) {
       throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
     }
@@ -2331,7 +2333,7 @@ Ensure you output valid JSON only.`;
     const textTokensForScoring = scoreResponse.usage?.total_tokens || 500;
     const totalTextTokensBurned = textTokensForIdeas + textTokensForScoring;
 
-    // Deducted 5 credits atomically via verifyAndDeductCredits above
+    // Deducted 30 credits atomically via verifyAndDeductCredits above
 
     await supabase
       .from('audit_logs')
@@ -2358,7 +2360,7 @@ Ensure you output valid JSON only.`;
     // 7. Generate image if credits are available
     let imageUrl: string | null = null;
     if (bestPost.image_prompt) {
-      const creditRes = await verifyAndDeductCredits(supabase, userId, 15);
+      const creditRes = await verifyAndDeductCredits(supabase, userId, 30);
       if (creditRes.success) {
         const imageChain = await getImageProviderChain(supabase, userId, db);
         const activeImageProvider = imageChain[0];
@@ -2459,7 +2461,7 @@ export async function executeVariationsPlanner(
   db?: D1Database
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const creditRes = await verifyAndDeductCredits(supabase, userId, 5);
+    const creditRes = await verifyAndDeductCredits(supabase, userId, 10);
     if (!creditRes.success) {
       throw new Error(`Insufficient credits: ${creditRes.error || 'limit reached.'}`);
     }
@@ -2653,7 +2655,7 @@ Ensure you output valid JSON only.`;
     const textTokensForScoring = scoreResponse.usage?.total_tokens || 500;
     const totalTextTokensBurned = textTokensForVariations + textTokensForScoring;
 
-    // Deducted 5 credits atomically via verifyAndDeductCredits above
+    // Deducted 10 credits atomically via verifyAndDeductCredits above
 
     await supabase
       .from('audit_logs')
@@ -2680,7 +2682,7 @@ Ensure you output valid JSON only.`;
     // 7. Generate image if credits are available
     let imageUrl: string | null = null;
     if (bestPost.image_prompt) {
-      const creditRes = await verifyAndDeductCredits(supabase, userId, 15);
+      const creditRes = await verifyAndDeductCredits(supabase, userId, 30);
       if (creditRes.success) {
         const imageChain = await getImageProviderChain(supabase, userId, db);
         const activeImageProvider = imageChain[0];

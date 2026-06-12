@@ -148,6 +148,7 @@ export default function UserWorkspacePage() {
   // Credits system state
   const [monthlyCreditsLimitInput, setMonthlyCreditsLimitInput] = useState(0);
   const [extraCreditsBalanceInput, setExtraCreditsBalanceInput] = useState(0);
+  const [creditsUsedThisMonthInput, setCreditsUsedThisMonthInput] = useState(0);
   const [dailyCreditSpendCapInput, setDailyCreditSpendCapInput] = useState(0);
 
   // Missing user settings states
@@ -321,6 +322,7 @@ export default function UserWorkspacePage() {
       setAllowedChannelsInput(userData.allowed_channels ?? 0);
       setMonthlyCreditsLimitInput(userData.monthly_credits_limit ?? 0);
       setExtraCreditsBalanceInput(userData.extra_credits_balance ?? 0);
+      setCreditsUsedThisMonthInput(userData.credits_used_this_month ?? 0);
       setDailyCreditSpendCapInput(userData.daily_credit_spend_cap ?? 0);
       setAllowCommentAnalysisInput(userData.allow_comment_analysis ?? true);
       setSentimentAnalysisScopeInput(userData.sentiment_analysis_scope ?? 'global');
@@ -360,6 +362,11 @@ export default function UserWorkspacePage() {
     if (userData.extra_credits_balance !== dbValues.extra_credits_balance) {
       if (extraCreditsBalanceInput === (dbValues.extra_credits_balance ?? 0)) {
         setExtraCreditsBalanceInput(userData.extra_credits_balance ?? 0);
+      }
+    }
+    if (userData.credits_used_this_month !== dbValues.credits_used_this_month) {
+      if (creditsUsedThisMonthInput === (dbValues.credits_used_this_month ?? 0)) {
+        setCreditsUsedThisMonthInput(userData.credits_used_this_month ?? 0);
       }
     }
     if (userData.daily_credit_spend_cap !== dbValues.daily_credit_spend_cap) {
@@ -492,6 +499,7 @@ export default function UserWorkspacePage() {
       
       setMonthlyCreditsLimitInput(user.monthly_credits_limit ?? 0);
       setExtraCreditsBalanceInput(user.extra_credits_balance ?? 0);
+      setCreditsUsedThisMonthInput(user.credits_used_this_month ?? 0);
       setDailyCreditSpendCapInput(user.daily_credit_spend_cap ?? 0);
 
       // Initialize missing settings
@@ -543,6 +551,7 @@ export default function UserWorkspacePage() {
         strict_token_enforcement: strictEnforcementInput,
         allowed_channels: allowedChannelsInput,
         monthly_credits_limit: monthlyCreditsLimitInput,
+        credits_used_this_month: creditsUsedThisMonthInput,
         daily_credit_spend_cap: dailyCreditSpendCapInput,
         allow_comment_analysis: allowCommentAnalysisInput,
         sentiment_analysis_scope: sentimentAnalysisScopeInput,
@@ -625,6 +634,18 @@ export default function UserWorkspacePage() {
       setSavingQuota(false);
     }
   }
+
+  // Handle remaining credits live change by dynamically adjusting extra_credits_balance and credits_used_this_month
+  const handleRemainingCreditsChange = (newVal: number) => {
+    const val = Math.max(0, isNaN(newVal) ? 0 : Math.round(newVal));
+    if (val >= monthlyCreditsLimitInput) {
+      setCreditsUsedThisMonthInput(0);
+      setExtraCreditsBalanceInput(val - monthlyCreditsLimitInput);
+    } else {
+      setExtraCreditsBalanceInput(0);
+      setCreditsUsedThisMonthInput(monthlyCreditsLimitInput - val);
+    }
+  };
 
   // ── Plan change ───────────────────────────────────────────────────────────
   async function changePlan(plan: string) {
@@ -1136,6 +1157,49 @@ export default function UserWorkspacePage() {
                     <Gift size={12} /> Gift Credits 🎁
                   </button>
                 </div>
+              </div>
+
+              <div style={styles.formRow}>
+                <label style={styles.formLabel}>Credits Used This Month</label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input 
+                    className="form-input" 
+                    type="number" 
+                    value={creditsUsedThisMonthInput} 
+                    onChange={e => setCreditsUsedThisMonthInput(Number(e.target.value))} 
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => setCreditsUsedThisMonthInput(0)}
+                    style={{
+                      fontSize: '11px',
+                      padding: '4px 10px',
+                      height: '38px',
+                      borderRadius: '6px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Reset to 0
+                  </button>
+                </div>
+              </div>
+
+              <div style={styles.formRow}>
+                <label style={styles.formLabel}>
+                  Current Credit Balance (Remaining)
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginLeft: '6px', fontWeight: 'normal' }}>
+                    (Calculated: Limit + Extra - Used)
+                  </span>
+                </label>
+                <input 
+                  className="form-input" 
+                  type="number" 
+                  value={(monthlyCreditsLimitInput + extraCreditsBalanceInput) - creditsUsedThisMonthInput} 
+                  onChange={e => handleRemainingCreditsChange(Number(e.target.value))}
+                  style={{ borderColor: 'var(--accent-primary)', fontWeight: 'bold' }}
+                />
               </div>
 
               <div style={styles.formRow}>

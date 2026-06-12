@@ -103,7 +103,8 @@ export async function sendFacebookAttachment(
   attachmentType: 'image' | 'video' | 'audio' | 'file',
   attachmentUrl: string,
   mediaId?: string,
-  pageId?: string
+  pageId?: string,
+  filename?: string
 ): Promise<{ success: boolean; mediaId?: string; error?: string }> {
   const recipient = typeof recipientId === 'string' ? { id: recipientId } : recipientId;
   const logRecipient = typeof recipientId === 'string' ? recipientId : JSON.stringify(recipientId);
@@ -112,6 +113,15 @@ export async function sendFacebookAttachment(
     ? `https://graph.facebook.com/v21.0/${pageId}/messages`
     : 'https://graph.facebook.com/v21.0/me/messages';
 
+  let finalUrl = attachmentUrl;
+  if (!mediaId && filename && attachmentUrl.includes('.supabase.co/storage/')) {
+    try {
+      const urlObj = new URL(attachmentUrl);
+      urlObj.searchParams.set('download', filename);
+      finalUrl = urlObj.toString();
+    } catch (_) {}
+  }
+
   const payload: any = {
     recipient,
     message: {
@@ -119,7 +129,7 @@ export async function sendFacebookAttachment(
         type: attachmentType,
         payload: mediaId 
           ? { attachment_id: mediaId }
-          : { url: attachmentUrl, is_reusable: true }
+          : { url: finalUrl, is_reusable: true }
       }
     },
     messaging_type: 'RESPONSE',

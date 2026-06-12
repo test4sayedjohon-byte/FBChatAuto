@@ -173,8 +173,8 @@ export default function CreditsPage() {
 
   async function saveDailyCap() {
     const val = parseInt(dailyCapInput, 10);
-    if (isNaN(val) || val < 10 || val > 2000) {
-      toast.error('Daily cap must be between 10 and 2,000 credits.');
+    if (isNaN(val) || val < 10 || val > 1000000) {
+      toast.error('Daily cap must be between 10 and 1,000,000 credits.');
       return;
     }
     setSavingDailyCap(true);
@@ -701,7 +701,7 @@ export default function CreditsPage() {
                   <input
                     type="number"
                     min={10}
-                    max={2000}
+                    max={1000000}
                     value={dailyCapInput}
                     onChange={e => setDailyCapInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') saveDailyCap(); if (e.key === 'Escape') setEditingDailyCap(false); }}
@@ -726,7 +726,7 @@ export default function CreditsPage() {
 
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.4' }}>
                 {editingDailyCap
-                  ? 'Set a limit between 10–2,000. Press Enter or ✓ to save, Esc to cancel.'
+                  ? 'Set a limit between 10–1,000,000. Press Enter or ✓ to save, Esc to cancel.'
                   : 'The automated safety valve is active. If your comments or chat queries spike unexpectedly, this limit restricts additional deductions to protect your budget.'}
               </p>
             </div>
@@ -1097,15 +1097,15 @@ export default function CreditsPage() {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-primary)', paddingBottom: '6px', fontSize: '0.75rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Interactive Copilot / Agent Query</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>5 credits</span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>10 credits</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-primary)', paddingBottom: '6px', fontSize: '0.75rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Vision Scan / Attachment DM</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>5 credits</span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>15 credits</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-primary)', paddingBottom: '6px', fontSize: '0.75rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Image Gen / Weekly Planner</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>15 credits</span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>30 credits</span>
                 </div>
               </div>
             </div>

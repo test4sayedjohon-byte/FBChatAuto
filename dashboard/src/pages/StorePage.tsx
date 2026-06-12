@@ -299,15 +299,15 @@ export default function StorePage() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
                     <span>AI Chat Agent Query (Dashboard)</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>5 credits</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>10 credits</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
                     <span>AI Vision / Image Reply (Chat)</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>5 credits</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>15 credits</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
                     <span>AI Image Generation</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>15 credits</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>30 credits</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '2px' }}>
                     <span>Keyword rules & static replies</span>

@@ -68,6 +68,11 @@ BEGIN
       v_credits_add := v_match::integer;
     END IF;
 
+    -- Convert messages, vision, and agent queries to equivalent credits if credits were not explicitly parsed
+    IF v_credits_add = 0 THEN
+      v_credits_add := (v_message_limit_add * 1) + (v_vision_limit_add * 15) + (v_agent_limit_add * 10);
+    END IF;
+
     -- Update user limits
     UPDATE public.users
     SET 

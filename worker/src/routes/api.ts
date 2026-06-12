@@ -110,6 +110,56 @@ api.post('/super-admin/purchases/:id/reject', async (c) => {
   }
 });
 
+api.post('/super-admin/telegram/setup', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // Verify Super Admin
+    const { data: profile } = await supabase
+      .from('users')
+      .select('is_super_admin')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (!profile?.is_super_admin) return c.json({ error: 'Forbidden' }, 403);
+
+    // Get Super Admin settings to retrieve the Bot Token
+    const { data: superAdmin } = await supabase
+      .from('users')
+      .select('settings')
+      .eq('is_super_admin', true)
+      .limit(1)
+      .maybeSingle();
+
+    const settings = (superAdmin?.settings || {}) as any;
+    const botToken = settings.telegram_bot_token;
+
+    if (!botToken) {
+      return c.json({ error: 'Telegram Bot Token not configured in settings.' }, 400);
+    }
+
+    // Determine the webhook URL dynamically based on the incoming request origin
+    const requestUrl = new URL(c.req.url);
+    const webhookUrl = `${requestUrl.protocol}//${requestUrl.host}/webhook-telegram`;
+    console.log(`[Telegram Setup] Setting webhook URL to: ${webhookUrl}`);
+
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
+    const result = (await res.json()) as any;
+
+    if (!result.ok) {
+      return c.json({ success: false, error: result.description || 'Telegram API returned error' }, 400);
+    }
+
+    return c.json({ success: true, message: 'Webhook registered successfully with Telegram', result });
+  } catch (error: any) {
+    console.error('[Telegram Setup Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
 api.post('/chat/send', async (c) => {
   try {
     const { sessionId, text, pageId, recipientId } = await c.req.json();
@@ -212,7 +262,7 @@ api.post('/agent/chat', async (c) => {
     const supabase = createSupabaseAdmin(c.env);
     
     // --- Agent Quota Check ---
-    const creditRes = await verifyAndDeductCredits(supabase, user.id, 5);
+    const creditRes = await verifyAndDeductCredits(supabase, user.id, 10);
     if (!creditRes.success) {
       return c.json({
         message: {

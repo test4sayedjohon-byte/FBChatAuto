@@ -175,11 +175,13 @@ export async function processChatKeywordRules(
   else if (matchedRule.action_type === 'media') {
     let mediaUrl = "";
     let mediaType: 'image' | 'video' | 'audio' | 'file' = 'image';
+    let friendlyName = "";
     if (matchedRule.media_id) {
       try {
-        const { data: mAsset } = await supabase.from('media').select('file_url, file_type').eq('id', matchedRule.media_id).maybeSingle();
+        const { data: mAsset } = await supabase.from('media').select('file_url, file_type, friendly_name').eq('id', matchedRule.media_id).maybeSingle();
         if (mAsset) {
           mediaUrl = mAsset.file_url;
+          friendlyName = mAsset.friendly_name || "";
           const fType = mAsset.file_type;
           if (fType === 'image' || fType === 'video' || fType === 'audio' || fType === 'file') {
             mediaType = fType;
@@ -226,7 +228,8 @@ export async function processChatKeywordRules(
           mediaType,
           mediaUrl,
           undefined,
-          pageConnection.page_id
+          pageConnection.page_id,
+          friendlyName || undefined
         );
       }
 

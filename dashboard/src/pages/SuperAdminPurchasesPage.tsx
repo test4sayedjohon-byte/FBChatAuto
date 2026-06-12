@@ -56,7 +56,8 @@ export default function SuperAdminPurchasesPage() {
       if (!session) throw new Error('No active session');
 
       const apiUrl = import.meta.env.VITE_WORKER_URL || import.meta.env.VITE_API_URL || 'https://metachat.junoverseai.com';
-      const endpoint = `${apiUrl}/api/super-admin/purchases/${targetId}/${targetStatus}`;
+      const action = targetStatus === 'approved' ? 'approve' : 'reject';
+      const endpoint = `${apiUrl}/api/super-admin/purchases/${targetId}/${action}`;
       
       const response = await fetch(endpoint, {
         method: 'POST',

@@ -1436,7 +1436,7 @@ export default function FloatingAgentWidget() {
                           fontWeight: 600, 
                           color: remaining === 0 ? 'var(--error, #ef4444)' : 'var(--text-primary)' 
                         }}>
-                          {remaining} left (5 credits/query)
+                          {remaining} left (10 credits/query)
                         </span>
                       </div>
                       <form onSubmit={handleSend} style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>

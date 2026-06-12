@@ -336,7 +336,7 @@ export default function KeywordRulesPage() {
   /* ─── Tag Pill Controls ──────────────────────────────────────────────── */
 
   const addKeywordPill = () => {
-    const val = formKeywordInput.trim().toLowerCase();
+    const val = formKeywordInput.trim();
     if (val && !formKeywords.includes(val)) {
       setFormKeywords(prev => [...prev, val]);
       setFormKeywordInput('');

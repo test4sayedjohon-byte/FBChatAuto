@@ -41,13 +41,17 @@ export async function sendPrivateReply(
   accessToken: string,
   commentId: string,
   message: string,
-  imageUrl?: string | null
+  imageUrl?: string | null,
+  fileUrl?: string | null,
+  fileName?: string | null
 ): Promise<any> {
   const url = `https://graph.facebook.com/v25.0/me/messages?access_token=${accessToken}`;
 
+  const cleanMsg = message.trim();
+
+  // A. Image attachment handling
   if (imageUrl) {
     try {
-      const cleanMsg = message.trim();
       let payload: any;
 
       if (!cleanMsg) {
@@ -106,6 +110,85 @@ export async function sendPrivateReply(
     }
   }
 
+  // B. Document/File attachment handling (e.g. PDFs)
+  if (fileUrl) {
+    try {
+      let payload: any;
+
+      if (!cleanMsg) {
+        // Send as native file attachment
+        payload = {
+          recipient: { comment_id: commentId },
+          message: {
+            attachment: {
+              type: 'file',
+              payload: {
+                url: fileUrl,
+                is_reusable: true
+              }
+            }
+          }
+        };
+      } else {
+        // Send as Generic Template card with action button
+        const title = cleanMsg.substring(0, 80) || 'Attachment';
+        const subtitle = cleanMsg.length > 80 ? cleanMsg.substring(80, 160) : undefined;
+        
+        let btnTitle = fileName || 'Open File';
+        if (btnTitle.length > 20) {
+          const dotIndex = btnTitle.lastIndexOf('.');
+          if (dotIndex !== -1 && btnTitle.length - dotIndex <= 5) {
+            const ext = btnTitle.substring(dotIndex);
+            const base = btnTitle.substring(0, dotIndex);
+            btnTitle = base.substring(0, 20 - ext.length) + ext;
+          } else {
+            btnTitle = btnTitle.substring(0, 20);
+          }
+        }
+
+        payload = {
+          recipient: { comment_id: commentId },
+          message: {
+            attachment: {
+              type: 'template',
+              payload: {
+                template_type: 'generic',
+                elements: [
+                  {
+                    title,
+                    subtitle,
+                    buttons: [
+                      {
+                        type: 'web_url',
+                        url: fileUrl,
+                        title: btnTitle
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        };
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+
+      const errText = await response.text();
+      console.warn(`[Comments Webhook] File private reply template failed, falling back to text link. Error: ${errText}`);
+    } catch (e: any) {
+      console.warn(`[Comments Webhook] File private reply template failed with exception: ${e.message}`);
+    }
+  }
+
   // Fallback to text message
   let textPayload = message;
   if (imageUrl && !textPayload.includes(imageUrl)) {
@@ -113,6 +196,14 @@ export async function sendPrivateReply(
       textPayload += `\n\nImage: ${imageUrl}`;
     } else {
       textPayload = imageUrl;
+    }
+  }
+
+  if (fileUrl && !textPayload.includes(fileUrl)) {
+    if (textPayload) {
+      textPayload += `\n\nLink: ${fileUrl}`;
+    } else {
+      textPayload = fileUrl;
     }
   }
 

@@ -1460,3 +1460,59 @@ a:hover {
   background: rgba(245, 158, 11, 0.25) !important;
   color: #f59e0b !important;
 }
+
+/* ─── Premium Toggles & Switches ────────────────────────────────────────── */
+.switch, .toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.switch input, .toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch .slider, .toggle-switch .slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--text-muted);
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.switch .slider::before, .toggle-switch .slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: var(--text-primary);
+  transition: transform var(--transition-normal);
+  border-radius: 50%;
+  box-shadow: var(--shadow-sm);
+}
+
+.switch input:checked + .slider, .toggle-switch input:checked + .slider {
+  background-color: var(--accent-primary);
+  border-color: rgba(249, 115, 22, 0.4);
+}
+
+.switch input:focus + .slider, .toggle-switch input:focus + .slider {
+  box-shadow: 0 0 8px var(--accent-primary-glow);
+}
+
+.switch input:checked + .slider::before, .toggle-switch input:checked + .slider::before {
+  transform: translateX(22px);
+  background-color: #ffffff;
+}
+

@@ -77,7 +77,7 @@ export default function AutoModerationRuleEditPage() {
   const [aiCustomCriteria, setAiCustomCriteria] = useState('');
   const [useDynamicAiReply, setUseDynamicAiReply] = useState(false);
   const [aiCommentInstruction, setAiCommentInstruction] = useState('');
-  const [selectedActions, setSelectedActions] = useState<string[]>(['hide']);
+  const [selectedActions, setSelectedActions] = useState<string[]>(['like']);
   const [replyInput, setReplyInput] = useState('');
   const [dmReplyInput, setDmReplyInput] = useState('');
   const [responseType, setResponseType] = useState<'text' | 'flow'>('text');
@@ -87,6 +87,7 @@ export default function AutoModerationRuleEditPage() {
   const [applyToPostType, setApplyToPostType] = useState('global');
   const [selectedPostId, setSelectedPostId] = useState('');
   const [aiFolderOverrides, setAiFolderOverrides] = useState<string[] | null>(null);
+  const [mustBeFollower, setMustBeFollower] = useState(false);
 
   // Document inline editor temporary text
   const [docTempContent, setDocTempContent] = useState('');
@@ -198,6 +199,7 @@ export default function AutoModerationRuleEditPage() {
           setApplyToPostType(rule.post_id ? 'specific' : 'global');
           setSelectedPostId(rule.post_id || '');
           setAiFolderOverrides(rule.ai_folder_overrides || null);
+          setMustBeFollower(rule.must_be_follower || false);
 
           if (rule.page_connection_id) {
             fetchPagePosts(rule.page_connection_id);
@@ -444,6 +446,7 @@ export default function AutoModerationRuleEditPage() {
         dm_flow_id: selectedActions.includes('dm') && responseType === 'flow' ? selectedDmFlowId || null : null,
         post_id: applyToPostType === 'specific' && selectedPostId ? selectedPostId : null,
         ai_folder_overrides: useDynamicAiReply ? aiFolderOverrides : null,
+        must_be_follower: mustBeFollower,
       };
 
       if (ruleId) {
@@ -742,6 +745,21 @@ export default function AutoModerationRuleEditPage() {
               </div>
             </div>
           )}
+
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>
+              <input 
+                type="checkbox" 
+                checked={mustBeFollower} 
+                onChange={e => setMustBeFollower(e.target.checked)}
+                style={{ accentColor: 'var(--primary)' }}
+              />
+              Must be a follower (Instagram Only)
+            </label>
+            <span className="form-hint" style={{ display: 'block', marginTop: '4px', marginLeft: '22px' }}>
+              If enabled and the platform is Instagram, the automation only triggers if the user follows your page (requires the user to have messaged your page in the past). Facebook comments ignore this check and always trigger.
+            </span>
+          </div>
 
           <div className="form-group">
             <label className="form-label">Actions to Take (Select all that apply)</label>

@@ -22,6 +22,7 @@ import {
 import { processCommentChanges } from './comments';
 import { processFeedChanges } from './feed-processor';
 import { handleFlowInteraction, handleFlowTextInput, executeNode } from './chat/flow-engine';
+import { processChatKeywordRules } from './chat/keyword-rules';
 
 // ─── Helper: Download Facebook Images to Base64 ─────────────────────────────
 // Facebook Messenger webhook image URLs (lookaside.fbsbx.com) are self-authenticating
@@ -424,6 +425,30 @@ async function handleMessagingEvent(
       return;
     }
 
+    let activeAiPromptDirective: string | undefined = undefined;
+
+    // ── Chat Keyword Rules Matcher ───────────────────────────────────────────
+    if (messageText) {
+      const ruleResult = await processChatKeywordRules(
+        env.DB,
+        supabase,
+        result.sessionId,
+        pageConnection,
+        senderId,
+        messageText,
+        'facebook'
+      );
+      if (ruleResult.matched) {
+        if (ruleResult.isAiPush) {
+          console.log(`[Webhook] 🎯 Chat Keyword Rule (AI Push) matched for session ${result.sessionId}. Injected directive.`);
+          activeAiPromptDirective = ruleResult.aiPromptDirective;
+        } else {
+          console.log(`[Webhook] 🎯 Chat Keyword Rule matched for session ${result.sessionId}. Bypassing AI response.`);
+          return;
+        }
+      }
+    }
+
     if (!messageText && hasOnlyUnsupported) {
       const cannedResponse = "Thanks for sending that! I can currently only understand text and images. " +
         "If you have a question, please type it out and I'll be happy to help. 😊";
@@ -513,7 +538,8 @@ async function handleMessagingEvent(
       pageConnection,
       contentToStore,
       senderId,
-      env.DB
+      env.DB,
+      activeAiPromptDirective
     );
 
     console.log(

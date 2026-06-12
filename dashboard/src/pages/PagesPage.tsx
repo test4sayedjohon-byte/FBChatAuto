@@ -47,6 +47,10 @@ interface PageConn {
   is_trigger_enabled?: boolean;
   token_status?: string | null;
   token_last_checked_at?: string | null;
+  follow_up_enabled?: boolean;
+  follow_up_delay_minutes?: number;
+  follow_up_prompt?: string | null;
+  follow_up_max_count?: number;
 }
 
 export default function PagesPage() {
@@ -81,6 +85,10 @@ export default function PagesPage() {
   const [triggerWords, setTriggerWords] = useState<string[]>([]);
   const [triggerInput, setTriggerInput] = useState('');
   const [triggerResponses, setTriggerResponses] = useState('');
+  const [followUpEnabled, setFollowUpEnabled] = useState(false);
+  const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(60);
+  const [followUpPrompt, setFollowUpPrompt] = useState('');
+  const [followUpMaxCount, setFollowUpMaxCount] = useState(1);
 
   // Meta Auto-Discovery / Import scanner state
   const [activeTab, setActiveTab] = useState<'auto' | 'manual'>('auto');
@@ -552,6 +560,10 @@ export default function PagesPage() {
     setTriggerWords(p.trigger_words || []);
     setTriggerInput('');
     setTriggerResponses((p.trigger_responses || ["I need to transfer you to a human agent. Please hold on."]).join('\n---\n'));
+    setFollowUpEnabled(p.follow_up_enabled || false);
+    setFollowUpDelayMinutes(p.follow_up_delay_minutes ?? 60);
+    setFollowUpPrompt(p.follow_up_prompt || '');
+    setFollowUpMaxCount(p.follow_up_max_count ?? 1);
     setShowSettingsModal(true);
   }
 
@@ -579,7 +591,11 @@ export default function PagesPage() {
       enable_customer_profiling: enableProfiling,
       is_trigger_enabled: enableTrigger,
       trigger_words: tWords,
-      trigger_responses: tResponses.length > 0 ? tResponses : ["I need to transfer you to a human agent. Please hold on."]
+      trigger_responses: tResponses.length > 0 ? tResponses : ["I need to transfer you to a human agent. Please hold on."],
+      follow_up_enabled: followUpEnabled,
+      follow_up_delay_minutes: followUpDelayMinutes,
+      follow_up_prompt: followUpPrompt.trim() || null,
+      follow_up_max_count: followUpMaxCount
     }).eq('id', selectedPage.id);
 
     if (error) {
@@ -1303,6 +1319,71 @@ export default function PagesPage() {
                           style={{minHeight: '100px', fontSize: '0.85rem'}}
                         />
                         <p className="form-hint" style={{marginTop: '6px', fontSize: '0.75rem'}}>If multiple responses are provided, one will be chosen randomly.</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="form-group" style={{background: 'rgba(59, 130, 246, 0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px'}}>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px'}}>
+                    <label className="toggle-switch">
+                      <input type="checkbox" checked={followUpEnabled} onChange={e=>setFollowUpEnabled(e.target.checked)} />
+                      <span className="slider"></span>
+                    </label>
+                    <div>
+                      <h4 style={{margin: 0, fontSize: '0.95rem'}}>AI Follow-Up Pilot</h4>
+                      <p className="form-hint" style={{margin: '4px 0 0 0'}}>Automatically send a follow-up message when the customer becomes inactive/leaves the chat.</p>
+                    </div>
+                  </div>
+                  
+                  {followUpEnabled && (
+                    <div style={{marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px'}}>
+                      <div style={{display: 'flex', gap: '16px', flexWrap: 'wrap'}}>
+                        <div className="form-group" style={{flex: 1, minWidth: '150px', marginBottom: 0}}>
+                          <label className="form-label" style={{fontSize: '0.85rem'}}>Follow-up Delay</label>
+                          <select 
+                            className="form-input" 
+                            value={followUpDelayMinutes} 
+                            onChange={e=>setFollowUpDelayMinutes(parseInt(e.target.value))}
+                            style={{background: 'var(--bg-primary)'}}
+                          >
+                            <option value="15">15 Minutes</option>
+                            <option value="30">30 Minutes</option>
+                            <option value="60">1 Hour (Recommended)</option>
+                            <option value="120">2 Hours</option>
+                            <option value="240">4 Hours</option>
+                            <option value="720">12 Hours</option>
+                            <option value="1380">23 Hours</option>
+                          </select>
+                          <p className="form-hint" style={{fontSize: '0.75rem'}}>Time to wait after customer becomes idle.</p>
+                        </div>
+
+                        <div className="form-group" style={{flex: 1, minWidth: '150px', marginBottom: 0}}>
+                          <label className="form-label" style={{fontSize: '0.85rem'}}>Max Follow-ups per session</label>
+                          <select 
+                            className="form-input" 
+                            value={followUpMaxCount} 
+                            onChange={e=>setFollowUpMaxCount(parseInt(e.target.value))}
+                            style={{background: 'var(--bg-primary)'}}
+                          >
+                            <option value="1">1 Time</option>
+                            <option value="2">2 Times</option>
+                            <option value="3">3 Times</option>
+                          </select>
+                          <p className="form-hint" style={{fontSize: '0.75rem'}}>Maximum messages sent without reply.</p>
+                        </div>
+                      </div>
+
+                      <div className="form-group" style={{marginBottom: 0}}>
+                        <label className="form-label" style={{fontSize: '0.85rem'}}>Custom Follow-up Prompt / Instructions</label>
+                        <textarea 
+                          className="form-textarea" 
+                          placeholder="e.g. Ask if they have any remaining questions about our pricing, and politely invite them to schedule a call if they are interested."
+                          value={followUpPrompt} 
+                          onChange={e=>setFollowUpPrompt(e.target.value)}
+                          style={{minHeight: '80px', fontSize: '0.85rem'}}
+                        />
+                        <p className="form-hint" style={{fontSize: '0.75rem'}}>Instruct the AI how to draft the follow-up message using the conversation context.</p>
                       </div>
                     </div>
                   )}

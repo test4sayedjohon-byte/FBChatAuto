@@ -163,6 +163,25 @@ async function getProviderChainForRole(
  * Load the active chat completion provider chain.
  */
 /**
+ * Helper to check if a feature key is disabled in user settings.
+ */
+function isFeatureDisabledByUser(userRecord: any, featureKey: string): boolean {
+  if (!userRecord || !userRecord.settings) return false;
+  let settings = userRecord.settings;
+  if (typeof settings === 'string') {
+    try {
+      settings = JSON.parse(settings);
+    } catch (_) {
+      return false;
+    }
+  }
+  if (settings && Array.isArray(settings.disabled_features)) {
+    return settings.disabled_features.includes(featureKey);
+  }
+  return false;
+}
+
+/**
  * Load the active chat completion provider chain.
  */
 export async function getChatProviderChain(
@@ -172,22 +191,28 @@ export async function getChatProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if chat is allowed (defaults to true)
   let allowChat = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_chat !== undefined && userRecord.allow_chat !== null) {
       allowChat = userRecord.allow_chat === 1 || userRecord.allow_chat === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_chat')
+        .select('allow_chat, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_chat !== null && userRecord.allow_chat !== undefined) {
         allowChat = userRecord.allow_chat;
       }
     } catch (_) {}
+  }
+
+  if (allowChat && userRecord && isFeatureDisabledByUser(userRecord, 'allow_chat')) {
+    allowChat = false;
   }
 
   if (!allowChat) {
@@ -220,22 +245,28 @@ export async function getAgentProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if agent is allowed (defaults to true)
   let allowAgent = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_agent !== undefined && userRecord.allow_agent !== null) {
       allowAgent = userRecord.allow_agent === 1 || userRecord.allow_agent === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_agent')
+        .select('allow_agent, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_agent !== null && userRecord.allow_agent !== undefined) {
         allowAgent = userRecord.allow_agent;
       }
     } catch (_) {}
+  }
+
+  if (allowAgent && userRecord && isFeatureDisabledByUser(userRecord, 'allow_agent')) {
+    allowAgent = false;
   }
 
   if (!allowAgent) {
@@ -268,22 +299,28 @@ export async function getEmbeddingProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if embeddings are allowed (defaults to true)
   let allowEmbeddings = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_embeddings !== undefined && userRecord.allow_embeddings !== null) {
       allowEmbeddings = userRecord.allow_embeddings === 1 || userRecord.allow_embeddings === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_embeddings')
+        .select('allow_embeddings, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_embeddings !== null && userRecord.allow_embeddings !== undefined) {
         allowEmbeddings = userRecord.allow_embeddings;
       }
     } catch (_) {}
+  }
+
+  if (allowEmbeddings && userRecord && isFeatureDisabledByUser(userRecord, 'allow_embeddings')) {
+    allowEmbeddings = false;
   }
 
   if (!allowEmbeddings) {
@@ -323,22 +360,28 @@ export async function getSummarizationProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if summarization is allowed (defaults to true)
   let allowSummarization = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_summarization !== undefined && userRecord.allow_summarization !== null) {
       allowSummarization = userRecord.allow_summarization === 1 || userRecord.allow_summarization === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_summarization')
+        .select('allow_summarization, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_summarization !== null && userRecord.allow_summarization !== undefined) {
         allowSummarization = userRecord.allow_summarization;
       }
     } catch (_) {}
+  }
+
+  if (allowSummarization && userRecord && isFeatureDisabledByUser(userRecord, 'allow_summarization')) {
+    allowSummarization = false;
   }
 
   if (!allowSummarization) {
@@ -365,22 +408,28 @@ export async function getVisionProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if vision is allowed (defaults to true)
   let allowVision = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_vision !== undefined && userRecord.allow_vision !== null) {
       allowVision = userRecord.allow_vision === 1 || userRecord.allow_vision === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_vision')
+        .select('allow_vision, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_vision !== null && userRecord.allow_vision !== undefined) {
         allowVision = userRecord.allow_vision;
       }
     } catch (_) {}
+  }
+
+  if (allowVision && userRecord && isFeatureDisabledByUser(userRecord, 'allow_vision')) {
+    allowVision = false;
   }
 
   if (!allowVision) {
@@ -413,22 +462,28 @@ export async function getCommentAnalysisProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if comment analysis is allowed (defaults to true)
   let allowCommentAnalysis = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_comment_analysis !== undefined && userRecord.allow_comment_analysis !== null) {
       allowCommentAnalysis = userRecord.allow_comment_analysis === 1 || userRecord.allow_comment_analysis === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_comment_analysis')
+        .select('allow_comment_analysis, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_comment_analysis !== null && userRecord.allow_comment_analysis !== undefined) {
         allowCommentAnalysis = userRecord.allow_comment_analysis;
       }
     } catch (_) {}
+  }
+
+  if (allowCommentAnalysis && userRecord && isFeatureDisabledByUser(userRecord, 'allow_comment_analysis')) {
+    allowCommentAnalysis = false;
   }
 
   if (!allowCommentAnalysis) {
@@ -562,22 +617,28 @@ export async function getImageProviderChain(
 ): Promise<AIProviderConfig[]> {
   // Check if image generation is allowed (defaults to true)
   let allowImageGen = true;
+  let userRecord: any = null;
   if (db) {
-    const userRecord = await getUserRecord(db, supabase, userId);
+    userRecord = await getUserRecord(db, supabase, userId);
     if (userRecord && userRecord.allow_image_gen !== undefined && userRecord.allow_image_gen !== null) {
       allowImageGen = userRecord.allow_image_gen === 1 || userRecord.allow_image_gen === true;
     }
   } else {
     try {
-      const { data: userRecord } = await supabase
+      const { data: res } = await supabase
         .from('users')
-        .select('allow_image_gen')
+        .select('allow_image_gen, settings')
         .eq('id', userId)
         .maybeSingle();
+      userRecord = res;
       if (userRecord && userRecord.allow_image_gen !== null && userRecord.allow_image_gen !== undefined) {
         allowImageGen = userRecord.allow_image_gen;
       }
     } catch (_) {}
+  }
+
+  if (allowImageGen && userRecord && isFeatureDisabledByUser(userRecord, 'allow_image_gen')) {
+    allowImageGen = false;
   }
 
   if (!allowImageGen) {

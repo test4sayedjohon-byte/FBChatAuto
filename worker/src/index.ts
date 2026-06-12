@@ -11,6 +11,7 @@ import type { AppEnv } from './types';
 import { requireAuth } from './middleware/auth';
 import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
+import { runFollowUpSweeper } from './chat/follow-up';
 import apiRoutes from './routes/api';
 import webhookRoutes from './routes/webhook';
 import backupRoutes from './routes/backup';
@@ -82,6 +83,46 @@ app.get('/', (c) => {
     version: '2.1.0',
     timestamp: new Date().toISOString(),
   });
+});
+
+// Branded Media Redirect
+app.get('/media/:idOrName', async (c) => {
+  const param = c.req.param('idOrName');
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(param);
+
+  // 1. Try D1 Local Cache first
+  if (c.env.DB) {
+    try {
+      const query = isUuid
+        ? 'SELECT file_url FROM media WHERE id = ? LIMIT 1'
+        : 'SELECT file_url FROM media WHERE name = ? ORDER BY created_at DESC LIMIT 1';
+      const row = await c.env.DB.prepare(query).bind(param).first();
+      if (row?.file_url) {
+        return c.redirect(row.file_url as string);
+      }
+    } catch (e: any) {
+      console.warn(`[Redirect] D1 lookup failed for ${param}:`, e.message);
+    }
+  }
+
+  // 2. Try Supabase
+  try {
+    const supabase = createSupabaseAdmin(c.env);
+    let query = supabase.from('media').select('file_url');
+    if (isUuid) {
+      query = query.eq('id', param);
+    } else {
+      query = query.eq('name', param).order('created_at', { ascending: false }).limit(1);
+    }
+    const { data } = await query.maybeSingle();
+    if (data?.file_url) {
+      return c.redirect(data.file_url);
+    }
+  } catch (e: any) {
+    console.error(`[Redirect] Supabase lookup failed for ${param}:`, e.message);
+  }
+
+  return c.text('Media file not found', 404);
 });
 
 // ─── Test Chat (inline — special sandbox route) ─────────────────────────────
@@ -268,6 +309,13 @@ export default {
       }
     } catch (cronErr: any) {
       console.warn(`[Cron] Summarization sweep skipped due to connectivity issue: ${cronErr.message}`);
+    }
+
+    // 2.2. Follow-Up Sweeper: Check and send automated follow-up nudges
+    try {
+      await runFollowUpSweeper(supabase, env);
+    } catch (followUpErr: any) {
+      console.error('[Cron] Follow-up sweeper failed:', followUpErr.message);
     }
 
     // 2.5. Storage Backup Sync: Upload pending media assets to R2/Drive

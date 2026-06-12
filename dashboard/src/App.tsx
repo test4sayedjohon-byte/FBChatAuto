@@ -23,6 +23,7 @@ import StorePage from './pages/StorePage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import CreditsPage from './pages/CreditsPage';
 import ContentPlannerPage from './pages/ContentPlannerPage';
+import ContentCalendarPage from './pages/ContentCalendarPage';
 import AutoModerationPage from './pages/AutoModerationPage';
 import AutoModerationRuleEditPage from './pages/AutoModerationRuleEditPage';
 import IntegrationsPage from './pages/IntegrationsPage';
@@ -31,6 +32,7 @@ import MediaVaultPage from './pages/MediaVaultPage';
 import FlowsPage from './pages/FlowsPage';
 import FlowBuilderPage from './pages/FlowBuilderPage';
 import ActivityMonitorPage from './pages/ActivityMonitorPage';
+import KeywordRulesPage from './pages/KeywordRulesPage';
 
 
 import type { ReactNode } from 'react';
@@ -117,7 +119,9 @@ export default function App() {
               <Route path="/usage" element={<UsagePage />} />
               <Route path="/sandbox" element={<SandboxPage />} />
               <Route path="/planner" element={<ContentPlannerPage />} />
+              <Route path="/calendar" element={<ContentCalendarPage />} />
               <Route path="/moderation" element={<AutoModerationPage />} />
+              <Route path="/keyword-rules" element={<KeywordRulesPage />} />
               <Route path="/moderation/new" element={<AutoModerationRuleEditPage />} />
               <Route path="/moderation/edit/:ruleId" element={<AutoModerationRuleEditPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />

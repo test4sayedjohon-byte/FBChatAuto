@@ -32,6 +32,23 @@ function parseActions(actionStr: string): string[] {
   return actionStr.split(',').map(s => s.trim()).filter(Boolean);
 }
 
+async function checkInstagramFollower(senderId: string, accessToken: string): Promise<boolean> {
+  try {
+    const url = `https://graph.facebook.com/v25.0/${senderId}?fields=is_user_follow_business&access_token=${accessToken}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[Rules Engine] Follower check failed for Instagram user ${senderId}: ${errText}`);
+      return false;
+    }
+    const data = await res.json() as any;
+    return !!data.is_user_follow_business;
+  } catch (err: any) {
+    console.error(`[Rules Engine] Error checking Instagram follower status: ${err.message}`);
+    return false;
+  }
+}
+
 export async function evaluateCommentRules(
   supabase: SupabaseClient,
   userId: string,
@@ -40,7 +57,9 @@ export async function evaluateCommentRules(
   postId: string,
   platform?: 'facebook' | 'instagram',
   mediaUrl?: string | null,
-  db?: any
+  db?: any,
+  senderId?: string,
+  accessToken?: string
 ): Promise<EvaluationResult> {
   // 1. Fetch active rules for this page connection
   const { data: rules, error } = await supabase
@@ -68,12 +87,20 @@ export async function evaluateCommentRules(
   try {
     const { data: userProfile } = await supabase
       .from('users')
-      .select('allow_comment_analysis, brand_voice_profile')
+      .select('allow_comment_analysis, brand_voice_profile, settings')
       .eq('id', userId)
       .single();
     
     if (userProfile) {
-      allowCommentAnalysis = !!userProfile.allow_comment_analysis;
+      let isUserDisabled = false;
+      const settings = typeof userProfile.settings === 'string'
+        ? JSON.parse(userProfile.settings)
+        : userProfile.settings;
+      if (settings && Array.isArray(settings.disabled_features)) {
+        isUserDisabled = settings.disabled_features.includes('allow_comment_analysis');
+      }
+      
+      allowCommentAnalysis = !!userProfile.allow_comment_analysis && !isUserDisabled;
       if (userProfile.brand_voice_profile) {
         brandVoice = userProfile.brand_voice_profile;
       }
@@ -89,6 +116,13 @@ export async function evaluateCommentRules(
     if (rule.trigger_type === 'keywords' && Array.isArray(rule.keywords) && rule.keywords.length > 0) {
       const isMatch = rule.keywords.some((kw: string) => lowerText.includes(kw.toLowerCase()));
       if (isMatch) {
+        if (rule.must_be_follower && platform === 'instagram' && senderId && accessToken) {
+          const isFollower = await checkInstagramFollower(senderId, accessToken);
+          if (!isFollower) {
+            console.log(`[Rules Engine] User ${senderId} is not a follower. Skipping rule ${rule.id}.`);
+            continue;
+          }
+        }
         matchedKeywordRule = rule;
         break;
       }
@@ -427,6 +461,13 @@ Ensure the response is STRICTLY a valid JSON object. Do not include markdown cod
         }
 
         if (isMatch) {
+          if (rule.must_be_follower && platform === 'instagram' && senderId && accessToken) {
+            const isFollower = await checkInstagramFollower(senderId, accessToken);
+            if (!isFollower) {
+              console.log(`[Rules Engine] User ${senderId} is not a follower. Skipping rule ${rule.id}.`);
+              continue;
+            }
+          }
           matchedRule = rule;
           break;
         }

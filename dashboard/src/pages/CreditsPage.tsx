@@ -78,6 +78,7 @@ export default function CreditsPage() {
   const [editingDailyCap, setEditingDailyCap] = useState(false);
   const [dailyCapInput, setDailyCapInput] = useState('');
   const [savingDailyCap, setSavingDailyCap] = useState(false);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -190,6 +191,43 @@ export default function CreditsPage() {
       toast.error('Failed to save: ' + err.message);
     } finally {
       setSavingDailyCap(false);
+    }
+  }
+
+  async function handleToggleFeature(featureKey: string) {
+    if (!profile || !user?.id) return;
+    
+    const isAdminLocked = profile[featureKey as keyof typeof profile] === false;
+    if (isAdminLocked) return;
+
+    const currentSettings = profile.settings || {};
+    const currentDisabled = Array.isArray(currentSettings.disabled_features) 
+      ? currentSettings.disabled_features 
+      : [];
+
+    let newDisabled: string[];
+    if (currentDisabled.includes(featureKey)) {
+      newDisabled = currentDisabled.filter((k: string) => k !== featureKey);
+    } else {
+      newDisabled = [...currentDisabled, featureKey];
+    }
+
+    const newSettings = {
+      ...currentSettings,
+      disabled_features: newDisabled,
+    };
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({ settings: newSettings })
+        .eq('id', user.id);
+
+      if (error) throw error;
+      toast.success(`Feature ${currentDisabled.includes(featureKey) ? 'enabled' : 'disabled'} successfully.`);
+    } catch (err: any) {
+      console.error('Failed to toggle feature:', err);
+      toast.error('Failed to toggle feature: ' + err.message);
     }
   }
 
@@ -443,52 +481,54 @@ export default function CreditsPage() {
       key: 'allow_chat',
       label: 'Chat replies / DMs',
       desc: 'Instant auto-replies on Messenger, IG & WhatsApp',
-      active: profile?.allow_chat ?? true,
       icon: MessageSquare,
     },
     {
       key: 'allow_comment_analysis',
       label: 'Comments Auto replies',
       desc: 'Automatic scanning and replies to post comments',
-      active: profile?.allow_comment_analysis ?? true,
       icon: Zap,
     },
     {
       key: 'allow_vision',
       label: 'Vision image recognition',
       desc: 'AI understanding of user photo attachments',
-      active: profile?.allow_vision ?? true,
       icon: Eye,
     },
     {
       key: 'allow_image_gen',
       label: 'Image generation model',
       desc: 'Creating visual content and post planner assets',
-      active: profile?.allow_image_gen ?? true,
       icon: Sparkles,
     },
     {
       key: 'allow_embeddings',
       label: 'Vector embeddings & RAG',
       desc: 'Retrieving context from uploaded files',
-      active: profile?.allow_embeddings ?? true,
       icon: BookOpen,
     },
     {
       key: 'allow_agent',
       label: 'Autopilot agent tasks',
       desc: 'Executing complex background planning routines',
-      active: profile?.allow_agent ?? true,
       icon: Cpu,
     },
     {
       key: 'allow_summarization',
       label: 'Session summarization',
       desc: 'Automatic customer profile & inbox summaries',
-      active: profile?.allow_summarization ?? true,
       icon: FileText,
     },
-  ];
+  ].map(f => {
+    const isAdminLocked = profile ? profile[f.key as keyof typeof profile] === false : false;
+    const isUserDisabled = profile?.settings?.disabled_features?.includes(f.key) ?? false;
+    return {
+      ...f,
+      isAdminLocked,
+      isUserDisabled,
+      active: !isAdminLocked && !isUserDisabled,
+    };
+  });
 
   return (
     <div className="animate-slideUp" style={{ paddingBottom: '60px' }}>
@@ -893,6 +933,9 @@ export default function CreditsPage() {
                   return (
                     <div 
                       key={f.key} 
+                      onClick={() => !f.isAdminLocked && handleToggleFeature(f.key)}
+                      onMouseEnter={() => !f.isAdminLocked && setHoveredKey(f.key)}
+                      onMouseLeave={() => setHoveredKey(null)}
                       style={{ 
                         display: 'flex', 
                         alignItems: 'center', 
@@ -901,20 +944,21 @@ export default function CreditsPage() {
                         borderRadius: '8px',
                         border: '1px solid var(--border-primary)',
                         background: f.active 
-                          ? 'rgba(34, 197, 94, 0.03)' 
-                          : 'rgba(30, 30, 32, 0.4)',
+                          ? (hoveredKey === f.key ? 'rgba(34, 197, 94, 0.06)' : 'rgba(34, 197, 94, 0.03)')
+                          : (hoveredKey === f.key ? 'rgba(255, 255, 255, 0.06)' : 'rgba(30, 30, 32, 0.4)'),
                         borderColor: f.active 
-                          ? 'rgba(34, 197, 94, 0.25)' 
-                          : 'rgba(255, 255, 255, 0.05)',
+                          ? (hoveredKey === f.key ? 'rgba(34, 197, 94, 0.4)' : 'rgba(34, 197, 94, 0.25)')
+                          : (hoveredKey === f.key ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.05)'),
                         boxShadow: f.active 
                           ? '0 0 12px rgba(34, 197, 94, 0.05)' 
                           : 'none',
                         opacity: f.active ? 1 : 0.65,
                         transition: 'all 0.25s ease',
+                        cursor: f.isAdminLocked ? 'not-allowed' : 'pointer',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        {/* Premium custom checkbox (non-interactive display for user) */}
+                        {/* Premium custom checkbox */}
                         <div style={{
                           width: '18px',
                           height: '18px',
@@ -963,11 +1007,23 @@ export default function CreditsPage() {
                         borderRadius: '12px',
                         fontSize: '0.65rem',
                         fontWeight: 700,
-                        background: f.active ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.08)',
-                        color: f.active ? '#22c55e' : '#f87171',
-                        border: f.active ? '1px solid rgba(34, 197, 94, 0.2)' : '1px solid rgba(239, 68, 68, 0.15)',
+                        background: f.isAdminLocked 
+                          ? 'rgba(239, 68, 68, 0.08)' 
+                          : f.isUserDisabled 
+                            ? 'rgba(255, 255, 255, 0.05)' 
+                            : 'rgba(34, 197, 94, 0.1)',
+                        color: f.isAdminLocked 
+                          ? '#f87171' 
+                          : f.isUserDisabled 
+                            ? '#9ca3af' 
+                            : '#22c55e',
+                        border: f.isAdminLocked 
+                          ? '1px solid rgba(239, 68, 68, 0.15)' 
+                          : f.isUserDisabled 
+                            ? '1px solid rgba(255, 255, 255, 0.1)' 
+                            : '1px solid rgba(34, 197, 94, 0.2)',
                       }}>
-                        {f.active ? 'ACTIVE' : 'LOCKED'}
+                        {f.isAdminLocked ? 'LOCKED' : f.isUserDisabled ? 'DISABLED' : 'ACTIVE'}
                       </span>
                     </div>
                   );

@@ -4,7 +4,8 @@ compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
 routes = [
-  { pattern = "metachat.junoverseai.com", custom_domain = true }
+  { pattern = "metachat.junoverseai.com", custom_domain = true },
+  { pattern = "mybonusdm.junoverseai.com", custom_domain = true }
 ]
 
 # ──────────────────────────────────────────────

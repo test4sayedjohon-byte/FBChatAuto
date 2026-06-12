@@ -233,6 +233,38 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         last_executed_at TEXT,
         created_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS chat_rules (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        page_connection_id TEXT,
+        name TEXT,
+        keywords TEXT,
+        match_type TEXT DEFAULT 'contains',
+        case_sensitive INTEGER DEFAULT 0,
+        action_type TEXT,
+        reply_templates TEXT,
+        dm_flow_id TEXT,
+        media_id TEXT,
+        priority INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1,
+        match_count INTEGER DEFAULT 0,
+        reply_text_after TEXT,
+        ai_prompt_directive TEXT,
+        reply_mode TEXT DEFAULT 'random',
+        created_at TEXT,
+        updated_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_rule_logs (
+        id TEXT PRIMARY KEY,
+        rule_id TEXT,
+        session_id TEXT,
+        matched_keyword TEXT,
+        incoming_message TEXT,
+        action_taken TEXT,
+        created_at TEXT
+      );
     `;
 
     const statements = sql.split(';').map(s => s.trim()).filter(s => s);
@@ -371,6 +403,15 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
     } catch (_) {}
     try {
       await db.exec(`ALTER TABLE media ADD COLUMN backup_urls TEXT DEFAULT NULL;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE chat_rules ADD COLUMN reply_text_after TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE chat_rules ADD COLUMN ai_prompt_directive TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE chat_rules ADD COLUMN reply_mode TEXT DEFAULT 'random';`);
     } catch (_) {}
     d1Initialized = true;
     console.log('[D1] Database initialized successfully');
@@ -1674,5 +1715,154 @@ export async function incrementMediaAssetTimesSentFallback(
   await db.prepare(`UPDATE media SET times_sent = times_sent + 1 WHERE id = ?`)
     .bind(assetId)
     .run();
+}
+
+// ─── Chat Rules Fallbacks ────────────────────────────────────────────────────
+
+export async function getChatRulesFallback(
+  db: D1Database,
+  supabase: SupabaseClient,
+  pageId: string
+): Promise<any[]> {
+  await ensureD1Initialized(db);
+  try {
+    const { data, error } = await supabase
+      .from('chat_rules')
+      .select('*')
+      .eq('page_connection_id', pageId)
+      .eq('is_active', true)
+      .order('priority', { ascending: false });
+
+    if (error) throw error;
+    if (data) {
+      // Replicate to D1 cache
+      for (const rule of data) {
+        await db.prepare(
+          `INSERT OR REPLACE INTO chat_rules (
+            id, user_id, page_connection_id, name, keywords, match_type, case_sensitive, action_type, reply_templates, dm_flow_id, media_id, priority, is_active, match_count, reply_text_after, ai_prompt_directive, reply_mode, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            rule.id,
+            rule.user_id,
+            rule.page_connection_id,
+            rule.name,
+            JSON.stringify(rule.keywords),
+            rule.match_type,
+            rule.case_sensitive ? 1 : 0,
+            rule.action_type,
+            JSON.stringify(rule.reply_templates),
+            rule.dm_flow_id,
+            rule.media_id,
+            rule.priority,
+            rule.is_active ? 1 : 0,
+            rule.match_count,
+            rule.reply_text_after || null,
+            rule.ai_prompt_directive || null,
+            rule.reply_mode || 'random',
+            rule.created_at,
+            rule.updated_at
+          )
+          .run();
+      }
+      return data;
+    }
+  } catch (err: any) {
+    console.warn(`[Failover] Supabase chat rules query failed: ${err.message}. Trying D1 fallback.`);
+  }
+
+  // Fallback D1
+  const { results } = await db.prepare(
+    `SELECT * FROM chat_rules WHERE page_connection_id = ? AND is_active = 1 ORDER BY priority DESC`
+  )
+    .bind(pageId)
+    .all();
+
+  return results.map(r => ({
+    id: r.id,
+    user_id: r.user_id,
+    page_connection_id: r.page_connection_id,
+    name: r.name,
+    keywords: safeJsonParse(r.keywords) || [],
+    match_type: r.match_type,
+    case_sensitive: r.case_sensitive === 1,
+    action_type: r.action_type,
+    reply_templates: safeJsonParse(r.reply_templates) || [],
+    dm_flow_id: r.dm_flow_id,
+    media_id: r.media_id,
+    priority: r.priority,
+    is_active: r.is_active === 1,
+    match_count: r.match_count,
+    reply_text_after: r.reply_text_after,
+    ai_prompt_directive: r.ai_prompt_directive,
+    reply_mode: r.reply_mode,
+    created_at: r.created_at,
+    updated_at: r.updated_at
+  }));
+}
+
+export async function logRuleMatchFallback(
+  db: D1Database,
+  supabase: SupabaseClient,
+  logData: {
+    rule_id: string;
+    session_id: string;
+    matched_keyword: string;
+    incoming_message: string;
+    action_taken: string;
+  }
+): Promise<void> {
+  await ensureD1Initialized(db);
+  const now = new Date().toISOString();
+  const logId = crypto.randomUUID();
+
+  // Try Supabase first
+  try {
+    // Increment match count
+    const { data: currentRule } = await supabase
+      .from('chat_rules')
+      .select('match_count')
+      .eq('id', logData.rule_id)
+      .maybeSingle();
+    
+    if (currentRule) {
+      await supabase
+        .from('chat_rules')
+        .update({ match_count: (currentRule.match_count || 0) + 1 })
+        .eq('id', logData.rule_id);
+    }
+
+    // Insert log
+    await supabase.from('chat_rule_logs').insert({
+      id: logId,
+      ...logData
+    });
+  } catch (err: any) {
+    console.warn(`[Failover] Supabase chat rule log failed: ${err.message}. Logging to D1 only.`);
+  }
+
+  // D1 cache
+  try {
+    await db.prepare(`UPDATE chat_rules SET match_count = match_count + 1 WHERE id = ?`)
+      .bind(logData.rule_id)
+      .run();
+
+    await db.prepare(
+      `INSERT INTO chat_rule_logs (id, rule_id, session_id, matched_keyword, incoming_message, action_taken, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        logId,
+        logData.rule_id,
+        logData.session_id,
+        logData.matched_keyword,
+        logData.incoming_message,
+        logData.action_taken,
+        now
+      )
+      .run();
+  } catch (err: any) {
+    console.error(`[D1] Failed to log rule match to D1: ${err.message}`);
+  }
 }
 

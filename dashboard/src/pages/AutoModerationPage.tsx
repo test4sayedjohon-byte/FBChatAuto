@@ -22,6 +22,7 @@ interface Rule {
   dm_attachment_urls?: string[] | null;
   post_id?: string | null;
   dm_flow_id?: string | null;
+  must_be_follower?: boolean;
 }
 
 interface CommentLog {
@@ -77,7 +78,7 @@ export default function AutoModerationPage() {
   const [keywordsInput, setKeywordsInput] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]);
   const [sentimentTarget, setSentimentTarget] = useState('negative');
-  const [selectedActions, setSelectedActions] = useState<string[]>(['hide']);
+  const [selectedActions, setSelectedActions] = useState<string[]>(['like']);
   const [selectedAttachments, setSelectedAttachments] = useState<string[]>([]);
   const [selectedDmAttachments, setSelectedDmAttachments] = useState<string[]>([]);
   const [replyInput, setReplyInput] = useState('');
@@ -251,7 +252,7 @@ export default function AutoModerationPage() {
       setAiCustomCriteria('');
       setUseDynamicAiReply(false);
 
-      setSelectedActions(['hide']);
+      setSelectedActions(['like']);
       setSelectedAttachments([]);
       setSelectedDmAttachments([]);
       setApplyToPostType('global');
@@ -502,6 +503,16 @@ export default function AutoModerationPage() {
                       }}>
                         {rule.post_id ? 'Post-Specific' : 'Global'}
                       </span>
+                      {rule.must_be_follower && (
+                        <span className="badge" style={{ 
+                          background: 'rgba(236,72,153,0.1)', 
+                          color: '#ec4899', 
+                          fontSize: '9px',
+                          fontWeight: 'bold'
+                        }}>
+                          Must Be Follower (IG)
+                        </span>
+                      )}
                       <strong style={{ fontSize: '0.9rem' }}>
                         {rule.trigger_type === 'keywords' 
                           ? `Keywords: ${rule.keywords?.join(', ')}` 

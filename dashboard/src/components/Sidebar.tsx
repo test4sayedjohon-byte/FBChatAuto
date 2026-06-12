@@ -23,7 +23,8 @@ import {
   Paperclip,
   GitBranch,
   Eye,
-  Pencil
+  Pencil,
+  Sliders
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -170,14 +171,19 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
             <span className="sidebar-section-label" style={{ marginTop: '16px' }}>Automation</span>
 
-            <NavLink to="/planner" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+            <NavLink to="/calendar" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Calendar className="nav-icon" />
-              Content Planner
+              Content Calendar
             </NavLink>
 
             <NavLink to="/moderation" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Zap className="nav-icon" />
               Auto-Moderation
+            </NavLink>
+
+            <NavLink to="/keyword-rules" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Sliders className="nav-icon" />
+              Chat Keyword Rules
             </NavLink>
 
             <NavLink to="/flows" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>

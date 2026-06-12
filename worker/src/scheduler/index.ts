@@ -301,24 +301,28 @@ export async function cleanupOrphanedStorageAssets(supabase: SupabaseClient): Pr
       return;
     }
 
-    // Connect to the raw storage schema via a service client if possible, or skip checking objects table directly
-    const storageDbClient = (supabase as any).schema ? (supabase as any).schema('storage') : supabase;
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-
-    // 1. Fetch files in 'media_assets' bucket older than 7 days
-    const { data: objects, error: objErr } = await (storageDbClient as any)
-      .from('objects')
-      .select('name, created_at')
-      .eq('bucket_id', 'media_assets')
-      .lt('created_at', sevenDaysAgo)
-      .limit(100); // Process in batches of 100
+    // 1. Fetch files in 'media_assets' bucket using standard storage api
+    const { data: objects, error: objErr } = await supabase.storage
+      .from('media_assets')
+      .list('', {
+        limit: 100,
+        sortBy: { column: 'created_at', order: 'asc' }
+      });
 
     if (objErr || !objects || objects.length === 0) {
       if (objErr) console.error('[Storage Cleanup] Failed to fetch storage objects:', objErr.message);
       return;
     }
 
-    console.log(`[Storage Cleanup] Auditing ${objects.length} assets older than 7 days for orphans...`);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const oldObjects = objects.filter(obj => obj.created_at && new Date(obj.created_at) < sevenDaysAgo);
+
+    if (oldObjects.length === 0) {
+      console.log('[Storage Cleanup] No files older than 7 days found in bucket.');
+      return;
+    }
+
+    console.log(`[Storage Cleanup] Auditing ${oldObjects.length} assets older than 7 days for orphans...`);
 
     // 2. Fetch all active references from DB
     const { data: mediaAssets } = await supabase.from('media').select('file_url');
@@ -350,7 +354,7 @@ export async function cleanupOrphanedStorageAssets(supabase: SupabaseClient): Pr
 
     // 3. Identify and delete orphans
     const pathsToDelete: string[] = [];
-    for (const obj of objects) {
+    for (const obj of oldObjects) {
       const publicUrl = `${supabaseUrl}/storage/v1/object/public/media_assets/${obj.name}`;
       if (!activeUrls.has(publicUrl)) {
         pathsToDelete.push(obj.name);

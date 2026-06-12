@@ -3,6 +3,7 @@ import type { Env, WhatsAppWebhookEvent, WhatsAppMessage, WhatsAppValue, PageCon
 import { createSupabaseAdmin } from './supabase';
 import { handleChatMessage, triggerSlidingWindowSummarization } from './chat';
 import { handleFlowInteraction, handleFlowTextInput, startFlow, executeNode } from './chat/flow-engine';
+import { processChatKeywordRules } from './chat/keyword-rules';
 import {
   getWhatsAppConnectionFallback,
   getUserRecord,
@@ -396,6 +397,30 @@ async function handleWhatsAppMessage(
       return;
     }
 
+    let activeAiPromptDirective: string | undefined = undefined;
+
+    // ── Chat Keyword Rules Matcher ───────────────────────────────────────────
+    if (messageText) {
+      const ruleResult = await processChatKeywordRules(
+        env.DB,
+        supabase,
+        result.sessionId,
+        pageConnection,
+        senderPhoneNumber,
+        messageText,
+        'whatsapp'
+      );
+      if (ruleResult.matched) {
+        if (ruleResult.isAiPush) {
+          console.log(`[WhatsApp] 🎯 Chat Keyword Rule (AI Push) matched for session ${result.sessionId}. Injected directive.`);
+          activeAiPromptDirective = ruleResult.aiPromptDirective;
+        } else {
+          console.log(`[WhatsApp] 🎯 Chat Keyword Rule matched for session ${result.sessionId}. Bypassing AI response.`);
+          return;
+        }
+      }
+    }
+
     // Handle Unsupported Attachments (No Text, and not interactive or image)
     const isImage = message.type === 'image';
     const isSupportedType = message.type === 'text' || message.type === 'interactive' || isImage;
@@ -496,7 +521,8 @@ async function handleWhatsAppMessage(
       pageConnection,
       contentToStore,
       senderPhoneNumber,
-      env.DB
+      env.DB,
+      activeAiPromptDirective
     );
 
     console.log(

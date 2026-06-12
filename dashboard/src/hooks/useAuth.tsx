@@ -28,6 +28,7 @@ interface UserProfile {
   allow_agent?: boolean;
   allow_summarization?: boolean;
   allow_vision?: boolean;
+  settings?: any;
 }
 
 interface AuthContextType {
@@ -60,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
-    const { data } = await supabase.from('users').select('role, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, billing_cycle_anchor, sentiment_analysis_scope, sentiment_watched_post_ids, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision').eq('id', userId).single();
+    const { data } = await supabase.from('users').select('role, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, billing_cycle_anchor, sentiment_analysis_scope, sentiment_watched_post_ids, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision, settings').eq('id', userId).single();
     if (data) {
       setProfile({
         ...data,

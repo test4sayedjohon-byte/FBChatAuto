@@ -776,4 +776,118 @@ api.post('/comment/delete', async (c) => {
   }
 });
 
+api.get('/post-metrics/:postId', async (c) => {
+  try {
+    const postId = c.req.param('postId');
+    const authUser = c.get('authUser');
+    if (!authUser || !authUser.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // 1. Fetch the post to determine platform, page_connection_id, and verify ownership
+    const { data: post, error: postErr } = await supabase
+      .from('scheduled_posts')
+      .select('platform, page_connection_id, user_id')
+      .eq('meta_post_id', postId)
+      .maybeSingle();
+
+    if (postErr || !post) {
+      return c.json({ error: 'Post record not found in content database' }, 404);
+    }
+
+    if (post.user_id !== authUser.id) {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    // 2. Fetch the page connection to get the access token
+    const { data: pageConnection, error: connErr } = await supabase
+      .from('page_connections')
+      .select('access_token, instagram_account_id')
+      .eq('page_id', post.page_connection_id)
+      .eq('user_id', authUser.id) // Hardening to verify the connection is owned by this user
+      .single();
+
+    if (connErr || !pageConnection) {
+      return c.json({ error: 'Associated Page connection not found' }, 404);
+    }
+
+    let metrics = {
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      impressions: null as number | null,
+      reach: null as number | null,
+      engagement: null as number | null
+    };
+
+    if (post.platform === 'facebook') {
+      // Fetch Facebook Post metrics: likes, comments summary, shares count
+      const fbUrl = `https://graph.facebook.com/v25.0/${postId}?fields=shares,likes.summary(true).limit(0),comments.summary(true).limit(0)&access_token=${pageConnection.access_token}`;
+      const res = await fetch(fbUrl);
+      if (res.ok) {
+        const data = await res.json() as any;
+        metrics.shares = data.shares?.count || 0;
+        metrics.likes = data.likes?.summary?.total_count || 0;
+        metrics.comments = data.comments?.summary?.total_count || 0;
+      }
+
+      // Try fetching FB insights if available
+      try {
+        const insightsUrl = `https://graph.facebook.com/v25.0/${postId}/insights?metric=post_impressions,post_engaged_users&access_token=${pageConnection.access_token}`;
+        const insightsRes = await fetch(insightsUrl);
+        if (insightsRes.ok) {
+          const insightsData = await insightsRes.json() as any;
+          if (insightsData.data) {
+            insightsData.data.forEach((item: any) => {
+              if (item.name === 'post_impressions') {
+                metrics.impressions = item.values?.[0]?.value || 0;
+              } else if (item.name === 'post_engaged_users') {
+                metrics.reach = item.values?.[0]?.value || 0;
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch Facebook post insights:', e);
+      }
+    } else {
+      // Instagram Media metrics
+      const igUrl = `https://graph.facebook.com/v25.0/${postId}?fields=like_count,comments_count&access_token=${pageConnection.access_token}`;
+      const res = await fetch(igUrl);
+      if (res.ok) {
+        const data = await res.json() as any;
+        metrics.likes = data.like_count || 0;
+        metrics.comments = data.comments_count || 0;
+      }
+
+      // Try fetching IG insights if available
+      try {
+        const insightsUrl = `https://graph.facebook.com/v25.0/${postId}/insights?metric=impressions,reach,engagement&access_token=${pageConnection.access_token}`;
+        const insightsRes = await fetch(insightsUrl);
+        if (insightsRes.ok) {
+          const insightsData = await insightsRes.json() as any;
+          if (insightsData.data) {
+            insightsData.data.forEach((item: any) => {
+              if (item.name === 'impressions') {
+                metrics.impressions = item.values?.[0]?.value || 0;
+              } else if (item.name === 'reach') {
+                metrics.reach = item.values?.[0]?.value || 0;
+              } else if (item.name === 'engagement') {
+                metrics.engagement = item.values?.[0]?.value || 0;
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch Instagram media insights:', e);
+      }
+    }
+
+    return c.json({ metrics });
+  } catch (error: any) {
+    console.error('[Fetch Post Metrics Error]:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
 export default api;

@@ -463,6 +463,59 @@ const copilotTools: AITool[] = [
         required: ['name', 'nodes', 'edges']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_chat_rule',
+      description: 'Creates a new Chat Keyword Rule auto-reply trigger for a specific connected page.',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'The page_id (Primary ID) of the page connection.' },
+          name: { type: 'string', description: 'Friendly name for the rule.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Trigger keywords.' },
+          match_type: { type: 'string', enum: ['contains', 'exact'], description: 'Match type strategy.' },
+          case_sensitive: { type: 'boolean', description: 'Whether keyword matching should be case-sensitive.' },
+          action_type: { type: 'string', enum: ['text', 'flow', 'media', 'ai_push'], description: 'The action type.' },
+          reply_templates: { type: 'array', items: { type: 'string' }, description: 'Rotating reply messages for text action or text before media.' },
+          reply_text_after: { type: 'string', description: 'Optional text reply to send AFTER the media file (if action_type is media).' },
+          ai_prompt_directive: { type: 'string', description: 'Dynamic prompt directive to inject into the LLM system prompt (if action_type is ai_push).' },
+          dm_flow_id: { type: 'string', description: 'Optional UUID of the DM flow to trigger (if action_type is flow).' },
+          media_id: { type: 'string', description: 'Optional UUID of the Media Vault asset to attach (if action_type is media).' },
+          priority: { type: 'integer', description: 'Priority for matching (higher runs first).' }
+        },
+        required: ['page_connection_id', 'name', 'keywords', 'action_type']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_chat_rules',
+      description: 'Lists all Chat Keyword Rules defined for a specific connected page.',
+      parameters: {
+        type: 'object',
+        properties: {
+          page_connection_id: { type: 'string', description: 'The page_id of the connected page connection.' }
+        },
+        required: ['page_connection_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_chat_rule',
+      description: 'Deletes a Chat Keyword Rule by its UUID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          rule_id: { type: 'string', description: 'The UUID of the rule to delete.' }
+        },
+        required: ['rule_id']
+      }
+    }
   }
 ];
 
@@ -1596,6 +1649,59 @@ Ensure you output valid JSON only.`;
           if (delErr) throw delErr;
 
           resultStr = `Successfully deleted flow "${args.flow_id}".`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'create_chat_rule') {
+          const { error } = await supabase
+            .from('chat_rules')
+            .insert({
+              user_id: userId,
+              page_connection_id: args.page_connection_id,
+              name: args.name,
+              keywords: args.keywords,
+              match_type: args.match_type || 'contains',
+              case_sensitive: !!args.case_sensitive,
+              action_type: args.action_type,
+              reply_templates: args.reply_templates || [],
+              reply_text_after: args.reply_text_after || null,
+              ai_prompt_directive: args.ai_prompt_directive || null,
+              dm_flow_id: args.dm_flow_id || null,
+              media_id: args.media_id || null,
+              priority: args.priority || 0,
+              is_active: true
+            });
+
+          if (error) throw error;
+          resultStr = `Successfully created Chat Keyword Rule "${args.name}" for page ${args.page_connection_id}.`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'list_chat_rules') {
+          const { data: rules, error } = await supabase
+            .from('chat_rules')
+            .select('id, name, keywords, match_type, case_sensitive, action_type, priority, is_active')
+            .eq('page_connection_id', args.page_connection_id)
+            .eq('user_id', userId)
+            .order('priority', { ascending: false });
+
+          if (error) throw error;
+          if (!rules || rules.length === 0) {
+            resultStr = `No Chat Keyword Rules found for page connection ${args.page_connection_id}.`;
+          } else {
+            resultStr = `Here are the Chat Keyword Rules for page connection ${args.page_connection_id}:\n\n` +
+              `| ID | Name | Keywords | Match Type | Case Sensitive | Action Type | Priority | Active |\n` +
+              `| --- | --- | --- | --- | --- | --- | --- | --- |\n` +
+              rules.map(r => `| ${r.id} | ${r.name} | ${r.keywords?.join(', ')} | ${r.match_type} | ${r.case_sensitive} | ${r.action_type} | ${r.priority} | ${r.is_active} |`).join('\n');
+          }
+        }
+        else if (fnName === 'delete_chat_rule') {
+          const { error } = await supabase
+            .from('chat_rules')
+            .delete()
+            .eq('id', args.rule_id)
+            .eq('user_id', userId);
+
+          if (error) throw error;
+          resultStr = `Successfully deleted Chat Keyword Rule with ID "${args.rule_id}".`;
           databaseUpdated = true;
         }
         else if (fnName === 'update_system_prompt') {

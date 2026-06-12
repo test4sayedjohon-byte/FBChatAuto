@@ -66,7 +66,8 @@ export async function handleChatMessage(
   pageConnection: PageConnection,
   userMessage: string,
   senderId: string,
-  db?: D1Database
+  db?: D1Database,
+  aiPromptDirective?: string
 ): Promise<ChatHandlerResult> {
   const userId = pageConnection.user_id;
 
@@ -123,8 +124,34 @@ export async function handleChatMessage(
     }
   }
 
-  // Calculate cost based on presence of vision/image attachment
-  const cost = needsVision ? 5 : 1;
+  // Load user profile to check allow_vision and settings
+  let allowVision = true;
+  if (db) {
+    const userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord) {
+      const isUserDisabled = userRecord.settings && Array.isArray(userRecord.settings.disabled_features) 
+        ? userRecord.settings.disabled_features.includes('allow_vision') 
+        : false;
+      allowVision = (userRecord.allow_vision === 1 || userRecord.allow_vision === true) && !isUserDisabled;
+    }
+  } else {
+    try {
+      const { data: userRecord } = await supabase
+        .from('users')
+        .select('allow_vision, settings')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userRecord) {
+        const isUserDisabled = userRecord.settings && Array.isArray(userRecord.settings.disabled_features) 
+          ? userRecord.settings.disabled_features.includes('allow_vision') 
+          : false;
+        allowVision = !!userRecord.allow_vision && !isUserDisabled;
+      }
+    } catch (_) {}
+  }
+
+  // Calculate cost based on presence of vision/image attachment and whether vision is allowed
+  const cost = (needsVision && allowVision) ? 5 : 1;
 
   // Verify and deduct credits before invoking LLM
   const creditRes = await verifyAndDeductCredits(supabase, userId, cost);
@@ -216,6 +243,12 @@ export async function handleChatMessage(
       return humanVisionReplies[idx];
     };
 
+    if (!allowVision) {
+      const disabledMsg = getRandomVisionReply();
+      await storeMsg('assistant', disabledMsg, null, { provider: 'vision-disabled', model: 'canned', rag_used: false, credits_deducted: cost });
+      return { reply: disabledMsg, sessionId, ragUsed: false, provider: 'vision-disabled', model: 'canned' };
+    }
+
     const visionProvider = await getActiveVisionProvider(supabase, userId, db);
 
     const visionCannedReply = async (reason: string): Promise<ChatHandlerResult> => {
@@ -234,7 +267,7 @@ export async function handleChatMessage(
     // Try ONLY the vision provider — fail fast instead of cascading through text providers
     console.log(`[Chat] 👁️ Vision required. Using: ${visionProvider.providerName} (${visionProvider.modelChat})`);
     try {
-      const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, undefined, db);
+      const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, undefined, db, aiPromptDirective);
       const visionMessages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...history];
       const response = await callChatCompletion(visionProvider, visionMessages, { maxTokens: 1024 });
       const reply = response.choices?.[0]?.message?.content ?? "I'm sorry, I couldn't analyze the image. Please try again.";
@@ -323,7 +356,7 @@ export async function handleChatMessage(
   }
 
   // 4. Build the system prompt
-  const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, ragContext, db);
+  const systemPrompt = await buildSystemPrompt(supabase, pageConnection, senderId, ragContext, db, aiPromptDirective);
 
   // 5. Construct the final messages array
   const messages: ChatMessage[] = [

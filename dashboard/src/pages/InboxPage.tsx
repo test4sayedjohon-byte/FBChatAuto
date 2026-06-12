@@ -21,6 +21,95 @@ function timeAgo(dateString: string) {
   return `${days}d ago`;
 }
 
+function renderMarkdown(text: string | null) {
+  if (!text) return null;
+
+  // Split content into lines
+  const lines = text.split('\n');
+
+  return lines.map((line, idx) => {
+    let content = line.trim();
+    if (!content) {
+      return <div key={idx} style={{ height: '8px' }} />;
+    }
+
+    // Check if it is a list item
+    const isBullet = content.startsWith('* ') || content.startsWith('- ') || content.startsWith('• ');
+    if (isBullet) {
+      content = content.substring(2);
+    }
+
+    // Check for inline asterisk separators (e.g. * **Customer Name:** * **Product Interest:**)
+    // Sometimes the AI splits inline parameters with ` * ` on a single line.
+    // If it has multiple asterisks with spaces, we'll render it cleanly by splitting.
+    const parseInline = (str: string) => {
+      // Split by ** for bold
+      const boldParts = str.split('**');
+      return boldParts.map((bPart, bIdx) => {
+        const isBold = bIdx % 2 === 1;
+        
+        // Search for single * for italics
+        const italicParts = bPart.split('*');
+        const renderedItalics = italicParts.map((iPart, iIdx) => {
+          const isItalic = iIdx % 2 === 1;
+          if (isItalic) {
+            return <em key={iIdx}>{iPart}</em>;
+          }
+          return iPart;
+        });
+
+        if (isBold) {
+          return <strong key={bIdx}>{renderedItalics}</strong>;
+        }
+        return renderedItalics;
+      });
+    };
+
+    // Header detection
+    if (content.startsWith('#')) {
+      const level = content.match(/^#+/)?.[0].length || 1;
+      const headerText = content.replace(/^#+\s*/, '');
+      const headerStyle = {
+        margin: '12px 0 6px 0',
+        fontWeight: 600,
+        fontSize: level === 1 ? '1.3rem' : level === 2 ? '1.15rem' : '1rem'
+      };
+      if (level === 1) return <h3 key={idx} style={headerStyle}>{parseInline(headerText)}</h3>;
+      if (level === 2) return <h4 key={idx} style={headerStyle}>{parseInline(headerText)}</h4>;
+      return <h5 key={idx} style={headerStyle}>{parseInline(headerText)}</h5>;
+    }
+
+    if (isBullet) {
+      return (
+        <ul key={idx} style={{ margin: '4px 0 4px 12px', paddingLeft: '8px', listStyleType: 'disc' }}>
+          <li style={{ color: 'inherit' }}>{parseInline(content)}</li>
+        </ul>
+      );
+    }
+
+    // If a line has standard inline asterisks separators, replace them with a bullet-like layout or clean spaces
+    if (content.includes(' * ')) {
+      const parts = content.split(' * ');
+      return (
+        <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '4px', margin: '4px 0' }}>
+          {parts.map((part, pIdx) => (
+            <div key={pIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+              <span style={{ opacity: 0.5 }}>•</span>
+              <div>{parseInline(part.trim())}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <p key={idx} style={{ margin: '0 0 8px 0', minHeight: '1em', lineHeight: '1.5' }}>
+        {parseInline(content)}
+      </p>
+    );
+  });
+}
+
 type ChatSession = {
   id: string;
   page_id: string;
@@ -529,7 +618,7 @@ export default function InboxPage() {
                         color: isNote ? 'black' : 'white',
                         border: isUser || isHumanAgent ? '1px solid var(--border-primary)' : 'none'
                       }}>
-                        <div>{msg.content}</div>
+                        <div>{renderMarkdown(msg.content)}</div>
                         {msg.metadata?.attachment_urls && msg.metadata.attachment_urls.length > 0 && (
                           <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {msg.metadata.attachment_urls.map((url: string, index: number) => {
@@ -711,7 +800,7 @@ export default function InboxPage() {
                 </div>
               ) : (
                 <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '8px', lineHeight: '1.6' }}>
-                  {customerSummary}
+                  {renderMarkdown(customerSummary)}
                 </div>
               )}
             </div>

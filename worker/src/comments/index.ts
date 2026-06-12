@@ -15,6 +15,33 @@ import { getChatProviderChain, getEmbeddingProviderChain } from '../ai/provider'
 import { callChatCompletionWithFailover } from '../ai/client';
 import { searchDocuments } from '../rag/pipeline';
 
+/**
+ * Resolve raw Supabase URLs to branded media redirect links.
+ */
+async function resolveBrandedUrls(supabase: SupabaseClient, urls: string[]): Promise<string[]> {
+  if (!urls || urls.length === 0) return [];
+  const branded: string[] = [];
+  for (const url of urls) {
+    try {
+      if (url.includes('/media_assets/')) {
+        const { data } = await supabase
+          .from('media')
+          .select('id, name')
+          .eq('file_url', url)
+          .maybeSingle();
+        if (data) {
+          branded.push(`https://mybonusdm.junoverseai.com/media/${data.name || data.id}`);
+          continue;
+        }
+      }
+    } catch (e) {
+      console.warn('[Comments Webhook] Failed to resolve branded URL:', e);
+    }
+    branded.push(url);
+  }
+  return branded;
+}
+
 export async function processCommentChanges(
   changes: any[],
   pageConnectionId: string,
@@ -169,7 +196,9 @@ export async function processCommentChanges(
           postId,
           platform,
           mediaUrl,
-          env.DB
+          env.DB,
+          senderId,
+          pageConnection.access_token
         );
       } catch (err: any) {
         console.error(`[Comments Webhook] evaluateCommentRules failed: ${err.message}`);
@@ -330,11 +359,13 @@ export async function processCommentChanges(
           : (ruleResult.replyTemplate || 'Thanks for commenting!');
 
         if (matchedMediaAsset) {
-          replyText += `\n\nLink: ${matchedMediaAsset.file_url}`;
+          const brandedMediaUrl = `https://mybonusdm.junoverseai.com/media/${matchedMediaAsset.name || matchedMediaAsset.id}`;
+          replyText += `\n\nLink: ${brandedMediaUrl}`;
         }
 
         if (ruleResult.attachmentUrls && ruleResult.attachmentUrls.length > 0) {
-          replyText += '\n\nFiles:\n' + ruleResult.attachmentUrls.join('\n');
+          const brandedUrls = await resolveBrandedUrls(supabase, ruleResult.attachmentUrls);
+          replyText += '\n\nFiles:\n' + brandedUrls.join('\n');
         }
 
         try {
@@ -352,9 +383,13 @@ export async function processCommentChanges(
         const dmAttachs = ruleResult.dmAttachmentUrls || ruleResult.attachmentUrls;
         
         let primaryImageUrl: string | null = null;
+        let primaryFileUrl: string | null = null;
+        let primaryFileName: string | null = null;
         let remainingAttachs: string[] = [];
 
         if (dmAttachs && dmAttachs.length > 0) {
+          const resolvedUrls = await resolveBrandedUrls(supabase, dmAttachs);
+
           // Robust check if the first attachment is an image
           let isImg = false;
           try {
@@ -366,17 +401,77 @@ export async function processCommentChanges(
 
           if (isImg) {
             primaryImageUrl = dmAttachs[0];
-            remainingAttachs = dmAttachs.slice(1);
+            remainingAttachs = resolvedUrls.slice(1);
           } else {
-            remainingAttachs = dmAttachs;
+            // It's a document/PDF! Send it as a native attachment template
+            primaryFileUrl = resolvedUrls[0];
+            
+            // Try to resolve the actual saved friendly name first
+            if (dmAttachs[0].includes('/media_assets/')) {
+              try {
+                const { data } = await supabase
+                  .from('media')
+                  .select('friendly_name, name')
+                  .eq('file_url', dmAttachs[0])
+                  .maybeSingle();
+                if (data) {
+                  primaryFileName = data.friendly_name || data.name || null;
+                }
+              } catch (_) {}
+            }
+
+            // Get original extension from the URL
+            let origExt = '';
+            try {
+              const urlParts = new URL(dmAttachs[0]).pathname.split('/');
+              const lastPart = urlParts[urlParts.length - 1];
+              const extIndex = lastPart.lastIndexOf('.');
+              if (extIndex !== -1) {
+                origExt = lastPart.substring(extIndex).toLowerCase();
+              }
+            } catch (_) {}
+
+            if (primaryFileName) {
+              if (origExt && !primaryFileName.toLowerCase().endsWith(origExt)) {
+                primaryFileName += origExt;
+              }
+            } else {
+              // Fallback to filename in the URL
+              try {
+                const urlParts = new URL(dmAttachs[0]).pathname.split('/');
+                primaryFileName = urlParts[urlParts.length - 1];
+              } catch (_) {
+                primaryFileName = 'brochure.pdf';
+              }
+            }
+            remainingAttachs = resolvedUrls.slice(1);
           }
         }
 
         if (matchedMediaAsset) {
           if (matchedMediaAsset.file_type === 'image' && !primaryImageUrl) {
             primaryImageUrl = matchedMediaAsset.file_url;
+          } else if (matchedMediaAsset.file_type !== 'image' && !primaryFileUrl) {
+            primaryFileUrl = `https://mybonusdm.junoverseai.com/media/${matchedMediaAsset.name || matchedMediaAsset.id}`;
+            let assetName = matchedMediaAsset.friendly_name || matchedMediaAsset.name || 'document.pdf';
+            
+            let origExt = '';
+            try {
+              const urlParts = new URL(matchedMediaAsset.file_url).pathname.split('/');
+              const lastPart = urlParts[urlParts.length - 1];
+              const extIndex = lastPart.lastIndexOf('.');
+              if (extIndex !== -1) {
+                origExt = lastPart.substring(extIndex).toLowerCase();
+              }
+            } catch (_) {}
+
+            if (origExt && !assetName.toLowerCase().endsWith(origExt)) {
+              assetName += origExt;
+            }
+            primaryFileName = assetName;
           } else {
-            remainingAttachs.push(matchedMediaAsset.file_url);
+            const brandedMediaUrl = `https://mybonusdm.junoverseai.com/media/${matchedMediaAsset.name || matchedMediaAsset.id}`;
+            remainingAttachs.push(brandedMediaUrl);
           }
         }
 
@@ -388,8 +483,8 @@ export async function processCommentChanges(
           }
         }
 
-        // Fallback default message if both dmText and primaryImageUrl are completely empty
-        if (!dmText && !primaryImageUrl) {
+        // Fallback default message if both dmText, primaryImageUrl, and primaryFileUrl are completely empty
+        if (!dmText && !primaryImageUrl && !primaryFileUrl) {
           dmText = ruleResult.replyTemplate || 'Thanks for your comment! Here is the link you requested.';
         }
 
@@ -473,7 +568,9 @@ export async function processCommentChanges(
               pageConnection.access_token,
               commentId,
               dmText,
-              primaryImageUrl
+              primaryImageUrl,
+              primaryFileUrl,
+              primaryFileName
             );
             dmSentId = dmRes?.message_id || 'sent';
             actionsExecuted.push('dm_sent');

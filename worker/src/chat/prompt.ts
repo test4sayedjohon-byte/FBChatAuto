@@ -63,7 +63,8 @@ export async function buildSystemPrompt(
   pageConnection: PageConnection,
   senderId: string,
   ragContext?: string,
-  db?: D1Database
+  db?: D1Database,
+  aiPromptDirective?: string
 ): Promise<string> {
   const userId = pageConnection.user_id;
   const pageId = pageConnection.page_id;
@@ -269,6 +270,12 @@ export async function buildSystemPrompt(
   parts.push('## Formatting Policy (STRICT PLAIN TEXT)');
   parts.push('You MUST output your reply in STRICT PLAIN TEXT. Messenger and WhatsApp do not support markdown properly. DO NOT use markdown headers (e.g., #, ##, ###), bold markdown (e.g., **text**), bullet point lists (e.g., - item), numbered lists (e.g., 1. item), or horizontal rules (e.g., ---). Respond in natural human paragraphs and plain sentences, using emojis naturally if needed, as if writing a message on a phone.');
   parts.push('');
+
+  if (aiPromptDirective && aiPromptDirective.trim().length > 0) {
+    parts.push('## Dynamic Instruction for this message (FOLLOW STRICTLY)');
+    parts.push(aiPromptDirective.trim());
+    parts.push('');
+  }
 
   return parts.join('\n');
 }

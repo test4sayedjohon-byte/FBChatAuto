@@ -128,7 +128,7 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      {['/planner', '/moderation'].includes(location.pathname) ? (
+      {['/planner', '/calendar', '/moderation'].includes(location.pathname) ? (
         <ContentCopilotWidget />
       ) : location.pathname.startsWith('/flows') ? (
         <FlowCopilotWidget />

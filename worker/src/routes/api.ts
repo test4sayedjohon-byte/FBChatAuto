@@ -1094,7 +1094,8 @@ api.post('/agent/generate-bulk', async (c) => {
       publishStatus,
       themeText,
       postsPerDay,
-      postTimes
+      postTimes,
+      delayMinutes
     } = body;
     
     if (!pageConnectionId || !count || !startDate || !frequency) {
@@ -1123,7 +1124,8 @@ api.post('/agent/generate-bulk', async (c) => {
         publishStatus,
         themeText,
         postsPerDay: postsPerDay ? parseInt(postsPerDay) : 1,
-        postTimes: Array.isArray(postTimes) ? postTimes : []
+        postTimes: Array.isArray(postTimes) ? postTimes : [],
+        delayMinutes: delayMinutes ? parseInt(delayMinutes) : undefined
       },
       c.env.DB
     );
@@ -1142,35 +1144,74 @@ api.post('/agent/delete-bulk', async (c) => {
     const user = c.get('authUser');
     if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
 
-    const { pageConnectionId, startTime, endTime, platform } = await c.req.json();
-    
-    if (!startTime || !endTime) {
-      return c.json({ error: 'Missing required time range parameters' }, 400);
-    }
+    const { pageConnectionId, startTime, endTime, platform, postIds } = await c.req.json();
 
     const supabase = createSupabaseAdmin(c.env);
 
-    let query = supabase
-      .from('scheduled_posts')
-      .delete()
-      .eq('user_id', user.id)
-      .gte('scheduled_time', new Date(startTime).toISOString())
-      .lte('scheduled_time', new Date(endTime).toISOString());
+    let query = supabase.from('scheduled_posts').delete().eq('user_id', user.id);
 
-    if (pageConnectionId) {
-      query = query.eq('page_connection_id', pageConnectionId);
-    }
-    if (platform) {
-      query = query.eq('platform', platform);
+    if (postIds && Array.isArray(postIds) && postIds.length > 0) {
+      query = query.in('id', postIds);
+    } else {
+      if (!startTime || !endTime) {
+        return c.json({ error: 'Missing required time range parameters or postIds' }, 400);
+      }
+      query = query.gte('scheduled_time', new Date(startTime).toISOString())
+                   .lte('scheduled_time', new Date(endTime).toISOString());
+
+      if (pageConnectionId) {
+        query = query.eq('page_connection_id', pageConnectionId);
+      }
+      if (platform) {
+        query = query.eq('platform', platform);
+      }
     }
 
     const { error } = await query;
 
     if (error) throw error;
     
-    return c.json({ success: true, message: `Successfully deleted posts in the selected range.` });
+    return c.json({ success: true, message: `Successfully deleted posts.` });
   } catch (error: any) {
     console.error('[Bulk Delete Error]:', error);
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
+api.post('/agent/undo-bulk', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const { batchId } = await c.req.json();
+
+    if (!batchId) {
+      return c.json({ error: 'Missing required batchId parameter' }, 400);
+    }
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // 1. Delete scheduled posts associated with this batch
+    const { error: postsErr } = await supabase
+      .from('scheduled_posts')
+      .delete()
+      .eq('user_id', user.id)
+      .contains('ai_generated_options', { batch_id: batchId });
+
+    if (postsErr) throw postsErr;
+
+    // 2. Clear AI content memory for this batch
+    const { error: memoryErr } = await supabase
+      .from('ai_content_memory')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('batch_id', batchId);
+
+    if (memoryErr) throw memoryErr;
+
+    return c.json({ success: true, message: `Successfully undid batch generation.` });
+  } catch (error: any) {
+    console.error('[Bulk Undo Error]:', error);
     return c.json({ success: false, error: error.message }, 500);
   }
 });

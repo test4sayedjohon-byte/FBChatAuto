@@ -157,8 +157,8 @@ export default function FlowCopilotWidget() {
     const windowLeft = position.x + 28 - offset;
     const windowTop = position.y + 3;
     
-    let adjustedLeft = Math.max(10, Math.min(windowLeft, window.innerWidth - currentW - 10));
-    let adjustedTop = Math.max(10, Math.min(windowTop, window.innerHeight - currentH - 10));
+    const adjustedLeft = Math.max(10, Math.min(windowLeft, window.innerWidth - currentW - 10));
+    const adjustedTop = Math.max(10, Math.min(windowTop, window.innerHeight - currentH - 10));
     
     if (adjustedLeft !== windowLeft || adjustedTop !== windowTop) {
       const newX = adjustedLeft + offset - 28;

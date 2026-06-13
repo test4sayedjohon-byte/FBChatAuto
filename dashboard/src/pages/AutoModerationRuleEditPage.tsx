@@ -6,7 +6,7 @@ import { toast } from '../hooks/useToast';
 import { workerPost, WORKER_URL } from '../lib/workerApi';
 import { 
   ArrowLeft, Save, Sparkles, Plus, Trash2, X, Loader2, FileText, 
-  FolderOpen, HelpCircle, Settings, BookOpen 
+  FolderOpen, HelpCircle, Settings, BookOpen, BrainCircuit 
 } from 'lucide-react';
 
 interface Channel {
@@ -88,6 +88,9 @@ export default function AutoModerationRuleEditPage() {
   const [selectedPostId, setSelectedPostId] = useState('');
   const [aiFolderOverrides, setAiFolderOverrides] = useState<string[] | null>(null);
   const [mustBeFollower, setMustBeFollower] = useState(false);
+  const [feedToAi, setFeedToAi] = useState(true);
+  const [minLeadScore, setMinLeadScore] = useState<number | ''>('');
+  const [intentLevels, setIntentLevels] = useState<string[]>([]);
 
   // Document inline editor temporary text
   const [docTempContent, setDocTempContent] = useState('');
@@ -200,6 +203,9 @@ export default function AutoModerationRuleEditPage() {
           setSelectedPostId(rule.post_id || '');
           setAiFolderOverrides(rule.ai_folder_overrides || null);
           setMustBeFollower(rule.must_be_follower || false);
+          setFeedToAi(rule.feed_to_ai !== false);
+          setMinLeadScore(rule.min_lead_score !== undefined && rule.min_lead_score !== null ? rule.min_lead_score : '');
+          setIntentLevels(rule.intent_levels || []);
 
           if (rule.page_connection_id) {
             fetchPagePosts(rule.page_connection_id);
@@ -447,6 +453,9 @@ export default function AutoModerationRuleEditPage() {
         post_id: applyToPostType === 'specific' && selectedPostId ? selectedPostId : null,
         ai_folder_overrides: useDynamicAiReply ? aiFolderOverrides : null,
         must_be_follower: mustBeFollower,
+        feed_to_ai: feedToAi,
+        min_lead_score: minLeadScore === '' ? null : Number(minLeadScore),
+        intent_levels: intentLevels.length === 0 ? null : intentLevels,
       };
 
       if (ruleId) {
@@ -608,6 +617,63 @@ export default function AutoModerationRuleEditPage() {
             </select>
           </div>
 
+          {/* AI Intent Targeting (Optional) */}
+          <div style={{
+            background: 'var(--bg-secondary)',
+            border: '1.5px solid var(--border-primary)',
+            borderRadius: '10px',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            marginBottom: '20px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-primary)' }}>
+              <BrainCircuit size={14} />
+              AI Intent & Lead Targeting (Optional)
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.8rem' }}>Min Customer Lead Score</label>
+                <select 
+                  className="form-input"
+                  value={minLeadScore} 
+                  onChange={e => setMinLeadScore(e.target.value === '' ? '' : Number(e.target.value))} 
+                >
+                  <option value="">Any Score (Disabled)</option>
+                  {[1,2,3,4,5,6,7,8,9,10].map(s => (
+                    <option key={s} value={s}>Score &ge; {s}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.8rem' }}>Target Customer Intent Levels</label>
+                <div style={{ display: 'flex', gap: '14px', marginTop: '10px' }}>
+                  {['low', 'medium', 'high'].map(lvl => {
+                    const isChecked = intentLevels.includes(lvl);
+                    return (
+                      <label key={lvl} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--text-primary)', cursor: 'pointer', textTransform: 'capitalize' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={isChecked} 
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setIntentLevels(prev => [...prev, lvl]);
+                            } else {
+                              setIntentLevels(prev => prev.filter(x => x !== lvl));
+                            }
+                          }}
+                          style={{ accentColor: 'var(--accent-primary)' }}
+                        />
+                        {lvl}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+
           {triggerType === 'keywords' && (
             <div className="form-group animate-fadeIn">
               <label className="form-label">Trigger Keywords (Type and press comma or Enter)</label>
@@ -758,6 +824,21 @@ export default function AutoModerationRuleEditPage() {
             </label>
             <span className="form-hint" style={{ display: 'block', marginTop: '4px', marginLeft: '22px' }}>
               If enabled and the platform is Instagram, the automation only triggers if the user follows your page (requires the user to have messaged your page in the past). Facebook comments ignore this check and always trigger.
+            </span>
+          </div>
+
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>
+              <input 
+                type="checkbox" 
+                checked={feedToAi} 
+                onChange={e => setFeedToAi(e.target.checked)}
+                style={{ accentColor: 'var(--primary)' }}
+              />
+              Feed Trigger to AI Chatbot (RAG Knowledge)
+            </label>
+            <span className="form-hint" style={{ display: 'block', marginTop: '4px', marginLeft: '22px' }}>
+              Expose this moderation rule in the AI assistant's memory so it knows how comments are handled.
             </span>
           </div>
 

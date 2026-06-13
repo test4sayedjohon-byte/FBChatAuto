@@ -143,6 +143,8 @@ export default function ActivityMonitorPage() {
   const [customerSummary, setCustomerSummary] = useState<string | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [profiles, setProfiles] = useState<Record<string, any>>({});
+  const [selectedProfile, setSelectedProfile] = useState<any | null>(null);
 
   // Comment Reply Modal State
   const [replyingComment, setReplyingComment] = useState<CommentLog | null>(null);
@@ -178,6 +180,7 @@ export default function ActivityMonitorPage() {
     if (!user) return;
 
     fetchPages();
+    fetchCustomerProfiles();
     fetchSessions();
     fetchComments();
     fetchPosts();
@@ -245,6 +248,7 @@ export default function ActivityMonitorPage() {
       }
     } else {
       setCustomerSummary(null);
+      setSelectedProfile(null);
       setShowSummary(false);
     }
   }, [selectedSessionId]);
@@ -253,6 +257,26 @@ export default function ActivityMonitorPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  const fetchCustomerProfiles = async () => {
+    if (!user) return;
+    try {
+      const { data } = await supabase
+        .from('customer_profiles')
+        .select('*')
+        .eq('user_id', user.id);
+      
+      if (data) {
+        const profMap: Record<string, any> = {};
+        data.forEach(p => {
+          profMap[p.page_id + '_' + p.sender_id] = p;
+        });
+        setProfiles(profMap);
+      }
+    } catch (err) {
+      console.error('Error fetching customer profiles:', err);
+    }
+  };
 
   const fetchPages = async () => {
     if (!user) return;
@@ -344,11 +368,12 @@ export default function ActivityMonitorPage() {
     try {
       const { data } = await supabase
         .from('customer_profiles')
-        .select('summary')
+        .select('*')
         .eq('page_id', pageId)
         .eq('sender_id', senderId)
         .maybeSingle();
 
+      setSelectedProfile(data || null);
       if (data?.summary) {
         setCustomerSummary(data.summary);
       } else {
@@ -356,6 +381,7 @@ export default function ActivityMonitorPage() {
       }
     } catch (err) {
       console.error(err);
+      setSelectedProfile(null);
       setCustomerSummary('Failed to retrieve AI profile overview.');
     } finally {
       setLoadingSummary(false);
@@ -792,7 +818,24 @@ export default function ActivityMonitorPage() {
                                 </span>
                               )}
                               
-                              <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
+                              <div style={{ display: 'flex', gap: '4px', alignItems: 'center', marginLeft: 'auto' }}>
+                                {(() => {
+                                  const profileKey = session.page_id + '_' + session.sender_id;
+                                  const prof = profiles[profileKey];
+                                  if (!prof) return null;
+                                  return (
+                                    <span style={{ 
+                                      fontSize: '9px', 
+                                      background: prof.intent_level === 'high' ? 'rgba(34,197,94,0.15)' : prof.intent_level === 'medium' ? 'rgba(234,179,8,0.15)' : 'rgba(156,163,175,0.15)',
+                                      color: prof.intent_level === 'high' ? '#4ade80' : prof.intent_level === 'medium' ? '#facc15' : '#9ca3af',
+                                      padding: '1px 5px', 
+                                      borderRadius: '4px', 
+                                      fontWeight: 'bold' 
+                                    }}>
+                                      AI: {prof.lead_score || 5}/10
+                                    </span>
+                                  );
+                                })()}
                                 {session.bot_paused ? (
                                   <span style={{ fontSize: '9px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', padding: '1px 5px', borderRadius: '4px', fontWeight: 'bold' }}>HUMAN</span>
                                 ) : (
@@ -854,24 +897,85 @@ export default function ActivityMonitorPage() {
                   {/* AI Collapsible Profile Summary Panel */}
                   {showSummary && (
                     <div style={{ 
-                      background: 'rgba(249, 115, 22, 0.05)', 
-                      borderBottom: '1px solid rgba(249, 115, 22, 0.15)',
-                      padding: '12px 16px',
+                      background: 'var(--bg-tertiary)', 
+                      borderBottom: '1px solid var(--border-primary)',
+                      padding: '16px 20px',
                       fontSize: '0.8rem',
                       color: 'var(--text-secondary)',
-                      flexShrink: 0
+                      flexShrink: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '4px' }}>
-                        <Sparkles size={12} style={{ color: 'var(--accent-primary)' }} />
-                        Customer Profile Context
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                          <Sparkles size={12} style={{ color: 'var(--accent-primary)' }} />
+                          Customer Profile Context
+                        </div>
+                        {selectedProfile && (
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <span style={{
+                              fontSize: '10px',
+                              background: selectedProfile.intent_level === 'high' ? 'rgba(34,197,94,0.15)' : selectedProfile.intent_level === 'medium' ? 'rgba(234,179,8,0.15)' : 'rgba(156,163,175,0.15)',
+                              color: selectedProfile.intent_level === 'high' ? '#4ade80' : selectedProfile.intent_level === 'medium' ? '#facc15' : '#9ca3af',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontWeight: 'bold',
+                              textTransform: 'uppercase'
+                            }}>
+                              {selectedProfile.intent_level || 'unknown'} intent
+                            </span>
+                            <span style={{
+                              fontSize: '10px',
+                              background: 'rgba(59,130,246,0.15)',
+                              color: '#60a5fa',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontWeight: 'bold'
+                            }}>
+                              Score: {selectedProfile.lead_score || 5}/10
+                            </span>
+                          </div>
+                        )}
                       </div>
+
                       {loadingSummary ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', padding: '4px 0' }}>
                           <Loader2 className="spin" size={12} /> Retrieving profile summary...
                         </div>
                       ) : (
-                        <div style={{ lineHeight: '1.4', wordBreak: 'break-word', color: 'var(--text-primary)' }}>
-                          {customerSummary}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {selectedProfile?.metadata && (() => {
+                            const meta = typeof selectedProfile.metadata === 'string' 
+                              ? JSON.parse(selectedProfile.metadata) 
+                              : selectedProfile.metadata;
+                            return (
+                              <>
+                                {meta.short_description && (
+                                  <div style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+                                    "{meta.short_description}"
+                                  </div>
+                                )}
+                                {meta.key_inquiries && (
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                    <strong>Inquiries:</strong> {meta.key_inquiries}
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                          <div style={{ 
+                            lineHeight: '1.45', 
+                            wordBreak: 'break-word', 
+                            color: 'var(--text-primary)',
+                            background: 'var(--bg-primary)',
+                            padding: '10px 12px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border-primary)',
+                            marginTop: '4px'
+                          }}>
+                            {customerSummary}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1088,6 +1192,24 @@ export default function ActivityMonitorPage() {
 
                           {/* Action badges */}
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            {/* AI Customer Score badge */}
+                            {(() => {
+                              const profileKey = log.page_connection_id + '_' + log.sender_id;
+                              const prof = profiles[profileKey];
+                              if (!prof) return null;
+                              return (
+                                <span style={{ 
+                                  fontSize: '9px', 
+                                  background: prof.intent_level === 'high' ? 'rgba(34,197,94,0.15)' : prof.intent_level === 'medium' ? 'rgba(234,179,8,0.15)' : 'rgba(156,163,175,0.15)',
+                                  color: prof.intent_level === 'high' ? '#4ade80' : prof.intent_level === 'medium' ? '#facc15' : '#9ca3af',
+                                  padding: '1px 5px', 
+                                  borderRadius: '4px', 
+                                  fontWeight: 'bold' 
+                                }} title={`AI Customer Score: ${prof.lead_score}/10`}>
+                                  AI: {prof.lead_score || 5}/10
+                                </span>
+                              );
+                            })()}
                             {/* Sentiment badge — only shown when analysis is on or a result already exists */}
                             {analysisEnabled && log.ai_sentiment ? (
                               <span className={`badge ${
@@ -1483,6 +1605,82 @@ export default function ActivityMonitorPage() {
               }}>
                 <strong>{replyingComment.user_name}:</strong> {replyingComment.user_message}
               </div>
+              
+              {/* Commenter AI Profile Context */}
+              {(() => {
+                const profileKey = replyingComment.page_connection_id + '_' + replyingComment.sender_id;
+                const prof = profiles[profileKey];
+                if (!prof) return null;
+                const meta = typeof prof.metadata === 'string' ? JSON.parse(prof.metadata) : prof.metadata || {};
+                return (
+                  <div style={{
+                    background: 'rgba(59,130,246,0.05)',
+                    border: '1px solid rgba(59,130,246,0.15)',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    fontSize: '0.8rem',
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 'bold', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Sparkles size={12} style={{ color: 'var(--accent-primary)' }} />
+                        AI Customer Profile Context
+                      </span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <span style={{
+                          fontSize: '9px',
+                          background: prof.intent_level === 'high' ? 'rgba(34,197,94,0.15)' : prof.intent_level === 'medium' ? 'rgba(234,179,8,0.15)' : 'rgba(156,163,175,0.15)',
+                          color: prof.intent_level === 'high' ? '#4ade80' : prof.intent_level === 'medium' ? '#facc15' : '#9ca3af',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          fontWeight: 'bold',
+                          textTransform: 'uppercase'
+                        }}>
+                          {prof.intent_level || 'warm'}
+                        </span>
+                        <span style={{
+                          fontSize: '9px',
+                          background: 'rgba(59,130,246,0.15)',
+                          color: '#60a5fa',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          fontWeight: 'bold'
+                        }}>
+                          Score: {prof.lead_score ?? (prof.intent_level === 'high' ? 8 : prof.intent_level === 'low' ? 2 : 5)}/10
+                        </span>
+                      </div>
+                    </div>
+                    {meta.short_description && (
+                      <div style={{ fontStyle: 'italic', color: 'var(--text-primary)', fontWeight: '600' }}>
+                        "{meta.short_description}"
+                      </div>
+                    )}
+                    {meta.key_inquiries && (
+                      <div>
+                        <strong>Inquiries:</strong> {meta.key_inquiries}
+                      </div>
+                    )}
+                    {prof.summary && (
+                      <div style={{ 
+                        fontSize: '0.75rem', 
+                        lineHeight: '1.45', 
+                        color: 'var(--text-primary)', 
+                        background: 'var(--bg-primary)', 
+                        padding: '8px 10px', 
+                        borderRadius: '4px',
+                        border: '1px solid var(--border-primary)',
+                        maxHeight: '100px',
+                        overflowY: 'auto'
+                      }}>
+                        {prof.summary}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Write Reply:</label>

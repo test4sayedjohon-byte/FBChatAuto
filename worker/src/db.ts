@@ -39,6 +39,8 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         assigned_agent_provider_id TEXT,
         assigned_vision_provider_id TEXT,
         assigned_image_provider_id TEXT,
+        assigned_content_provider_id TEXT,
+        assigned_fallback_content_provider_id TEXT,
         monthly_credits_limit INTEGER DEFAULT 1000,
         extra_credits_balance INTEGER DEFAULT 0,
         credits_used_this_month INTEGER DEFAULT 0,
@@ -50,7 +52,8 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         allow_image_gen INTEGER DEFAULT 1,
         allow_embeddings INTEGER DEFAULT 1,
         allow_agent INTEGER DEFAULT 1,
-        allow_summarization INTEGER DEFAULT 1
+        allow_summarization INTEGER DEFAULT 1,
+        allow_content INTEGER DEFAULT 1
       );
 
       CREATE TABLE IF NOT EXISTS page_connections (
@@ -118,6 +121,7 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         is_active_agent INTEGER,
         is_active_vision INTEGER,
         is_active_image INTEGER,
+        is_active_content INTEGER,
         is_global INTEGER,
         fallback_chat_order INTEGER,
         fallback_agent_order INTEGER,
@@ -125,6 +129,7 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
         fallback_vision_order INTEGER,
         fallback_embedding_order INTEGER,
         fallback_image_order INTEGER,
+        fallback_content_order INTEGER,
         extra_headers TEXT,
         max_tokens INTEGER,
         temperature REAL,
@@ -342,6 +347,21 @@ export async function ensureD1Initialized(db: D1Database): Promise<void> {
       await db.exec(`ALTER TABLE users ADD COLUMN allow_summarization INTEGER DEFAULT 1;`);
     } catch (_) {}
     try {
+      await db.exec(`ALTER TABLE ai_providers ADD COLUMN is_active_content INTEGER DEFAULT 0;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE ai_providers ADD COLUMN fallback_content_order INTEGER DEFAULT NULL;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_content_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN assigned_fallback_content_provider_id TEXT;`);
+    } catch (_) {}
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN allow_content INTEGER DEFAULT 1;`);
+    } catch (_) {}
+    try {
       await db.exec(`ALTER TABLE page_connections ADD COLUMN instagram_account_id TEXT;`);
     } catch (_) {}
     try {
@@ -484,7 +504,7 @@ export async function getUserRecord(
   try {
     const { data, error } = await supabase
       .from('users')
-      .select('settings, is_suspended, is_paused, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, burn_rate_alert_sent_at, assigned_chat_provider_id, assigned_embedding_provider_id, assigned_summarization_provider_id, assigned_agent_provider_id, assigned_vision_provider_id, assigned_image_provider_id, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision')
+      .select('settings, is_suspended, is_paused, monthly_message_limit, extra_message_limit, allowed_channels, created_at, monthly_token_limit, strict_token_enforcement, billing_cycle_anchor, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, burn_rate_alert_sent_at, assigned_chat_provider_id, assigned_embedding_provider_id, assigned_summarization_provider_id, assigned_agent_provider_id, assigned_vision_provider_id, assigned_image_provider_id, assigned_content_provider_id, assigned_fallback_content_provider_id, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision, allow_content')
       .eq('id', userId)
       .maybeSingle();
 
@@ -501,9 +521,10 @@ export async function getUserRecord(
           assigned_chat_provider_id, assigned_embedding_provider_id,
           assigned_summarization_provider_id, assigned_agent_provider_id,
           assigned_vision_provider_id, assigned_image_provider_id,
-          allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision
+          assigned_content_provider_id, assigned_fallback_content_provider_id,
+          allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision, allow_content
         )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           userId,
@@ -530,12 +551,15 @@ export async function getUserRecord(
           data.assigned_agent_provider_id ?? null,
           data.assigned_vision_provider_id ?? null,
           data.assigned_image_provider_id ?? null,
+          data.assigned_content_provider_id ?? null,
+          data.assigned_fallback_content_provider_id ?? null,
           data.allow_chat ? 1 : 0,
           data.allow_image_gen ? 1 : 0,
           data.allow_embeddings ? 1 : 0,
           data.allow_agent ? 1 : 0,
           data.allow_summarization ? 1 : 0,
-          data.allow_vision ? 1 : 0
+          data.allow_vision ? 1 : 0,
+          data.allow_content ? 1 : 0
         )
           .run();
       return data;
@@ -578,12 +602,15 @@ export async function getUserRecord(
     assigned_agent_provider_id: row.assigned_agent_provider_id,
     assigned_vision_provider_id: row.assigned_vision_provider_id,
     assigned_image_provider_id: row.assigned_image_provider_id,
+    assigned_content_provider_id: row.assigned_content_provider_id,
+    assigned_fallback_content_provider_id: row.assigned_fallback_content_provider_id,
     allow_chat: row.allow_chat === 1,
     allow_image_gen: row.allow_image_gen === 1,
     allow_embeddings: row.allow_embeddings === 1,
     allow_agent: row.allow_agent === 1,
     allow_summarization: row.allow_summarization === 1,
-    allow_vision: row.allow_vision === 1
+    allow_vision: row.allow_vision === 1,
+    allow_content: row.allow_content === 1
   };
 }
 
@@ -813,6 +840,7 @@ export async function getAIProvidersFallback(
     is_active_agent: r.is_active_agent === 1,
     is_active_vision: r.is_active_vision === 1,
     is_active_image: r.is_active_image === 1,
+    is_active_content: r.is_active_content === 1,
     is_global: r.is_global === 1,
     fallback_chat_order: r.fallback_chat_order,
     fallback_agent_order: r.fallback_agent_order,
@@ -820,6 +848,7 @@ export async function getAIProvidersFallback(
     fallback_vision_order: r.fallback_vision_order,
     fallback_embedding_order: r.fallback_embedding_order,
     fallback_image_order: r.fallback_image_order,
+    fallback_content_order: r.fallback_content_order,
     extra_headers: safeJsonParse(r.extra_headers) || {},
     max_tokens: r.max_tokens,
     temperature: r.temperature,

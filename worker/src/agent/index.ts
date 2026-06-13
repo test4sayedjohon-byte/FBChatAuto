@@ -659,6 +659,34 @@ const flowCopilotTools: AITool[] = [
         required: ['flow_id']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_scheduled_posts_bulk',
+      description: 'Deletes upcoming scheduled posts in bulk within a specific time range (e.g. for a specific day or week).',
+      parameters: {
+        type: 'object',
+        properties: {
+          start_time: { type: 'string', description: 'ISO-8601 UTC timestamp indicating start of the deletion range.' },
+          end_time: { type: 'string', description: 'ISO-8601 UTC timestamp indicating end of the deletion range.' },
+          page_connection_id: { type: 'string', description: 'Optional page connection ID to only delete posts for a specific channel.' },
+          platform: { type: 'string', enum: ['facebook', 'instagram'], description: 'Optional platform name to filter deletion.' }
+        },
+        required: ['start_time', 'end_time']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_content_templates',
+      description: 'Lists the active content system prompts/templates defined by the super admin (e.g. Awareness, Education).',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    }
   }
 ];
 
@@ -1161,6 +1189,38 @@ The Knowledge Base can have multiple documents, each covering a different topic.
             resultStr = `Successfully deleted scheduled post ${args.id}.`;
             databaseUpdated = true;
           }
+        }
+        else if (fnName === 'delete_scheduled_posts_bulk') {
+          let query = supabase
+            .from('scheduled_posts')
+            .delete()
+            .eq('user_id', userId)
+            .gte('scheduled_time', new Date(args.start_time).toISOString())
+            .lte('scheduled_time', new Date(args.end_time).toISOString());
+
+          if (args.page_connection_id) {
+            query = query.eq('page_connection_id', args.page_connection_id);
+          }
+          if (args.platform) {
+            query = query.eq('platform', args.platform);
+          }
+
+          const { error } = await query;
+          if (error) throw error;
+          resultStr = `Successfully bulk deleted upcoming scheduled posts in the range ${args.start_time} to ${args.end_time}.`;
+          databaseUpdated = true;
+        }
+        else if (fnName === 'list_content_templates') {
+          const { data: prompts, error } = await supabase
+            .from('system_content_prompts')
+            .select('title, prompt_text, image_prompt_text, sequence_order')
+            .eq('is_active', true)
+            .order('sequence_order', { ascending: true });
+
+          if (error) throw error;
+          resultStr = prompts && prompts.length > 0 
+            ? JSON.stringify(prompts) 
+            : "No active system content prompts/templates are configured.";
         }
         else if (fnName === 'create_comment_rule') {
           const { data: conn } = await supabase

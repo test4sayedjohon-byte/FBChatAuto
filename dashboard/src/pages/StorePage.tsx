@@ -229,7 +229,7 @@ export default function StorePage() {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '24px', alignItems: 'start' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '16px' }}>
                   <span style={{ fontSize: '2.5rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
                     {totalAllowedCredits === -1 ? '∞' : creditsRemaining.toLocaleString()}
                   </span>
@@ -238,39 +238,26 @@ export default function StorePage() {
                   </span>
                 </div>
 
-                {/* Progress Bar */}
-                {totalAllowedCredits !== -1 && totalAllowedCredits > 0 && (
-                  <div style={{ marginBottom: '14px' }}>
-                    <div style={{ height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%',
-                        width: `${Math.min(100, (creditsUsedThisMonth / totalAllowedCredits) * 100)}%`,
-                        background: creditsUsedThisMonth >= totalAllowedCredits ? 'var(--error)' : 'linear-gradient(90deg, #eab308 0%, #facc15 100%)',
-                        borderRadius: '4px',
-                        transition: 'width 0.5s ease'
-                      }} />
-                    </div>
-                  </div>
-                )}
-
                 {/* Breakdown Details */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '12px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Used this cycle</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{creditsUsedThisMonth.toLocaleString()} credits</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Monthly limit</span>
+                    <span>Monthly allowance</span>
                     <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
                       {monthlyCreditsLimit === -1 ? 'Unlimited' : `${monthlyCreditsLimit.toLocaleString()} credits`}
                     </span>
                   </div>
-                  {extraCreditsBalance > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Extra credits (gifted/purchased)</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>+{extraCreditsBalance.toLocaleString()} credits</span>
-                    </div>
-                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Extra balance (gifted/purchased)</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>+{extraCreditsBalance.toLocaleString()} credits</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Used this cycle</span>
+                    <span style={{ color: 'var(--error)', fontWeight: '600' }}>-{creditsUsedThisMonth.toLocaleString()} credits</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border-primary)', paddingTop: '8px', marginTop: '4px' }}>
+                    <span style={{ fontWeight: '700', color: 'var(--text-primary)' }}>Total remaining balance</span>
+                    <span style={{ color: '#22c55e', fontWeight: '800' }}>{creditsRemaining.toLocaleString()} credits</span>
+                  </div>
                   {billingCycle && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                       <span>Billing period</span>

@@ -5,7 +5,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PageConnection } from '../types';
-import { getChatRulesFallback, logRuleMatchFallback, storeAssistantMessageFallback } from '../db';
+import { getChatRulesFallback, logRuleMatchFallback, storeAssistantMessageFallback, getCustomerProfileFallback } from '../db';
 import { sendFacebookReply, sendFacebookAttachment } from '../facebook';
 import { sendWhatsAppReply } from '../whatsapp';
 import { startFlow } from './flow-engine';
@@ -40,7 +40,47 @@ export async function processChatKeywordRules(
   let matchedRule: any = null;
   let matchedKeyword: string = "";
 
+  // Load customer profile to evaluate intent targeting constraints
+  let customerProfile: any = null;
+  try {
+    customerProfile = await getCustomerProfileFallback(db, supabase, pageConnection.page_id, senderId);
+  } catch (err) {
+    console.warn(`[Keyword Rules] Failed to load customer profile for targeting check:`, err);
+  }
+
   for (const rule of activeRules) {
+    // Intent targeting checks
+    if (rule.min_lead_score !== undefined && rule.min_lead_score !== null) {
+      const customerScore = customerProfile?.lead_score ?? 1; // Default to 1 if no profile
+      if (customerScore < rule.min_lead_score) {
+        console.log(`[Keyword Rules] Skipping rule "${rule.name}" due to lead_score constraint: customer score ${customerScore} < min required ${rule.min_lead_score}`);
+        continue;
+      }
+    }
+
+    if (rule.intent_levels && Array.isArray(rule.intent_levels) && rule.intent_levels.length > 0) {
+      const customerIntent = customerProfile?.intent_level || 'unknown';
+      if (!rule.intent_levels.includes(customerIntent)) {
+        console.log(`[Keyword Rules] Skipping rule "${rule.name}" due to intent_level constraint: customer intent "${customerIntent}" not in allowed list [${rule.intent_levels.join(', ')}]`);
+        continue;
+      }
+    } else if (rule.intent_levels && typeof rule.intent_levels === 'string') {
+      try {
+        let allowedIntents: string[] = [];
+        if (rule.intent_levels.startsWith('[')) {
+          allowedIntents = JSON.parse(rule.intent_levels);
+        } else {
+          allowedIntents = rule.intent_levels.split(',').map((s: string) => s.trim());
+        }
+        if (allowedIntents.length > 0) {
+          const customerIntent = customerProfile?.intent_level || 'unknown';
+          if (!allowedIntents.includes(customerIntent)) {
+            console.log(`[Keyword Rules] Skipping rule "${rule.name}" due to intent_level constraint: customer intent "${customerIntent}" not in allowed list [${allowedIntents.join(', ')}]`);
+            continue;
+          }
+        }
+      } catch (_) {}
+    }
     const matchType = rule.match_type || 'contains';
     const caseSensitive = !!rule.case_sensitive;
     const keywords = Array.isArray(rule.keywords) ? rule.keywords : [];

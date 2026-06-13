@@ -417,6 +417,35 @@ export default function CreditsPage() {
   const isExhausted = remaining === 0;
   const isLow = !isExhausted && creditsPct <= 20;
 
+  // Calculate usage breakdown trends (daily, weekly, monthly)
+  const usageBreakdown = useMemo(() => {
+    let daily = 0;
+    let weekly = 0;
+    
+    const now = new Date().getTime();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const sevenDaysMs = 7 * oneDayMs;
+
+    ledger.forEach(item => {
+      if (item.type === 'deduction') {
+        const itemTime = new Date(item.timestamp).getTime();
+        const diff = now - itemTime;
+        if (diff <= oneDayMs) {
+          daily += item.amount;
+        }
+        if (diff <= sevenDaysMs) {
+          weekly += item.amount;
+        }
+      }
+    });
+
+    return {
+      daily,
+      weekly,
+      monthly: creditsUsed,
+    };
+  }, [ledger, creditsUsed]);
+
   const ITEMS_PER_PAGE = 30;
 
   // Filtered Ledger list (category + date + platform + type + search)
@@ -518,6 +547,12 @@ export default function CreditsPage() {
       label: 'Session summarization',
       desc: 'Automatic customer profile & inbox summaries',
       icon: FileText,
+    },
+    {
+      key: 'allow_content',
+      label: 'Content creation',
+      desc: 'Generating text copy and scheduled calendar posts',
+      icon: Sparkles,
     },
   ].map(f => {
     const isAdminLocked = profile ? profile[f.key as keyof typeof profile] === false : false;
@@ -648,7 +683,7 @@ export default function CreditsPage() {
               </div>
               <h2 style={{ fontSize: '2.5rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'baseline', gap: '6px' }}>
                 {remaining.toLocaleString()}
-                <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>/ {totalLimit.toLocaleString()}</span>
+                <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>credits remaining</span>
               </h2>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '8px' }}>
                 Monthly base allowance of {profile?.monthly_credits_limit?.toLocaleString() ?? '1,000'} + {profile?.extra_credits_balance?.toLocaleString() ?? '0'} extras.
@@ -656,17 +691,7 @@ export default function CreditsPage() {
             </div>
             
             <div style={{ marginTop: '16px' }}>
-              <div style={{ width: '100%', height: '8px', background: 'var(--bg-tertiary)', borderRadius: '4px', overflow: 'hidden', marginBottom: '8px' }}>
-                <div style={{ 
-                  width: `${Math.min(100, creditsPct)}%`, 
-                  height: '100%', 
-                  background: isExhausted ? 'var(--error)' : isLow ? 'var(--warning)' : 'var(--success)', 
-                  borderRadius: '4px',
-                  transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)' 
-                }}></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                <span>{creditsPct.toFixed(0)}% Remaining</span>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={12} /> Resets on {resetDateString}
                 </span>
@@ -741,7 +766,7 @@ export default function CreditsPage() {
           </div>
 
           {/* Aggregate Consumption Card */}
-          <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: '180px' }}>
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: '220px' }}>
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600 }}>CYCLE CONSUMPTION</span>
@@ -754,6 +779,28 @@ export default function CreditsPage() {
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.4' }}>
                 Total credits spent on AI replies, automated comment moderations, vision processing, and image creations since your last rollover cycle.
               </p>
+
+              {/* Usage Breakdown Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginTop: '16px', borderTop: '1px solid var(--border-primary)', paddingTop: '16px', borderBottom: '1px solid var(--border-primary)', paddingBottom: '16px', marginBottom: '16px' }}>
+                <div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>Daily (24h)</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
+                    {usageBreakdown.daily.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-secondary)' }}>cr</span>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>Weekly (7d)</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
+                    {usageBreakdown.weekly.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-secondary)' }}>cr</span>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>Monthly (Cycle)</div>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#22c55e', marginTop: '4px' }}>
+                    {usageBreakdown.monthly.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-secondary)' }}>cr</span>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: '16px', fontSize: '0.75rem' }}>

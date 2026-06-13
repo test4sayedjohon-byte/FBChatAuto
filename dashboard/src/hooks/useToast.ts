@@ -77,7 +77,7 @@ export function useToast() {
     setToasts(prev => [{ id, message: finalMessage, type }, ...prev]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
-    }, 60000);
+    }, 3000);
   }, []);
 
   const removeToast = useCallback((id: number) => {

@@ -35,11 +35,10 @@ import {
   ChevronRight,
   Zap,
   Loader2,
-  Gift,
-  X,
   Pause,
   Play,
   Image,
+  PenTool,
 } from 'lucide-react';
 import type { SuperAdminUser, UserRole, InspectData } from './super-admin/types';
 import { getPresetChatModels } from '../lib/models';
@@ -149,7 +148,10 @@ export default function UserWorkspacePage() {
   const [monthlyCreditsLimitInput, setMonthlyCreditsLimitInput] = useState(0);
   const [extraCreditsBalanceInput, setExtraCreditsBalanceInput] = useState(0);
   const [creditsUsedThisMonthInput, setCreditsUsedThisMonthInput] = useState(0);
+  const [remainingCreditsInput, setRemainingCreditsInput] = useState(0);
   const [dailyCreditSpendCapInput, setDailyCreditSpendCapInput] = useState(0);
+  const [balanceMode, setBalanceMode] = useState<'custom' | 'add' | 'deduct' | 'reset'>('custom');
+  const [adjustmentAmount, setAdjustmentAmount] = useState<number>(0);
 
   // Missing user settings states
   const [allowCommentAnalysisInput, setAllowCommentAnalysisInput] = useState(true);
@@ -163,6 +165,7 @@ export default function UserWorkspacePage() {
   const [allowAgentInput, setAllowAgentInput] = useState(true);
   const [allowSummarizationInput, setAllowSummarizationInput] = useState(true);
   const [allowVisionInput, setAllowVisionInput] = useState(true);
+  const [allowContentInput, setAllowContentInput] = useState(true);
 
   // Database mirror for selective input synchronization
   const [dbValues, setDbValues] = useState<any>(null);
@@ -200,75 +203,6 @@ export default function UserWorkspacePage() {
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
-
-  // Gifting state
-  const [giftModalOpen, setGiftModalOpen] = useState(false);
-
-  const [giftAmount, setGiftAmount] = useState<number>(100);
-  const [giftCurrency, setGiftCurrency] = useState<'USD' | 'BTT'>('USD');
-  const [giftPrice, setGiftPrice] = useState<string>('5.00');
-  const [giftNotes, setGiftNotes] = useState<string>('');
-  const [giftSubmitting, setGiftSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!giftAmount) {
-      setGiftPrice('0');
-      return;
-    }
-    let calculated = 0;
-    if (giftCurrency === 'USD') {
-      calculated = giftAmount * 0.05;
-      setGiftPrice(calculated.toFixed(2));
-    } else {
-      calculated = giftAmount * 6.5;
-      setGiftPrice(Math.round(calculated).toString());
-    }
-  }, [giftAmount, giftCurrency]);
-
-  async function handleGiftSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!userData) return;
-    setGiftSubmitting(true);
-    try {
-      const finalPrice = parseFloat(giftPrice) || 0;
-
-      // Determine the message_addon string based on gift type
-      const addonString = `Gift: +${giftAmount} Credits`;
-
-      // Insert into purchases — the DB trigger (trg_purchase_approval) handles
-      // updating all user limits automatically. No direct users update needed here.
-      const { error: purchaseErr } = await supabase
-        .from('purchases')
-        .insert({
-          user_id: userData.id,
-          channels_count: 0,
-          message_addon: addonString,
-          currency: giftCurrency,
-          total_amount: finalPrice,
-          payment_method: 'gift',
-          status: 'approved',
-          admin_notes: giftNotes || 'Gifted by administrator'
-        });
-
-      if (purchaseErr) throw purchaseErr;
-
-      // Log to admin audit log
-      await supabase.from('admin_audit_log').insert({
-        admin_id: currentUser?.id,
-        target_id: userData.id,
-        action: 'gift_credits',
-        details: { amount: giftAmount, price: finalPrice, currency: giftCurrency, notes: giftNotes }
-      });
-
-      toast.success(`Successfully gifted ${addonString.replace('Gift: ', '')}!`);
-      setGiftModalOpen(false);
-      loadUserData(); // Refresh current page stats
-    } catch (err: any) {
-      toast.error("Gifting failed: " + err.message);
-    } finally {
-      setGiftSubmitting(false);
-    }
-  }
 
   // ── Load user data ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -323,6 +257,7 @@ export default function UserWorkspacePage() {
       setMonthlyCreditsLimitInput(userData.monthly_credits_limit ?? 0);
       setExtraCreditsBalanceInput(userData.extra_credits_balance ?? 0);
       setCreditsUsedThisMonthInput(userData.credits_used_this_month ?? 0);
+      setRemainingCreditsInput((userData.monthly_credits_limit ?? 0) + (userData.extra_credits_balance ?? 0) - (userData.credits_used_this_month ?? 0));
       setDailyCreditSpendCapInput(userData.daily_credit_spend_cap ?? 0);
       setAllowCommentAnalysisInput(userData.allow_comment_analysis ?? true);
       setSentimentAnalysisScopeInput(userData.sentiment_analysis_scope ?? 'global');
@@ -335,6 +270,7 @@ export default function UserWorkspacePage() {
       setAllowAgentInput(userData.allow_agent ?? true);
       setAllowSummarizationInput(userData.allow_summarization ?? true);
       setAllowVisionInput(userData.allow_vision ?? true);
+      setAllowContentInput(userData.allow_content ?? true);
       return;
     }
 
@@ -359,6 +295,15 @@ export default function UserWorkspacePage() {
         setMonthlyCreditsLimitInput(userData.monthly_credits_limit ?? 0);
       }
     }
+    
+    const oldRemaining = (dbValues.monthly_credits_limit ?? 0) + (dbValues.extra_credits_balance ?? 0) - (dbValues.credits_used_this_month ?? 0);
+    const newRemaining = (userData.monthly_credits_limit ?? 0) + (userData.extra_credits_balance ?? 0) - (userData.credits_used_this_month ?? 0);
+    if (newRemaining !== oldRemaining) {
+      if (remainingCreditsInput === oldRemaining) {
+        setRemainingCreditsInput(newRemaining);
+      }
+    }
+
     if (userData.extra_credits_balance !== dbValues.extra_credits_balance) {
       if (extraCreditsBalanceInput === (dbValues.extra_credits_balance ?? 0)) {
         setExtraCreditsBalanceInput(userData.extra_credits_balance ?? 0);
@@ -432,6 +377,11 @@ export default function UserWorkspacePage() {
         setAllowVisionInput(userData.allow_vision ?? true);
       }
     }
+    if (userData.allow_content !== dbValues.allow_content) {
+      if (allowContentInput === (dbValues.allow_content ?? true)) {
+        setAllowContentInput(userData.allow_content ?? true);
+      }
+    }
 
     // Keep the sync tracker in sync
     setDbValues(userData);
@@ -500,6 +450,7 @@ export default function UserWorkspacePage() {
       setMonthlyCreditsLimitInput(user.monthly_credits_limit ?? 0);
       setExtraCreditsBalanceInput(user.extra_credits_balance ?? 0);
       setCreditsUsedThisMonthInput(user.credits_used_this_month ?? 0);
+      setRemainingCreditsInput((user.monthly_credits_limit ?? 0) + (user.extra_credits_balance ?? 0) - (user.credits_used_this_month ?? 0));
       setDailyCreditSpendCapInput(user.daily_credit_spend_cap ?? 0);
 
       // Initialize missing settings
@@ -514,6 +465,7 @@ export default function UserWorkspacePage() {
       setAllowAgentInput(user.allow_agent ?? true);
       setAllowSummarizationInput(user.allow_summarization ?? true);
       setAllowVisionInput(user.allow_vision ?? true);
+      setAllowContentInput(user.allow_content ?? true);
 
       // Initialize dbValues to avoid initial triggers overwriting inputs
       setDbValues(user);
@@ -532,9 +484,26 @@ export default function UserWorkspacePage() {
     if (!userData) return;
     setSavingQuota(true);
     try {
-      // 1. Calculate extra credits balance difference to log adjustment
-      const oldExtraBalance = userData.extra_credits_balance ?? 0;
-      const diffExtraBalance = extraCreditsBalanceInput - oldExtraBalance;
+      // 1. Calculate target remaining balance, new extra balance, and monthly credits used based on selected balance mode
+      let newExtraBalance = userData.extra_credits_balance ?? 0;
+      let targetUsed = userData.credits_used_this_month ?? 0; // use latest database usage directly to avoid race conditions!
+
+      if (balanceMode === 'reset') {
+        newExtraBalance = 0;
+        targetUsed = 0;
+      } else if (balanceMode === 'add') {
+        newExtraBalance = (userData.extra_credits_balance ?? 0) + adjustmentAmount;
+      } else if (balanceMode === 'deduct') {
+        newExtraBalance = Math.max(0, (userData.extra_credits_balance ?? 0) - adjustmentAmount);
+      } else if (balanceMode === 'custom') {
+        // In custom mode, remainingCreditsInput is the target remaining balance.
+        // Formula: remaining = monthly + extra - used
+        // => extra = remaining - monthly + used
+        newExtraBalance = Math.max(0, remainingCreditsInput - (userData.monthly_credits_limit ?? 0) + (userData.credits_used_this_month ?? 0));
+      }
+
+      const diffExtraBalance = newExtraBalance - (userData.extra_credits_balance ?? 0);
+      const targetRemaining = (userData.monthly_credits_limit ?? 0) + newExtraBalance - targetUsed;
 
       // 2. Parse watched post IDs array
       const watchedPostIds = sentimentWatchedPostIdsInput
@@ -543,15 +512,12 @@ export default function UserWorkspacePage() {
         .filter(Boolean);
 
       // 3. Save directly to user record
-      // Note: we do NOT save extra_credits_balance here if diffExtraBalance is non-zero,
-      // because the approved purchase record trigger will automatically handle it!
-      // But if diffExtraBalance is zero, we keep it as is.
       const updatePayload: any = {
         monthly_token_limit: monthlyLimitInput,
         strict_token_enforcement: strictEnforcementInput,
         allowed_channels: allowedChannelsInput,
         monthly_credits_limit: monthlyCreditsLimitInput,
-        credits_used_this_month: creditsUsedThisMonthInput,
+        credits_used_this_month: targetUsed,
         daily_credit_spend_cap: dailyCreditSpendCapInput,
         allow_comment_analysis: allowCommentAnalysisInput,
         sentiment_analysis_scope: sentimentAnalysisScopeInput,
@@ -564,10 +530,11 @@ export default function UserWorkspacePage() {
         allow_agent: allowAgentInput,
         allow_summarization: allowSummarizationInput,
         allow_vision: allowVisionInput,
+        allow_content: allowContentInput,
       };
 
       if (diffExtraBalance === 0) {
-        updatePayload.extra_credits_balance = extraCreditsBalanceInput;
+        updatePayload.extra_credits_balance = userData.extra_credits_balance ?? 0;
       }
 
       const { error } = await supabase.from('users').update(updatePayload).eq('id', userData.id);
@@ -601,7 +568,7 @@ export default function UserWorkspacePage() {
           strict_token_enforcement: strictEnforcementInput, 
           allowed_channels: allowedChannelsInput,
           monthly_credits_limit: monthlyCreditsLimitInput,
-          extra_credits_balance: extraCreditsBalanceInput,
+          extra_credits_balance: newExtraBalance,
           daily_credit_spend_cap: dailyCreditSpendCapInput,
           allow_comment_analysis: allowCommentAnalysisInput,
           sentiment_analysis_scope: sentimentAnalysisScopeInput,
@@ -614,6 +581,7 @@ export default function UserWorkspacePage() {
           allow_agent: allowAgentInput,
           allow_summarization: allowSummarizationInput,
           allow_vision: allowVisionInput,
+          allow_content: allowContentInput,
           credit_adjustment: diffExtraBalance,
         },
       });
@@ -621,11 +589,17 @@ export default function UserWorkspacePage() {
       const updatedUser = {
         ...(userData || {}),
         ...updatePayload,
-        extra_credits_balance: diffExtraBalance === 0 ? extraCreditsBalanceInput : ((userData as any).extra_credits_balance ?? 0) + diffExtraBalance,
+        extra_credits_balance: newExtraBalance,
       } as SuperAdminUser;
 
       setUserData(updatedUser);
       setDbValues(updatedUser);
+      
+      // Update inputs to new values
+      setRemainingCreditsInput(targetRemaining);
+      setCreditsUsedThisMonthInput(targetUsed);
+      setBalanceMode('custom');
+      setAdjustmentAmount(0);
       
       toast.success('Quota and settings updated');
     } catch (err: any) {
@@ -634,18 +608,6 @@ export default function UserWorkspacePage() {
       setSavingQuota(false);
     }
   }
-
-  // Handle remaining credits live change by dynamically adjusting extra_credits_balance and credits_used_this_month
-  const handleRemainingCreditsChange = (newVal: number) => {
-    const val = Math.max(0, isNaN(newVal) ? 0 : Math.round(newVal));
-    if (val >= monthlyCreditsLimitInput) {
-      setCreditsUsedThisMonthInput(0);
-      setExtraCreditsBalanceInput(val - monthlyCreditsLimitInput);
-    } else {
-      setExtraCreditsBalanceInput(0);
-      setCreditsUsedThisMonthInput(monthlyCreditsLimitInput - val);
-    }
-  };
 
   // ── Plan change ───────────────────────────────────────────────────────────
   async function changePlan(plan: string) {
@@ -777,6 +739,9 @@ export default function UserWorkspacePage() {
     { key: 'assigned_vision_provider_id', label: 'Vision', desc: 'Processes image and multimodal queries' },
     { key: 'assigned_comment_analysis_provider_id', label: 'Comment Analysis', desc: 'Processes auto-moderation and comment analysis' },
     { key: 'assigned_image_provider_id', label: 'Image Generation', desc: 'Processes text-to-image requests' },
+    { key: 'assigned_fallback_image_provider_id', label: 'Fallback Image', desc: 'Backup model for image generation' },
+    { key: 'assigned_content_provider_id', label: 'Content Creation', desc: 'Generates text content for scheduled posts and campaigns' },
+    { key: 'assigned_fallback_content_provider_id', label: 'Fallback Content', desc: 'Backup model for content generation' },
   ] as const;
 
   async function assignProvider(field: string, providerId: string) {
@@ -1116,90 +1081,211 @@ export default function UserWorkspacePage() {
 
             <div style={{ marginTop: '20px', marginBottom: '12px', borderTop: '1px solid var(--border-primary)', paddingTop: '16px' }}>
               <div style={{ ...styles.cardTitle, marginBottom: '12px' }}><Zap size={16} /> Credit Quotas</div>
+
+              {/* Visual Formula Widget */}
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.01)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                padding: '16px',
+                marginBottom: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px'
+              }}>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>CREDIT FORMULA BREAKDOWN</div>
+                
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '4px'
+                }}>
+                  {/* Monthly Limit */}
+                  <div style={{ textAlign: 'center', flex: 1, minWidth: '85px', padding: '10px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', border: '1px solid var(--border-primary)' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Monthly Plan</div>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{monthlyCreditsLimitInput.toLocaleString()}</div>
+                  </div>
+
+                  <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>+</span>
+
+                  {/* Extras */}
+                  <div style={{ textAlign: 'center', flex: 1, minWidth: '85px', padding: '10px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', border: '1px solid var(--border-primary)' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Extra Balance</div>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent-primary)' }}>{extraCreditsBalanceInput.toLocaleString()}</div>
+                  </div>
+
+                  <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>-</span>
+
+                  {/* Used */}
+                  <div style={{ textAlign: 'center', flex: 1, minWidth: '85px', padding: '10px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', border: '1px solid var(--border-primary)' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Spent Cycle</div>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--error)' }}>{creditsUsedThisMonthInput.toLocaleString()}</div>
+                  </div>
+
+                  <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>=</span>
+
+                  {/* Remaining */}
+                  <div style={{
+                    textAlign: 'center',
+                    flex: 1.2,
+                    minWidth: '105px',
+                    padding: '10px',
+                    background: 'rgba(34, 197, 94, 0.05)',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(34, 197, 94, 0.25)',
+                    boxShadow: '0 0 12px rgba(34, 197, 94, 0.05)'
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#22c55e', fontWeight: 600, marginBottom: '4px' }}>Credits Left</div>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#22c55e' }}>
+                      {((monthlyCreditsLimitInput + extraCreditsBalanceInput) - creditsUsedThisMonthInput).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
               
-              <div style={styles.formRow}>
-                <label style={styles.formLabel}>Monthly Credits Limit</label>
-                <input className="form-input" type="number" value={monthlyCreditsLimitInput} onChange={e => setMonthlyCreditsLimitInput(Number(e.target.value))} />
-              </div>
-
-              <div style={styles.formRow}>
-                <label style={styles.formLabel}>Extra Credits Balance</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input 
-                    className="form-input" 
-                    type="number" 
-                    value={extraCreditsBalanceInput} 
-                    onChange={e => setExtraCreditsBalanceInput(Number(e.target.value))} 
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={() => {
-                      setGiftAmount(100);
-                      setGiftCurrency('USD');
-                      setGiftNotes('Gifted credits');
-                      setGiftModalOpen(true);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontSize: '11px',
-                      padding: '4px 10px',
-                      height: '38px',
-                      borderRadius: '6px',
-                      borderColor: 'var(--accent-primary)',
-                      color: 'var(--accent-primary)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <Gift size={12} /> Gift Credits 🎁
-                  </button>
+              <div style={{ ...styles.formRow, marginBottom: '20px' }}>
+                <label style={styles.formLabel}>Current Credits Balance Adjustment</label>
+                
+                {/* 4-mode selector pill */}
+                <div style={{
+                  display: 'flex',
+                  background: 'var(--bg-tertiary)',
+                  borderRadius: '8px',
+                  padding: '3px',
+                  gap: '4px',
+                  marginBottom: '12px',
+                  border: '1px solid var(--border-primary)'
+                }}>
+                  {(['reset', 'add', 'deduct', 'custom'] as const).map(mode => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        setBalanceMode(mode);
+                        setAdjustmentAmount(0);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: balanceMode === mode ? 600 : 500,
+                        cursor: 'pointer',
+                        background: balanceMode === mode ? 'var(--accent-primary)' : 'transparent',
+                        color: balanceMode === mode ? '#ffffff' : 'var(--text-secondary)',
+                        transition: 'all 0.2s ease',
+                        textTransform: 'capitalize'
+                      }}
+                    >
+                      {mode}
+                    </button>
+                  ))}
                 </div>
+
+                {/* Mode dependent input & preview */}
+                {balanceMode === 'reset' && (
+                  <div style={{ padding: '12px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.15)', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>Reset to System Default</div>
+                    Will reset the user's credits as if they just purchased the default plan. 
+                    This clears the Extra Balance to 0 and resets Spent Cycle to 0.
+                    <div style={{ marginTop: '8px', fontSize: '13px', color: 'var(--text-primary)' }}>
+                      New Balance Preview: <strong style={{ color: '#22c55e' }}>{monthlyCreditsLimitInput.toLocaleString()} cr</strong>
+                    </div>
+                  </div>
+                )}
+
+                {balanceMode === 'add' && (
+                  <div>
+                    <input 
+                      className="form-input" 
+                      type="number" 
+                      placeholder="Enter amount of credits to add"
+                      value={adjustmentAmount || ''} 
+                      onChange={e => setAdjustmentAmount(Math.max(0, Number(e.target.value)))} 
+                      style={{ borderColor: 'var(--accent-primary)', fontWeight: 'bold' }}
+                    />
+                    <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      New Balance Preview: <strong style={{ color: '#22c55e' }}>{((monthlyCreditsLimitInput + extraCreditsBalanceInput - creditsUsedThisMonthInput) + adjustmentAmount).toLocaleString()} cr</strong>
+                    </div>
+                  </div>
+                )}
+
+                {balanceMode === 'deduct' && (
+                  <div>
+                    <input 
+                      className="form-input" 
+                      type="number" 
+                      placeholder="Enter amount of credits to deduct"
+                      value={adjustmentAmount || ''} 
+                      onChange={e => setAdjustmentAmount(Math.max(0, Number(e.target.value)))} 
+                      style={{ borderColor: 'var(--error)', fontWeight: 'bold' }}
+                    />
+                    <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      New Balance Preview: <strong style={{ color: '#22c55e' }}>{Math.max(0, (monthlyCreditsLimitInput + extraCreditsBalanceInput - creditsUsedThisMonthInput) - adjustmentAmount).toLocaleString()} cr</strong>
+                    </div>
+                  </div>
+                )}
+
+                {balanceMode === 'custom' && (
+                  <div>
+                    <input 
+                      className="form-input" 
+                      type="number" 
+                      placeholder="Enter exact remaining balance"
+                      value={remainingCreditsInput} 
+                      onChange={e => setRemainingCreditsInput(Math.max(0, Number(e.target.value)))} 
+                      style={{ borderColor: 'var(--accent-primary)', fontWeight: 'bold' }}
+                    />
+                    <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      New Balance Preview: <strong style={{ color: '#22c55e' }}>{remainingCreditsInput.toLocaleString()} cr</strong>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div style={styles.formRow}>
-                <label style={styles.formLabel}>Credits Used This Month</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input 
-                    className="form-input" 
-                    type="number" 
-                    value={creditsUsedThisMonthInput} 
-                    onChange={e => setCreditsUsedThisMonthInput(Number(e.target.value))} 
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={() => setCreditsUsedThisMonthInput(0)}
-                    style={{
-                      fontSize: '11px',
-                      padding: '4px 10px',
-                      height: '38px',
-                      borderRadius: '6px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Reset to 0
-                  </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px', padding: '16px', background: 'rgba(255,255,255,0.01)', borderRadius: '10px', border: '1px solid var(--border-primary)' }}>
+                {/* Extra Balance Row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>Extra Balance (Gifted/Purchased)</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Permanent non-expiring addon balance.</div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent-primary)' }}>
+                      {extraCreditsBalanceInput.toLocaleString()} cr
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              <div style={styles.formRow}>
-                <label style={styles.formLabel}>
-                  Current Credit Balance (Remaining)
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginLeft: '6px', fontWeight: 'normal' }}>
-                    (Calculated: Limit + Extra - Used)
-                  </span>
-                </label>
-                <input 
-                  className="form-input" 
-                  type="number" 
-                  value={(monthlyCreditsLimitInput + extraCreditsBalanceInput) - creditsUsedThisMonthInput} 
-                  onChange={e => handleRemainingCreditsChange(Number(e.target.value))}
-                  style={{ borderColor: 'var(--accent-primary)', fontWeight: 'bold' }}
-                />
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-primary)', margin: 0 }} />
+
+                {/* Used Usage Row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>Credits Used This Month</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Resets to 0 at next cycle rollover.</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginRight: '8px' }}>
+                      {creditsUsedThisMonthInput.toLocaleString()} cr
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      onClick={() => {
+                        const diff = creditsUsedThisMonthInput;
+                        setCreditsUsedThisMonthInput(0);
+                        setRemainingCreditsInput(prev => prev + diff);
+                      }}
+                      style={{ fontSize: '11px', padding: '4px 10px', height: '32px', borderRadius: '6px', cursor: 'pointer' }}
+                    >
+                      Reset to 0
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div style={styles.formRow}>
@@ -1421,6 +1507,36 @@ export default function UserWorkspacePage() {
                     </div>
                     <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                       Session & profile auto summaries.
+                    </span>
+                  </label>
+
+                  {/* Content Creation */}
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: allowContentInput ? 'rgba(99, 102, 241, 0.04)' : 'var(--bg-tertiary)',
+                    borderColor: allowContentInput ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+                        <PenTool size={16} style={{ color: allowContentInput ? 'var(--accent-primary)' : 'var(--text-secondary)' }} />
+                        Content Creation
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={allowContentInput} 
+                        onChange={e => setAllowContentInput(e.target.checked)} 
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Generate text copy and scheduled posts.
                     </span>
                   </label>
                 </div>
@@ -1867,148 +1983,6 @@ export default function UserWorkspacePage() {
         typeToConfirm={confirmDialog.typeToConfirm}
       />
 
-      {/* 🎁 Gift Queries Modal */}
-      {giftModalOpen && userData && (
-        <div 
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '16px'
-          }}
-          onClick={() => setGiftModalOpen(false)}
-        >
-          <form 
-            onSubmit={handleGiftSubmit}
-            className="card animate-scaleUp" 
-            style={{
-              maxWidth: '480px', 
-              width: '100%', 
-              background: 'var(--bg-primary, #111315)', 
-              border: '1px solid var(--border-primary, rgba(255,255,255,0.08))',
-              borderRadius: '16px',
-              padding: '24px',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.65)'
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                <Gift size={20} style={{ color: 'var(--accent-primary, #6366f1)' }} />
-                Gift Extra AI Credits
-              </h3>
-              <button 
-                type="button"
-                className="btn-ghost btn-icon" 
-                onClick={() => setGiftModalOpen(false)}
-                style={{ padding: '4px', borderRadius: '50%', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: 1.4 }}>
-              Add extra AI Credits for <strong>{userData.display_name || userData.email}</strong>. The price will be calculated automatically but you can modify it as needed.
-            </p>
-
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>
-                  Credits Amount
-                </label>
-                <input 
-                  type="number"
-                  min="1"
-                  required
-                  className="form-input"
-                  value={giftAmount}
-                  onChange={e => setGiftAmount(Math.max(1, parseInt(e.target.value) || 0))}
-                  style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '90px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>Currency</label>
-                <select 
-                  className="form-input"
-                  value={giftCurrency}
-                  onChange={e => setGiftCurrency(e.target.value as 'USD' | 'BTT')}
-                  style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
-                >
-                  <option value="USD">USD ($)</option>
-                  <option value="BTT">BTT</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: '16px' }}>
-              <label className="form-label" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px', display: 'block' }}>
-                Total Price (Calculated automatically, but editable)
-              </label>
-              <div style={{ position: 'relative' }}>
-                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', fontWeight: 'bold', fontSize: '14px', color: 'var(--text-secondary)' }}>
-                  {giftCurrency === 'BTT' ? 'BTT' : '$'}
-                </span>
-                <input 
-                  type="text"
-                  required
-                  className="form-input"
-                  value={giftPrice}
-                  onChange={e => setGiftPrice(e.target.value)}
-                  style={{ paddingLeft: giftCurrency === 'BTT' ? '45px' : '28px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
-                />
-              </div>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: '24px' }}>
-              <label className="form-label" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px', display: 'block' }}>
-                Admin Notes / Log Reason
-              </label>
-              <textarea
-                className="form-input"
-                placeholder="e.g. Loyalty gift, refund compensation"
-                rows={2}
-                value={giftNotes}
-                onChange={e => setGiftNotes(e.target.value)}
-                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', padding: '10px', resize: 'none' }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button 
-                type="button" 
-                className="btn btn-secondary" 
-                onClick={() => setGiftModalOpen(false)}
-                disabled={giftSubmitting}
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="btn btn-primary"
-                disabled={giftSubmitting}
-                style={{ 
-                  background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))', 
-                  border: 'none',
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}
-              >
-                {giftSubmitting ? 'Processing...' : 'Confirm Gift 🎁'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </div>
   );
 }

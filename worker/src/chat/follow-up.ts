@@ -78,10 +78,36 @@ export async function runFollowUpSweeper(
         continue;
       }
 
-      console.log(`[Follow-up Sweeper] Found ${sessions.length} candidate sessions for page ${pageConn.page_name || pageConn.page_id}`);
+      // 2b. Filter sessions by lead score if page connection specifies a min score > 1
+      let sessionsToFollowUp = sessions;
+      const minScore = pageConn.follow_up_min_score || 1;
+      if (minScore > 1) {
+        const senderIds = sessions.map(s => s.sender_id);
+        const { data: profiles, error: profErr } = await supabase
+          .from('customer_profiles')
+          .select('sender_id, lead_score')
+          .eq('page_id', pageConn.page_id)
+          .in('sender_id', senderIds);
+
+        if (!profErr && profiles) {
+          const profileMap = new Map(profiles.map(p => [p.sender_id, p.lead_score ?? 5]));
+          sessionsToFollowUp = sessions.filter(s => {
+            const score = profileMap.get(s.sender_id);
+            // Default new sessions without a profile to score 5 (warm)
+            const actualScore = score !== undefined ? score : 5;
+            return actualScore >= minScore;
+          });
+        }
+      }
+
+      if (sessionsToFollowUp.length === 0) {
+        continue;
+      }
+
+      console.log(`[Follow-up Sweeper] Found ${sessionsToFollowUp.length} candidate sessions for page ${pageConn.page_name || pageConn.page_id} (filtered from ${sessions.length})`);
 
       // We process sessions serially or up to a safety limit (to prevent Cloudflare timeout)
-      const sessionsToProcess = sessions.slice(0, 3);
+      const sessionsToProcess = sessionsToFollowUp.slice(0, 3);
 
       for (const session of sessionsToProcess) {
         try {

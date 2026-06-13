@@ -13,6 +13,10 @@ export interface Tenant {
   assigned_summarization_provider_id: string | null;
   assigned_agent_provider_id: string | null;
   assigned_vision_provider_id: string | null;
+  assigned_content_provider_id?: string | null;
+  assigned_fallback_content_provider_id?: string | null;
+  assigned_fallback_image_provider_id?: string | null;
+  allow_content?: boolean;
   pageCount: number;
   documentCount: number;
   fieldCount: number;
@@ -58,6 +62,10 @@ export interface SuperAdminUser {
   assigned_summarization_provider_id: string | null;
   assigned_agent_provider_id: string | null;
   assigned_vision_provider_id: string | null;
+  assigned_content_provider_id?: string | null;
+  assigned_fallback_content_provider_id?: string | null;
+  assigned_fallback_image_provider_id?: string | null;
+  allow_content?: boolean;
   assigned_comment_analysis_provider_id?: string | null;
   pageCount: number;
   documentCount: number;

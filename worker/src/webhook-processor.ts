@@ -253,31 +253,40 @@ async function handleMessagingEvent(
         senderId
       );
       if (handled) {
-        return;
-      }
-
-      // If handleFlowInteraction returned false, check if a flow is still active
-      const activeFlow = await env.DB.prepare(
-        `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
-      )
-        .bind(result.sessionId)
-        .first<{ current_node_id: string }>();
-
-      if (activeFlow && activeFlow.current_node_id) {
-        console.log(`[Webhook] Mismatched button interaction. Flow still active at node ${activeFlow.current_node_id}. Resending options.`);
-        await executeNode(
-          env.DB,
-          supabase,
-          result.sessionId,
-          activeFlow.current_node_id,
-          pageConnection,
-          senderId
-        );
+        const stillActive = await env.DB.prepare(
+          `SELECT 1 FROM chat_session_flows WHERE session_id = ?`
+        )
+          .bind(result.sessionId)
+          .first();
+        if (stillActive) {
+          return;
+        }
+        console.log(`[Webhook] Flow completed during interaction. Falling through to AI chatbot to reply.`);
       } else {
-        console.log(`[Webhook] Expired button interaction. No active flow session.`);
+        // If handleFlowInteraction returned false, check if a flow is still active
+        const activeFlow = await env.DB.prepare(
+          `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
+        )
+          .bind(result.sessionId)
+          .first<{ current_node_id: string }>();
+
+        if (activeFlow && activeFlow.current_node_id) {
+          console.log(`[Webhook] Mismatched button interaction. Flow still active at node ${activeFlow.current_node_id}. Resending options.`);
+          await executeNode(
+            env.DB,
+            supabase,
+            result.sessionId,
+            activeFlow.current_node_id,
+            pageConnection,
+            senderId
+          );
+          return;
+        } else {
+          console.log(`[Webhook] Expired button interaction. No active flow session.`);
+          return;
+        }
       }
     }
-    return; // Block raw payload from reaching AI chatbot under any circumstances
   }
 
   if (event.postback) {
@@ -346,6 +355,30 @@ async function handleMessagingEvent(
   if (!result) return;
   console.log(`[Webhook] ✅ Message stored in session: ${result.sessionId}`);
 
+  let activeAiPromptDirective: string | undefined = undefined;
+
+  // ── Chat Keyword Rules Matcher (Preemption) ──────────────────────────────
+  if (messageText) {
+    const ruleResult = await processChatKeywordRules(
+      env.DB,
+      supabase,
+      result.sessionId,
+      pageConnection,
+      senderId,
+      messageText,
+      'facebook'
+    );
+    if (ruleResult.matched) {
+      if (!ruleResult.isAiPush) {
+        console.log(`[Webhook] 🎯 Keyword rule matched — bypassing flow check and AI for session ${result.sessionId}.`);
+        return;
+      } else {
+        console.log(`[Webhook] 🎯 Chat Keyword Rule (AI Push) matched for session ${result.sessionId}. Injected directive.`);
+        activeAiPromptDirective = ruleResult.aiPromptDirective;
+      }
+    }
+  }
+
   // Check if there is an active flow session
   const activeFlow = await env.DB.prepare(
     `SELECT current_node_id FROM chat_session_flows WHERE session_id = ?`
@@ -354,18 +387,28 @@ async function handleMessagingEvent(
     .first<{ current_node_id: string }>();
 
   if (activeFlow) {
+    let handledText = false;
     if (messageText) {
-      const handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderId);
+      handledText = await handleFlowTextInput(env.DB, supabase, result.sessionId, messageText, pageConnection, senderId);
+    }
+    
+    const stillActive = await env.DB.prepare(
+      `SELECT 1 FROM chat_session_flows WHERE session_id = ?`
+    )
+      .bind(result.sessionId)
+      .first();
+
+    if (stillActive) {
       if (handledText) {
         console.log(`[Flow Engine] Flow advanced via text input`);
         return;
       }
+      console.log(`[Flow Engine] Mismatched/unsupported input during flow. Resending options for node ${activeFlow.current_node_id}`);
+      await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id, pageConnection, senderId);
+      return;
+    } else {
+      console.log(`[Flow Engine] Flow completed. Falling through to AI chatbot to reply.`);
     }
-    
-    // Either messageText is empty (user sent attachment/media) or handleFlowTextInput returned false (mismatched text)
-    console.log(`[Flow Engine] Mismatched/unsupported input during flow. Resending options for node ${activeFlow.current_node_id}`);
-    await executeNode(env.DB, supabase, result.sessionId, activeFlow.current_node_id, pageConnection, senderId);
-    return;
   }
 
   // ── Download & store images as base64 ─────────────────────────────────
@@ -423,30 +466,6 @@ async function handleMessagingEvent(
     if (latestMsgRole && latestMsgRole !== 'user') {
       console.log(`[Webhook] ⏭️ Session ${result.sessionId} was already responded to (latest role: ${latestMsgRole}). Skipping.`);
       return;
-    }
-
-    let activeAiPromptDirective: string | undefined = undefined;
-
-    // ── Chat Keyword Rules Matcher ───────────────────────────────────────────
-    if (messageText) {
-      const ruleResult = await processChatKeywordRules(
-        env.DB,
-        supabase,
-        result.sessionId,
-        pageConnection,
-        senderId,
-        messageText,
-        'facebook'
-      );
-      if (ruleResult.matched) {
-        if (ruleResult.isAiPush) {
-          console.log(`[Webhook] 🎯 Chat Keyword Rule (AI Push) matched for session ${result.sessionId}. Injected directive.`);
-          activeAiPromptDirective = ruleResult.aiPromptDirective;
-        } else {
-          console.log(`[Webhook] 🎯 Chat Keyword Rule matched for session ${result.sessionId}. Bypassing AI response.`);
-          return;
-        }
-      }
     }
 
     if (!messageText && hasOnlyUnsupported) {

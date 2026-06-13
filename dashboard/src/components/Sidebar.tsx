@@ -24,7 +24,9 @@ import {
   GitBranch,
   Eye,
   Pencil,
-  Sliders
+  Sliders,
+  Sparkles,
+  Megaphone
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -109,20 +111,14 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                 <Pencil size={12} className="card-zap-icon" />
               </div>
             </div>
-            <div className="credit-card-balance">
+            <div className="credit-card-balance" style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
               <span className="balance-val">{remainingCredits.toLocaleString()}</span>
-              <span className="balance-lbl">/ {totalCredits.toLocaleString()} left</span>
-            </div>
-            <div className="credit-card-progress-bg">
-              <div 
-                className="credit-card-progress-bar" 
-                style={{ width: `${Math.min(100, pct)}%` }}
-              />
+              <span className="balance-lbl" style={{ textTransform: 'lowercase', fontSize: '0.75rem', opacity: 0.8 }}>credits left</span>
             </div>
             {remainingCredits === 0 && (
               <span className="credit-card-status-label exhausted">⚠️ Quota Exhausted</span>
             )}
-            {remainingCredits > 0 && pct <= 20 && (
+            {remainingCredits > 0 && (remainingCredits / (profile.monthly_credits_limit || 1000)) <= 0.2 && (
               <span className="credit-card-status-label low">⚠️ Low Balance</span>
             )}
           </div>
@@ -144,9 +140,19 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               Inbox
             </NavLink>
 
+            <NavLink to="/contacts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Users className="nav-icon" />
+              Leads & Contacts
+            </NavLink>
+
             <NavLink to="/activity" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Eye className="nav-icon" />
               Activity Monitor
+            </NavLink>
+
+            <NavLink to="/broadcasts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Megaphone className="nav-icon" />
+              Bulk Campaigns
             </NavLink>
 
             <NavLink to="/sandbox" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
@@ -218,10 +224,16 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             </NavLink>
             {/* AI Providers — super_admin only (global provider management) */}
             {isSuperAdmin && (
-              <NavLink to="/providers" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
-                <Cpu className="nav-icon" />
-                AI Providers
-              </NavLink>
+              <>
+                <NavLink to="/providers" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+                  <Cpu className="nav-icon" />
+                  AI Providers
+                </NavLink>
+                <NavLink to="/super-prompts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+                  <Sparkles className="nav-icon" />
+                  Content Prompts
+                </NavLink>
+              </>
             )}
             <NavLink to="/super-purchases" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
               <div style={{display:'flex', alignItems:'center'}}>

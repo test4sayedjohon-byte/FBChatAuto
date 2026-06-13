@@ -1,7 +1,8 @@
-import { useState, useEffect, createContext, useContext, type ReactNode } from 'react';
+import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { toast } from './useToast';
 
 type UserRole = 'user' | 'admin' | 'super_admin';
 
@@ -28,6 +29,7 @@ interface UserProfile {
   allow_agent?: boolean;
   allow_summarization?: boolean;
   allow_vision?: boolean;
+  allow_content?: boolean;
   settings?: any;
 }
 
@@ -52,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const processedPurchasesRef = useRef<Set<string>>(new Set());
 
   const isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin';
   const isSuperAdmin = profile?.role === 'super_admin';
@@ -61,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
-    const { data } = await supabase.from('users').select('role, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, billing_cycle_anchor, sentiment_analysis_scope, sentiment_watched_post_ids, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision, settings').eq('id', userId).single();
+    const { data } = await supabase.from('users').select('role, plan, is_suspended, monthly_token_limit, strict_token_enforcement, allowed_channels, monthly_credits_limit, extra_credits_balance, credits_used_this_month, daily_credit_spend_cap, allow_comment_analysis, assigned_comment_analysis_provider_id, billing_cycle_anchor, sentiment_analysis_scope, sentiment_watched_post_ids, allow_chat, allow_image_gen, allow_embeddings, allow_agent, allow_summarization, allow_vision, allow_content, settings').eq('id', userId).single();
     if (data) {
       setProfile({
         ...data,
@@ -145,6 +148,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 is_super_admin: newData.role === 'super_admin' || prev.role === 'super_admin',
               };
             });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [user?.id]);
+
+  // Real-time listener for user purchases so the user gets notified of approvals/denials/credits additions
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`user-purchases-realtime-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'purchases',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const playSound = () => {
+            const audio = new Audio('/Notification.mp3');
+            audio.play().catch(err => console.error('[Audio] Failed to play notification sound:', err));
+          };
+
+          if (payload.eventType === 'INSERT') {
+            const purchase = payload.new;
+            const eventKey = `${purchase.id}-${purchase.status}`;
+            if (processedPurchasesRef.current.has(eventKey)) return;
+            processedPurchasesRef.current.add(eventKey);
+
+            if (purchase.status === 'approved') {
+              if (purchase.payment_method === 'admin_adjustment') {
+                toast.success(`Credits balance adjusted by administrator: ${purchase.message_addon || 'Credits updated'}`);
+              } else {
+                toast.success(`Purchase approved: ${purchase.message_addon || 'Credits added'}`);
+              }
+              playSound();
+            } else if (purchase.status === 'pending') {
+              toast.info(`Purchase request submitted: ${purchase.message_addon}`);
+              playSound();
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const newPurchase = payload.new;
+            const eventKey = `${newPurchase.id}-${newPurchase.status}`;
+            if (processedPurchasesRef.current.has(eventKey)) return;
+            processedPurchasesRef.current.add(eventKey);
+
+            if (newPurchase.status === 'approved') {
+              toast.success(`Your purchase request of ${newPurchase.message_addon} has been approved!`);
+              playSound();
+            } else if (newPurchase.status === 'rejected') {
+              toast.error(`Your purchase request of ${newPurchase.message_addon} was not approved.`);
+              playSound();
+            }
           }
         }
       )

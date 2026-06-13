@@ -1,10 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
 import fs from 'fs';
 
 // Read .dev.vars
 const envFile = fs.readFileSync('.dev.vars', 'utf8');
-const env = envFile.split('\n').reduce((acc, line) => {
+const env = envFile.split('\n').reduce((acc: any, line: any) => {
   const [key, ...value] = line.split('=');
   if (key && value) {
     acc[key.trim()] = value.join('=').trim().replace(/^"|"$/g, '');
@@ -90,7 +89,7 @@ async function runTest() {
   // 4. Trigger the summarization logic manually
   console.log('Triggering Summarization...');
   
-  const { triggerSlidingWindowSummarization } = await import('./src/chat/summarize');
+  const { triggerSlidingWindowSummarization } = await import('./src/chat/summarize.ts');
   
   await triggerSlidingWindowSummarization(
     supabase,

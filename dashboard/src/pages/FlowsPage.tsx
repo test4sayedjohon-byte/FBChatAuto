@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
-import { Plus, Trash2, Edit2, Play, Pause, GitBranch, Search, Loader2, Upload } from 'lucide-react';
+import { Plus, Trash2, Edit2, Play, Pause, GitBranch, Search, Loader2, Upload, BrainCircuit } from 'lucide-react';
 import { importFlow } from '../lib/FlowJsonHandler';
 
 interface Flow {
@@ -11,6 +11,7 @@ interface Flow {
   name: string;
   description: string | null;
   is_active: boolean;
+  feed_to_ai: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -138,7 +139,24 @@ export default function FlowsPage() {
       toast.error('Failed to update flow: ' + err.message);
     }
   }
+  async function handleToggleFeedToAi(flow: Flow) {
+    const nextVal = flow.feed_to_ai !== false ? false : true;
+    try {
+      const { error } = await supabase
+        .from('dm_flows')
+        .update({ feed_to_ai: nextVal })
+        .eq('id', flow.id);
 
+      if (error) throw error;
+
+      setFlows(prev =>
+        prev.map(f => (f.id === flow.id ? { ...f, feed_to_ai: nextVal } : f))
+      );
+      toast.success(nextVal ? 'Flow added to AI assistant knowledge base.' : 'Flow hidden from AI assistant knowledge base.');
+    } catch (err: any) {
+      toast.error('Failed to update AI knowledge: ' + err.message);
+    }
+  }
   async function handleDeleteFlow(id: string) {
     if (!confirm('Are you sure you want to delete this flow? This will delete all nodes and connections.')) {
       return;
@@ -261,43 +279,69 @@ export default function FlowsPage() {
                   <th style={{ padding: '12px', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '12px' }}>NAME</th>
                   <th style={{ padding: '12px', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '12px' }}>DESCRIPTION</th>
                   <th style={{ padding: '12px', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '12px' }}>STATUS</th>
+                  <th style={{ padding: '12px', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '12px' }}>AI FEED</th>
                   <th style={{ padding: '12px', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '12px' }}>CREATED</th>
                   <th style={{ padding: '12px', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '12px', textAlign: 'right' }}>ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredFlows.map(flow => (
-                  <tr key={flow.id} style={{ borderBottom: '1px solid var(--border-primary)', verticalAlign: 'middle' }}>
-                    <td style={{ padding: '16px 12px' }}>
-                      <div style={{ fontWeight: 'semibold', color: '#fff', fontSize: '14px' }}>{flow.name}</div>
-                    </td>
-                    <td style={{ padding: '16px 12px', color: 'var(--text-secondary)', fontSize: '13px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {flow.description || '—'}
-                    </td>
-                    <td style={{ padding: '16px 12px' }}>
-                      <button
-                        onClick={() => handleToggleActive(flow)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '4px 8px',
-                          borderRadius: '12px',
-                          border: 'none',
-                          fontSize: '11px',
-                          fontWeight: 'bold',
-                          cursor: 'pointer',
-                          background: flow.is_active ? 'rgba(46, 204, 113, 0.15)' : 'rgba(127, 140, 141, 0.15)',
-                          color: flow.is_active ? 'var(--success)' : 'var(--text-secondary)'
-                        }}
-                      >
-                        {flow.is_active ? <Play size={10} fill="var(--success)" /> : <Pause size={10} />}
-                        {flow.is_active ? 'Active' : 'Paused'}
-                      </button>
-                    </td>
-                    <td style={{ padding: '16px 12px', color: 'var(--text-secondary)', fontSize: '13px' }}>
-                      {new Date(flow.created_at).toLocaleDateString()}
-                    </td>
+                {filteredFlows.map(flow => {
+                  const isFeedEnabled = flow.feed_to_ai !== false;
+                  return (
+                    <tr key={flow.id} style={{ borderBottom: '1px solid var(--border-primary)', verticalAlign: 'middle' }}>
+                      <td style={{ padding: '16px 12px' }}>
+                        <div style={{ fontWeight: 'semibold', color: '#fff', fontSize: '14px' }}>{flow.name}</div>
+                      </td>
+                      <td style={{ padding: '16px 12px', color: 'var(--text-secondary)', fontSize: '13px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {flow.description || '—'}
+                      </td>
+                      <td style={{ padding: '16px 12px' }}>
+                        <button
+                          onClick={() => handleToggleActive(flow)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 8px',
+                            borderRadius: '12px',
+                            border: 'none',
+                            fontSize: '11px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            background: flow.is_active ? 'rgba(46, 204, 113, 0.15)' : 'rgba(127, 140, 141, 0.15)',
+                            color: flow.is_active ? 'var(--success)' : 'var(--text-secondary)'
+                          }}
+                        >
+                          {flow.is_active ? <Play size={10} fill="var(--success)" /> : <Pause size={10} />}
+                          {flow.is_active ? 'Active' : 'Paused'}
+                        </button>
+                      </td>
+                      <td style={{ padding: '16px 12px' }}>
+                        <button
+                          onClick={() => handleToggleFeedToAi(flow)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 8px',
+                            borderRadius: '12px',
+                            border: 'none',
+                            fontSize: '11px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            background: isFeedEnabled ? 'rgba(59, 130, 246, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: isFeedEnabled ? '#3b82f6' : '#ef4444',
+                            transition: 'all 0.2s'
+                          }}
+                          title="Let AI Chatbot know about this flow's existence and trigger keywords."
+                        >
+                          <BrainCircuit size={10} />
+                          {isFeedEnabled ? 'AI Fed' : 'Blocked'}
+                        </button>
+                      </td>
+                      <td style={{ padding: '16px 12px', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                        {new Date(flow.created_at).toLocaleDateString()}
+                      </td>
                     <td style={{ padding: '16px 12px', textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: '8px' }}>
                         <button
@@ -319,7 +363,8 @@ export default function FlowsPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>

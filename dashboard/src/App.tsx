@@ -17,6 +17,7 @@ import SuperAdminStatsPage from './pages/SuperAdminStatsPage';
 import SuperAdminUsersPage from './pages/SuperAdminUsersPage';
 import UserWorkspacePage from './pages/UserWorkspacePage';
 import SuperAdminPurchasesPage from './pages/SuperAdminPurchasesPage';
+import SystemContentPromptsPage from './pages/super-admin/SystemContentPromptsPage';
 import FacebookAppSettingsPage from './pages/FacebookAppSettingsPage';
 import UsagePage from './pages/UsagePage';
 import StorePage from './pages/StorePage';
@@ -33,6 +34,9 @@ import FlowsPage from './pages/FlowsPage';
 import FlowBuilderPage from './pages/FlowBuilderPage';
 import ActivityMonitorPage from './pages/ActivityMonitorPage';
 import KeywordRulesPage from './pages/KeywordRulesPage';
+import ContactsPage from './pages/ContactsPage';
+import BroadcastsPage from './pages/BroadcastsPage';
+import CampaignPlannerPage from './pages/CampaignPlannerPage';
 
 
 import type { ReactNode } from 'react';
@@ -110,6 +114,8 @@ export default function App() {
             <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
               <Route path="/" element={<DashboardRouter />} />
               <Route path="/inbox" element={<InboxPage />} />
+              <Route path="/contacts" element={<ContactsPage />} />
+              <Route path="/broadcasts" element={<BroadcastsPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
               <Route path="/media-vault" element={<MediaVaultPage />} />
@@ -119,6 +125,7 @@ export default function App() {
               <Route path="/usage" element={<UsagePage />} />
               <Route path="/sandbox" element={<SandboxPage />} />
               <Route path="/planner" element={<ContentPlannerPage />} />
+              <Route path="/campaign-planner" element={<CampaignPlannerPage />} />
               <Route path="/calendar" element={<ContentCalendarPage />} />
               <Route path="/moderation" element={<AutoModerationPage />} />
               <Route path="/keyword-rules" element={<KeywordRulesPage />} />
@@ -137,6 +144,7 @@ export default function App() {
               <Route path="/super-users" element={<AdminRoute><SuperAdminUsersPage /></AdminRoute>} />
               <Route path="/super-users/:userId" element={<AdminRoute><UserWorkspacePage /></AdminRoute>} />
               <Route path="/super-purchases" element={<AdminRoute><SuperAdminPurchasesPage /></AdminRoute>} />
+              <Route path="/super-prompts" element={<AdminRoute><SystemContentPromptsPage /></AdminRoute>} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

@@ -8,40 +8,55 @@ export async function triggerSlidingWindowSummarization(
   sessionId: string,
   pageConnection: PageConnection,
   senderId: string,
-  forceLeftover: boolean = false
+  forceLeftover: boolean = false,
+  minUserMessages: number = 10
 ) {
   if (pageConnection.enable_customer_profiling !== true) return;
 
-  const contextWindow = 10;
-
   try {
-    const { count } = await supabase
+    // 1. Enforce customer messages minimum check
+    const { count: userMsgCount } = await supabase
       .from('chat_messages')
       .select('*', { count: 'exact', head: true })
-      .eq('session_id', sessionId);
+      .eq('session_id', sessionId)
+      .eq('role', 'user');
 
-    if (!count) return;
-
-    let rangeStart = count - contextWindow;
-    let rangeEnd = count - 1;
-
-    if (forceLeftover) {
-      const leftover = count % contextWindow;
-      if (leftover === 0) return; // Nothing leftover to summarize
-      rangeStart = count - leftover;
-    } else {
-      if (count % contextWindow !== 0) return;
+    if (userMsgCount === null || userMsgCount < minUserMessages) {
+      console.log(`[Summarize] User has only sent ${userMsgCount ?? 0} messages. Minimum required is ${minUserMessages}. Skipping.`);
+      return;
     }
 
-    // Fetch the N messages that just formed the window
+    // 2. In real-time mode, only run when total message count is a multiple of 10
+    if (!forceLeftover) {
+      const { count: totalMsgCount } = await supabase
+        .from('chat_messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('session_id', sessionId);
+
+      if (totalMsgCount === null || totalMsgCount % 10 !== 0) {
+        return;
+      }
+    }
+
+    // Fetch the last 20 messages of the session to get rich context
     const { data: messages } = await supabase
       .from('chat_messages')
       .select('role, content')
       .eq('session_id', sessionId)
-      .order('created_at', { ascending: true })
-      .range(rangeStart, rangeEnd);
+      .order('created_at', { ascending: false })
+      .limit(20);
 
     if (!messages || messages.length === 0) return;
+
+    // Reverse the array to put it in chronological order
+    const chronologicalMessages = [...messages].reverse();
+
+    // Filter messages to only contain customer messages (role: 'user')
+    const customerMessages = chronologicalMessages.filter((m: any) => m.role === 'user');
+    if (customerMessages.length === 0) {
+      console.log(`[Summarize] No customer messages in the last 20 messages. Skipping.`);
+      return;
+    }
 
     const { data: profile } = await supabase
       .from('customer_profiles')
@@ -52,14 +67,23 @@ export async function triggerSlidingWindowSummarization(
 
     const existingSummary = profile?.summary || 'No previous summary.';
 
-    const promptText = `You are a CRM AI. Summarize the customer's profile, preferences, and key details based on the old summary and the new messages. 
-Return ONLY a strictly formatted Markdown paragraph. Use bullet points and bold text for key details to make it easily scannable. Do not use conversational filler.
+    const promptText = `You are a CRM AI. Analyze the customer's profile, preferences, questions, and key details based on the old summary and the new customer messages.
+You must output a strictly formatted JSON object. Do not include any conversational filler, markdown block wraps (except if requested by JSON mode), or trailing text.
+
+Output JSON format:
+{
+  "summary": "A strictly formatted Markdown summary starting with: '**Intent:** [High/Medium/Low] (Score: [1-10]/10) | **Description:** [3-5 words describing customer]' followed by 3-4 bullet points detailing: what they asked, what they want to know, and their preferences. Focus strictly on what the customer asked, stated, requested, or provided. Do not include AI agent replies.",
+  "intent_level": "high" | "medium" | "low" | "unknown",
+  "lead_score": 1-10 (a number from 1 to 10: 1-3 = low/generic/greetings, 4-7 = medium/asking specific details, 8-10 = high/buying/ready to purchase),
+  "short_description": "A 3-5 word concise description of the user (e.g. 'Dhaka buyer seeking phones')",
+  "key_inquiries": "Brief summary of what they asked & want to know"
+}
 
 OLD SUMMARY:
 ${existingSummary}
 
-NEW MESSAGES:
-${messages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join('\n')}
+NEW CUSTOMER MESSAGES:
+${customerMessages.map((m: any) => `CUSTOMER: ${m.content}`).join('\n')}
 `;
 
     // Fix H-3: Use tenant-scoped provider resolution (tenant → assigned → global fallback)
@@ -136,18 +160,69 @@ ${messages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join('\n')}
       { role: 'user', content: promptText }
     ], { temperature: 0.1 });
 
-    const newSummary = response.choices?.[0]?.message?.content?.trim();
+    const rawResponse = response.choices?.[0]?.message?.content?.trim() || '';
+    let summaryText = '';
+    let intentLevel = 'unknown';
+    let leadScore = 5;
+    let metadata: any = {};
 
-    if (newSummary) {
+    if (rawResponse) {
+      try {
+        let jsonStr = rawResponse;
+        if (jsonStr.startsWith('```')) {
+          const match = jsonStr.match(/```(?:json)?([\s\S]*?)```/);
+          if (match) {
+            jsonStr = match[1].trim();
+          }
+        }
+        const parsed = JSON.parse(jsonStr);
+        summaryText = parsed.summary || '';
+        intentLevel = parsed.intent_level || 'unknown';
+        leadScore = typeof parsed.lead_score === 'number' ? parsed.lead_score : parseInt(parsed.lead_score || '5', 10);
+        if (isNaN(leadScore) || leadScore < 1 || leadScore > 10) {
+          leadScore = 5;
+        }
+        metadata = {
+          short_description: parsed.short_description || '',
+          key_inquiries: parsed.key_inquiries || '',
+          updated_at: new Date().toISOString()
+        };
+      } catch (jsonErr) {
+        console.warn('[Summarize] ⚠️ Failed to parse LLM response as JSON. Treating as raw summary.', jsonErr);
+        summaryText = rawResponse;
+        // Try regex match fallbacks
+        if (/intent_level["'\s:]+(\w+)/i.test(rawResponse)) {
+          const match = rawResponse.match(/intent_level["'\s:]+(\w+)/i);
+          if (match && ['high', 'medium', 'low', 'unknown'].includes(match[1].toLowerCase())) {
+            intentLevel = match[1].toLowerCase();
+          }
+        }
+        if (/lead_score["'\s:]+(\d+)/i.test(rawResponse)) {
+          const match = rawResponse.match(/lead_score["'\s:]+(\d+)/i);
+          if (match) {
+            leadScore = parseInt(match[1], 10);
+          }
+        }
+        metadata = {
+          raw: true,
+          updated_at: new Date().toISOString()
+        };
+      }
+    }
+
+    if (summaryText) {
       await supabase.from('customer_profiles').upsert({
         user_id: pageConnection.user_id,
         page_id: pageConnection.page_id,
         sender_id: senderId,
-        summary: newSummary,
+        summary: summaryText,
+        intent_level: intentLevel,
+        lead_score: leadScore,
+        metadata: metadata,
         updated_at: new Date().toISOString()
       }, { onConflict: 'page_id, sender_id' });
       
-      console.log(`[Summarize] ✅ Updated customer profile for ${senderId}`);
+      console.log(`[Summarize] ✅ Updated customer profile for ${senderId} (Score: ${leadScore}, Intent: ${intentLevel})`);
     }
   } catch (error) {
     console.error('[Summarize] ❌ Failed to summarize sliding window:', error);

@@ -174,6 +174,8 @@ export default function ProviderModal({ isOpen, onClose, provider, onSaved, isFi
         is_active_summarization: isFirst,
         is_active_agent: isFirst,
         is_active_vision: isFirst,
+        is_active_image: isFirst,
+        is_active_content: isFirst,
       });
     }
 

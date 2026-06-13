@@ -4,11 +4,14 @@ import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
 import { 
   Plus, Calendar as CalendarIcon, Image as ImageIcon, 
-  ChevronLeft, ChevronRight, List, MessageCircle, Loader2
+  ChevronLeft, ChevronRight, List, MessageCircle, Loader2, Sparkles, Trash2, X, ChevronDown, CheckCircle, Undo
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import PostComposerModal from '../components/content/PostComposerModal';
+import { BulkActionsBar } from '../components/content/BulkActionsBar';
 import CalendarInspector from '../components/content/CalendarInspector';
 import type { ScheduledPost, PageConn } from '../types/content';
+import { workerPost } from '../lib/workerApi';
 
 const Facebook = ({ size = 24, ...props }: { size?: number | string } & React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width={size} height={size} stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -40,6 +43,7 @@ const isSameDay = (d1: Date, d2: Date) => {
 };
 
 export default function ContentCalendarPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [channels, setChannels] = useState<PageConn[]>([]);
@@ -66,11 +70,48 @@ export default function ContentCalendarPage() {
   const [showInspector, setShowInspector] = useState(false);
   const [inspectedPost, setInspectedPost] = useState<ScheduledPost | null>(null);
 
+
+
+  // Bulk Delete Modal States
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [showBulkActionsDropdown, setShowBulkActionsDropdown] = useState(false);
+  const [bulkDeleteChannel, setBulkDeleteChannel] = useState('all');
+  const [bulkDeletePlatform, setBulkDeletePlatform] = useState('all');
+  const [bulkDeleteRangeType, setBulkDeleteRangeType] = useState<'today' | 'tomorrow' | 'this_week' | 'this_month' | 'all_future' | 'custom'>('today');
+  const [bulkDeleteStart, setBulkDeleteStart] = useState('');
+  const [bulkDeleteEnd, setBulkDeleteEnd] = useState('');
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+
+  // Floating Multi-Select & Bulk Actions States
+  const [selectedPostIds, setSelectedPostIds] = useState<string[]>([]);
+  const [bulkActionsLoading, setBulkActionsLoading] = useState(false);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+
   useEffect(() => {
     if (user) {
       loadData();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!bulkDeleteStart) {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const day = String(today.getDate()).padStart(2, '0');
+      setBulkDeleteStart(`${year}-${month}-${day}`);
+    }
+    if (!bulkDeleteEnd) {
+      const nextWeek = new Date();
+      nextWeek.setDate(nextWeek.getDate() + 7);
+      nextWeek.setHours(23,59,59,999);
+      const year = nextWeek.getFullYear();
+      const month = String(nextWeek.getMonth() + 1).padStart(2, '0');
+      const day = String(nextWeek.getDate()).padStart(2, '0');
+      setBulkDeleteEnd(`${year}-${month}-${day}`);
+    }
+  }, []);
 
   async function loadData() {
     try {
@@ -190,6 +231,238 @@ export default function ContentCalendarPage() {
       loadData();
     } catch (err: any) {
       toast.error('Error deleting post: ' + err.message);
+    }
+  }
+
+  async function handleBulkDeleteSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    
+    let start: Date;
+    let end: Date;
+
+    if (bulkDeleteRangeType === 'custom') {
+      if (!bulkDeleteStart || !bulkDeleteEnd) {
+        toast.error('Please specify start and end dates.');
+        return;
+      }
+      start = new Date(bulkDeleteStart);
+      start.setHours(0,0,0,0);
+      end = new Date(bulkDeleteEnd);
+      end.setHours(23,59,59,999);
+
+      if (start > end) {
+        toast.error('Start date cannot be after end date.');
+        return;
+      }
+    } else {
+      const now = new Date();
+      start = new Date();
+      end = new Date();
+
+      if (bulkDeleteRangeType === 'today') {
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+      } else if (bulkDeleteRangeType === 'tomorrow') {
+        start.setDate(start.getDate() + 1);
+        start.setHours(0, 0, 0, 0);
+        end.setDate(end.getDate() + 1);
+        end.setHours(23, 59, 59, 999);
+      } else if (bulkDeleteRangeType === 'this_week') {
+        // Monday to Sunday of current week
+        const currentDay = now.getDay();
+        const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
+        start.setDate(now.getDate() + distanceToMonday);
+        start.setHours(0, 0, 0, 0);
+        end.setDate(start.getDate() + 6);
+        end.setHours(23, 59, 59, 999);
+      } else if (bulkDeleteRangeType === 'this_month') {
+        // 1st of current month to last day of current month
+        start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      } else if (bulkDeleteRangeType === 'all_future') {
+        start.setHours(0, 0, 0, 0);
+        end = new Date(now.getFullYear() + 5, 11, 31, 23, 59, 59, 999);
+      }
+    }
+
+    const rangeLabel = bulkDeleteRangeType === 'custom' 
+      ? `between ${start.toLocaleDateString()} and ${end.toLocaleDateString()}`
+      : `for ${bulkDeleteRangeType.replace('_', ' ')}`;
+
+    if (!confirm(`Are you sure you want to bulk delete scheduled posts ${rangeLabel}? This action is permanent.`)) {
+      return;
+    }
+
+    try {
+      setBulkDeleteLoading(true);
+      const data = await workerPost<{ success: boolean; message: string }>(
+        '/api/agent/delete-bulk',
+        {
+          pageConnectionId: bulkDeleteChannel === 'all' ? null : bulkDeleteChannel,
+          platform: bulkDeletePlatform === 'all' ? null : bulkDeletePlatform,
+          startTime: start.toISOString(),
+          endTime: end.toISOString()
+        }
+      );
+
+      if (data.success) {
+        toast.success(data.message || 'Successfully deleted posts.');
+        setShowBulkDeleteModal(false);
+        loadData();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Error executing bulk deletion.');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  }
+
+  async function handleBulkApprove() {
+    if (!confirm('Are you sure you want to approve all current draft scheduled posts?')) return;
+    try {
+      setLoading(true);
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .update({ approval_status: 'approved' })
+        .eq('approval_status', 'draft');
+      if (error) throw error;
+      toast.success('Successfully approved all draft posts.');
+      loadData();
+    } catch (err: any) {
+      toast.error('Failed to approve posts: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleBulkApproveSelected() {
+    if (selectedPostIds.length === 0) return;
+    try {
+      setBulkActionsLoading(true);
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .update({ approval_status: 'approved' })
+        .in('id', selectedPostIds);
+      if (error) throw error;
+      toast.success(`Successfully approved ${selectedPostIds.length} posts.`);
+      setSelectedPostIds([]);
+      loadData();
+    } catch (err: any) {
+      toast.error('Failed to approve selected posts: ' + err.message);
+    } finally {
+      setBulkActionsLoading(false);
+    }
+  }
+
+  async function handleBulkDraftSelected() {
+    if (selectedPostIds.length === 0) return;
+    try {
+      setBulkActionsLoading(true);
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .update({ approval_status: 'draft' })
+        .in('id', selectedPostIds);
+      if (error) throw error;
+      toast.success(`Successfully converted ${selectedPostIds.length} posts to drafts.`);
+      setSelectedPostIds([]);
+      loadData();
+    } catch (err: any) {
+      toast.error('Failed to convert selected posts: ' + err.message);
+    } finally {
+      setBulkActionsLoading(false);
+    }
+  }
+
+  async function handleBulkDeleteSelected() {
+    if (selectedPostIds.length === 0) return;
+    if (!confirm(`Are you sure you want to delete the ${selectedPostIds.length} selected posts?`)) return;
+    try {
+      setBulkActionsLoading(true);
+      
+      const { data: postsToDelete } = await supabase
+        .from('scheduled_posts')
+        .select('media_urls')
+        .in('id', selectedPostIds);
+
+      if (postsToDelete) {
+        const pathsToDelete: string[] = [];
+        postsToDelete.forEach(p => {
+          if (p.media_urls) {
+            p.media_urls.forEach((url: string) => {
+              const storagePath = getStoragePathFromUrl(url);
+              if (storagePath && url.includes('.supabase.')) {
+                pathsToDelete.push(storagePath);
+              }
+            });
+          }
+        });
+        if (pathsToDelete.length > 0) {
+          await supabase.storage.from('media_assets').remove(pathsToDelete);
+        }
+      }
+
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .delete()
+        .in('id', selectedPostIds);
+      if (error) throw error;
+      toast.success(`Successfully deleted ${selectedPostIds.length} posts.`);
+      setSelectedPostIds([]);
+      loadData();
+    } catch (err: any) {
+      toast.error('Failed to delete selected posts: ' + err.message);
+    } finally {
+      setBulkActionsLoading(false);
+    }
+  }
+
+  async function handleUndoLastAiBatch() {
+    try {
+      setLoading(true);
+      // Fetch the most recent post with a batch_id
+      const { data: recent, error: fetchErr } = await supabase
+        .from('scheduled_posts')
+        .select('ai_generated_options')
+        .eq('media_source_type', 'ai_generated')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+
+      const batchId = (recent?.ai_generated_options as any)?.batch_id;
+      if (!batchId) {
+        toast.error('No undoable AI generation batch was found.');
+        return;
+      }
+
+      // Find how many posts are in this batch
+      const { count, error: countErr } = await supabase
+        .from('scheduled_posts')
+        .select('*', { count: 'exact', head: true })
+        .eq('media_source_type', 'ai_generated')
+        .filter('ai_generated_options->>batch_id', 'eq', batchId);
+
+      if (countErr) throw countErr;
+
+      if (!confirm(`Are you sure you want to undo the last AI generation batch? This will delete all ${count || 0} scheduled posts from that batch.`)) {
+        return;
+      }
+
+      const { error: delErr } = await supabase
+        .from('scheduled_posts')
+        .delete()
+        .eq('media_source_type', 'ai_generated')
+        .filter('ai_generated_options->>batch_id', 'eq', batchId);
+
+      if (delErr) throw delErr;
+
+      toast.success(`Successfully undone the last batch (${count} posts deleted).`);
+      loadData();
+    } catch (err: any) {
+      toast.error('Failed to undo last batch: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -515,6 +788,25 @@ export default function ContentCalendarPage() {
           font-weight: 700;
           color: #fff;
         }
+        .bulk-action-item {
+          background: transparent;
+          border: none;
+          color: var(--text-secondary);
+          padding: 8px 12px;
+          text-align: left;
+          cursor: pointer;
+          font-size: 0.85rem;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          border-radius: 6px;
+          width: 100%;
+          transition: all 0.15s ease;
+        }
+        .bulk-action-item:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: #fff;
+        }
       `}</style>
 
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
@@ -547,8 +839,133 @@ export default function ContentCalendarPage() {
             </button>
           </div>
 
-          <button className="btn btn-primary" onClick={() => handleOpenComposeForDay(new Date())} style={{ display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 14px 0 rgba(124, 58, 237, 0.4)' }}>
-            <Plus size={16} /> Compose Post
+          <button 
+            className="btn btn-ghost" 
+            onClick={() => {
+              setIsSelectMode(!isSelectMode);
+              if (isSelectMode) setSelectedPostIds([]);
+            }} 
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px', 
+              border: isSelectMode ? '1px solid var(--accent-primary)' : '1px solid rgba(255, 255, 255, 0.08)', 
+              background: isSelectMode ? 'rgba(249, 115, 22, 0.1)' : 'rgba(255, 255, 255, 0.02)', 
+              color: isSelectMode ? 'var(--accent-primary)' : '#fff', 
+              padding: '6px 14px', 
+              fontSize: '0.85rem', 
+              height: '36px', 
+              borderRadius: '8px', 
+              cursor: 'pointer', 
+              fontWeight: 600 
+            }}
+          >
+            {isSelectMode ? 'Cancel Selection' : 'Select Posts'}
+          </button>
+
+          {isSelectMode && (
+            <button 
+              className="btn btn-ghost" 
+              onClick={() => {
+                const visible = posts.filter(p => {
+                  const matchChannel = filterChannel === 'all' || p.page_connection_id === filterChannel;
+                  const matchPlatform = filterPlatform === 'all' || p.platform === filterPlatform;
+                  const matchStatus = filterStatus === 'all' || p.status === filterStatus;
+                  return matchChannel && matchPlatform && matchStatus;
+                });
+                if (selectedPostIds.length === visible.length) {
+                  setSelectedPostIds([]);
+                } else {
+                  setSelectedPostIds(visible.map(v => v.id));
+                }
+              }}
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '6px', 
+                border: '1px solid rgba(255, 255, 255, 0.08)', 
+                background: 'rgba(255, 255, 255, 0.02)', 
+                color: '#fff', 
+                padding: '6px 14px', 
+                fontSize: '0.85rem', 
+                height: '36px', 
+                borderRadius: '8px', 
+                cursor: 'pointer', 
+                fontWeight: 600 
+              }}
+            >
+              {selectedPostIds.length > 0 ? 'Deselect All' : 'Select All'}
+            </button>
+          )}
+
+          <button className="btn btn-accent" onClick={() => navigate('/campaign-planner')} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'linear-gradient(135deg, var(--primary) 0%, #a78bfa 100%)', border: 'none', color: '#fff', padding: '6px 14px', fontSize: '0.85rem', height: '36px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600 }}>
+            <Sparkles size={14} /> AI Generate
+          </button>
+
+          <div style={{ position: 'relative' }}>
+            <button 
+              className="btn btn-ghost" 
+              onClick={() => setShowBulkActionsDropdown(!showBulkActionsDropdown)} 
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '8px', 
+                border: '1px solid rgba(255, 255, 255, 0.08)', 
+                background: 'rgba(255, 255, 255, 0.02)', 
+                color: '#fff', 
+                padding: '6px 14px', 
+                fontSize: '0.85rem', 
+                height: '36px', 
+                borderRadius: '8px', 
+                cursor: 'pointer', 
+                fontWeight: 600 
+              }}
+            >
+              Bulk Actions <ChevronDown size={14} />
+            </button>
+            {showBulkActionsDropdown && (
+              <>
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} onClick={() => setShowBulkActionsDropdown(false)} />
+                <div style={{ 
+                  position: 'absolute', 
+                  right: 0, 
+                  top: '40px', 
+                  background: '#151719', 
+                  border: '1px solid rgba(255,255,255,0.08)', 
+                  borderRadius: '8px', 
+                  padding: '6px', 
+                  minWidth: '180px', 
+                  boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)', 
+                  zIndex: 1000,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px'
+                }}>
+                  <button 
+                    onClick={() => { setShowBulkActionsDropdown(false); setShowBulkDeleteModal(true); }}
+                    className="bulk-action-item"
+                  >
+                    <Trash2 size={14} color="#f87171" /> Bulk Delete...
+                  </button>
+                  <button 
+                    onClick={() => { setShowBulkActionsDropdown(false); handleBulkApprove(); }}
+                    className="bulk-action-item"
+                  >
+                    <CheckCircle size={14} color="#34d399" /> Bulk Approve Drafts
+                  </button>
+                  <button 
+                    onClick={() => { setShowBulkActionsDropdown(false); handleUndoLastAiBatch(); }}
+                    className="bulk-action-item"
+                  >
+                    <Undo size={14} color="#60a5fa" /> Undo Last AI Batch
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <button className="btn btn-primary" onClick={() => handleOpenComposeForDay(new Date())} style={{ display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 14px 0 rgba(124, 58, 237, 0.4)', padding: '6px 14px', fontSize: '0.85rem', height: '36px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600 }}>
+            <Plus size={14} /> Compose Post
           </button>
         </div>
       </div>
@@ -701,13 +1118,49 @@ export default function ContentCalendarPage() {
                         const isVideo = hasMedia && !isCleanedMedia && post.media_urls![0].toLowerCase().match(/\.(mp4|mov|avi|mkv|webm)$/);
                         const isIg = post.platform === 'instagram';
 
+                        const isChecked = selectedPostIds.includes(post.id);
                         return (
                           <div
                             key={post.id}
-                            className={`list-post-card${isPastDay && post.status !== 'published' ? ' is-past' : ''}`}
-                            onClick={() => handleOpenInspector(post)}
+                            className={`list-post-card${isPastDay && post.status !== 'published' ? ' is-past' : ''}${isChecked ? ' selected' : ''}`}
+                            onClick={(e) => {
+                              if (isSelectMode) {
+                                e.stopPropagation();
+                                if (isChecked) {
+                                  setSelectedPostIds(selectedPostIds.filter(id => id !== post.id));
+                                } else {
+                                  setSelectedPostIds([...selectedPostIds, post.id]);
+                                }
+                              } else {
+                                handleOpenInspector(post);
+                              }
+                            }}
+                            style={{ 
+                              position: 'relative', 
+                              border: isChecked ? '1px solid var(--accent-primary)' : undefined,
+                              background: isChecked ? 'rgba(249, 115, 22, 0.02)' : undefined
+                            }}
                             title={`${channelName} — ${postTime}\n${post.message || 'No caption'}`}
                           >
+                            {/* Checkbox overlay */}
+                            {(isSelectMode || isChecked) && (
+                              <div style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 10 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    if (e.target.checked) {
+                                      setSelectedPostIds([...selectedPostIds, post.id]);
+                                    } else {
+                                      setSelectedPostIds(selectedPostIds.filter(id => id !== post.id));
+                                    }
+                                  }}
+                                  style={{ width: '16px', height: '16px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            )}
                             {/* Status stripe at top */}
                             <div className={`list-post-card-status-bar status-${post.status}`} />
 
@@ -841,19 +1294,55 @@ export default function ContentCalendarPage() {
                       const hasMedia = post.media_urls && post.media_urls.length > 0;
                       const isCleanedMedia = hasMedia && post.media_urls![0].startsWith('file://localhost/');
                       
+                      const isChecked = selectedPostIds.includes(post.id);
                       return (
                         <div 
                           key={post.id} 
-                          onClick={(e) => { e.stopPropagation(); handleOpenInspector(post); }}
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            if (isSelectMode) {
+                              if (isChecked) {
+                                setSelectedPostIds(selectedPostIds.filter(id => id !== post.id));
+                              } else {
+                                setSelectedPostIds([...selectedPostIds, post.id]);
+                              }
+                            } else {
+                              handleOpenInspector(post); 
+                            }
+                          }}
                           draggable={post.status === 'scheduled' || post.status === 'failed'}
                           onDragStart={(e) => {
                             e.stopPropagation();
                             e.dataTransfer.setData('text/plain', post.id);
                             e.dataTransfer.effectAllowed = 'move';
                           }}
-                          className={`post-strip-card status-${post.status}`}
+                          className={`post-strip-card status-${post.status}${isChecked ? ' selected' : ''}`}
+                          style={{
+                            border: isChecked ? '1px solid var(--accent-primary)' : undefined,
+                            background: isChecked ? 'rgba(249, 115, 22, 0.05)' : undefined,
+                            position: 'relative'
+                          }}
                           title={`${channelName} (${postTime}): ${post.message || 'No caption'}`}
                         >
+                          {/* Checkbox overlay */}
+                          {(isSelectMode || isChecked) && (
+                            <div style={{ display: 'flex', alignItems: 'center', marginRight: '4px', flexShrink: 0 }}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  if (e.target.checked) {
+                                    setSelectedPostIds([...selectedPostIds, post.id]);
+                                  } else {
+                                    setSelectedPostIds(selectedPostIds.filter(id => id !== post.id));
+                                  }
+                                }}
+                                style={{ width: '12px', height: '12px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                          )}
                           {/* Mini Thumbnail */}
                           {hasMedia && !isCleanedMedia ? (
                             <div style={{ width: '22px', height: '22px', borderRadius: '4px', overflow: 'hidden', background: '#000', flexShrink: 0 }}>
@@ -920,6 +1409,157 @@ export default function ContentCalendarPage() {
         posts={posts}
         onSaveSuccess={loadData}
       />
+
+
+
+      {/* Bulk Operations Selection Bar */}
+      <BulkActionsBar
+        selectedCount={selectedPostIds.length}
+        onApprove={handleBulkApproveSelected}
+        onDraft={handleBulkDraftSelected}
+        onDelete={handleBulkDeleteSelected}
+        onClear={() => setSelectedPostIds([])}
+        loading={bulkActionsLoading}
+      />
+
+      {/* Bulk Delete Modal */}
+      {showBulkDeleteModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 2000
+        }}>
+          <div className="animate-scaleUp" style={{
+            background: '#151719',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '12px',
+            width: '95%',
+            maxWidth: '500px',
+            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)',
+            overflow: 'hidden'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Trash2 size={18} color="#ef4444" />
+                Bulk Delete Scheduled Posts
+              </h2>
+              <button className="btn btn-ghost btn-icon" onClick={() => setShowBulkDeleteModal(false)} style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
+                <X size={18} color="var(--text-secondary)" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkDeleteSubmit} style={{ padding: '20px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Select Channel
+                  </label>
+                  <select
+                    className="form-input"
+                    value={bulkDeleteChannel}
+                    onChange={(e) => setBulkDeleteChannel(e.target.value)}
+                    style={{ width: '100%', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', height: '38px', borderRadius: '8px', padding: '0 10px' }}
+                  >
+                    <option value="all">All Channels</option>
+                    {channels.filter((c, index, self) => self.findIndex(t => t.page_id === c.page_id) === index).map(c => (
+                      <option key={c.page_id} value={c.page_id}>{c.page_name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Select Platform
+                  </label>
+                  <select
+                    className="form-input"
+                    value={bulkDeletePlatform}
+                    onChange={(e) => setBulkDeletePlatform(e.target.value)}
+                    style={{ width: '100%', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', height: '38px', borderRadius: '8px', padding: '0 10px' }}
+                  >
+                    <option value="all">All Platforms</option>
+                    <option value="facebook">Facebook</option>
+                    <option value="instagram">Instagram</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Deletion Range / Period
+                  </label>
+                  <select
+                    className="form-input"
+                    value={bulkDeleteRangeType}
+                    onChange={(e) => setBulkDeleteRangeType(e.target.value as any)}
+                    style={{ width: '100%', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', height: '38px', borderRadius: '8px', padding: '0 10px' }}
+                  >
+                    <option value="today">Today (Daily delete)</option>
+                    <option value="tomorrow">Tomorrow</option>
+                    <option value="this_week">This Week (Weekly delete)</option>
+                    <option value="this_month">This Month (Monthly delete)</option>
+                    <option value="all_future">All Future Scheduled Posts</option>
+                    <option value="custom">Custom Date Range...</option>
+                  </select>
+                </div>
+
+                {bulkDeleteRangeType === 'custom' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                        Start Date
+                      </label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={bulkDeleteStart}
+                        onChange={(e) => setBulkDeleteStart(e.target.value)}
+                        required
+                        style={{ width: '100%', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', height: '38px', borderRadius: '8px', padding: '0 10px' }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                        End Date
+                      </label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={bulkDeleteEnd}
+                        onChange={(e) => setBulkDeleteEnd(e.target.value)}
+                        required
+                        style={{ width: '100%', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', height: '38px', borderRadius: '8px', padding: '0 10px' }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ background: 'rgba(239, 68, 68, 0.05)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.15)', fontSize: '0.85rem', color: '#f87171' }}>
+                  <strong>WARNING:</strong> This will delete all matching scheduled posts for the selected range. This action cannot be undone.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '16px', marginTop: '20px' }}>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowBulkDeleteModal(false)} disabled={bulkDeleteLoading} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-danger" disabled={bulkDeleteLoading} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+                  {bulkDeleteLoading ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                  Bulk Delete
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

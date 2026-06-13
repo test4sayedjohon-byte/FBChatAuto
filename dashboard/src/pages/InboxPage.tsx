@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { toast } from '../hooks/useToast';
 import { useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { workerPost } from '../lib/workerApi';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft, FileText, Copy } from 'lucide-react';
+import { Bot, User, Send, PauseCircle, PlayCircle, Loader2, X, AlertCircle, ChevronUp, ArrowLeft, FileText, Copy, BrainCircuit } from 'lucide-react';
 
 function timeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -172,8 +172,15 @@ export default function InboxPage() {
   const [loadingSummary, setLoadingSummary] = useState(false);
 
   const [pages, setPages] = useState<Record<string, string>>({});
+  const [profiles, setProfiles] = useState<Record<string, any>>({});
+  const [searchTerm, setSearchTerm] = useState('');
+  const [intentFilter, setIntentFilter] = useState('all');
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+
+  // Pagination states for chat sessions
+  const [sessionsPage, setSessionsPage] = useState(0);
+  const [hasMoreSessions, setHasMoreSessions] = useState(false);
 
   const activeSessionIdRef = useRef(activeSessionId);
   useEffect(() => {
@@ -182,9 +189,41 @@ export default function InboxPage() {
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
-  useEffect(() => {
-    fetchSessions();
+  const filteredSessions = useMemo(() => {
+    return sessions.filter(session => {
+      // Search filter
+      const matchesSearch = !searchTerm || 
+        (session.sender_name || 'Anonymous User').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        session.sender_id.includes(searchTerm);
 
+      // Intent filter
+      const profile = profiles[session.page_id + '_' + session.sender_id];
+      const intent = profile?.intent_level || 'unknown';
+      const score = profile?.lead_score || 0;
+      
+      let matchesIntent = true;
+      if (intentFilter === 'high') {
+        matchesIntent = intent === 'high' || score >= 8;
+      } else if (intentFilter === 'medium') {
+        matchesIntent = intent === 'medium' || (score >= 4 && score <= 7);
+      } else if (intentFilter === 'low') {
+        matchesIntent = intent === 'low' || (score >= 1 && score <= 3);
+      }
+
+      return matchesSearch && matchesIntent;
+    });
+  }, [sessions, profiles, searchTerm, intentFilter]);
+
+  // Debounce search term and refetch sessions on filter change
+  useEffect(() => {
+    const delayDebounce = setTimeout(() => {
+      fetchSessions(0, false, searchTerm, intentFilter);
+    }, 300);
+
+    return () => clearTimeout(delayDebounce);
+  }, [searchTerm, intentFilter]);
+
+  useEffect(() => {
     const sessionsSubscription = supabase
       .channel('public:chat_sessions')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_sessions', filter: `user_id=eq.${user?.id}` }, (payload) => {
@@ -245,26 +284,106 @@ export default function InboxPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, scrollToTrigger]);
 
-  const fetchSessions = async () => {
+  const SESSIONS_PAGE_SIZE = 30;
+
+  const fetchSessions = async (pageNumber = 0, append = false, currentSearch = searchTerm, currentIntent = intentFilter) => {
     if (!user) return;
     setLoadingSessions(true);
     
-    // Fetch pages mapping
-    const { data: pagesData } = await supabase.from('page_connections').select('page_id, page_name').eq('user_id', user.id);
-    if (pagesData) {
-      const pMap: Record<string, string> = {};
-      pagesData.forEach(p => pMap[p.page_id] = p.page_name || p.page_id);
-      setPages(pMap);
+    // Fetch pages mapping once
+    if (Object.keys(pages).length === 0) {
+      const { data: pagesData } = await supabase.from('page_connections').select('page_id, page_name').eq('user_id', user.id);
+      if (pagesData) {
+        const pMap: Record<string, string> = {};
+        pagesData.forEach(p => pMap[p.page_id] = p.page_name || p.page_id);
+        setPages(pMap);
+      }
     }
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('chat_sessions')
       .select('*')
-      .eq('user_id', user.id)
-      .order('last_message_at', { ascending: false });
+      .eq('user_id', user.id);
+
+    // Filter by search term at database level
+    if (currentSearch.trim()) {
+      query = query.ilike('sender_name', `%${currentSearch.trim()}%`);
+    }
+
+    // Filter by intent level at database level
+    if (currentIntent && currentIntent !== 'all') {
+      let profilesQuery = supabase
+        .from('customer_profiles')
+        .select('sender_id')
+        .eq('user_id', user.id);
+
+      if (currentIntent === 'high') {
+        profilesQuery = profilesQuery.or('intent_level.eq.high,lead_score.gte.8');
+      } else if (currentIntent === 'medium') {
+        profilesQuery = profilesQuery.or('intent_level.eq.medium,and(lead_score.gte.4,lead_score.lte.7)');
+      } else if (currentIntent === 'low') {
+        profilesQuery = profilesQuery.or('intent_level.eq.low,and(lead_score.gte.1,lead_score.lte.3)');
+      }
+
+      const { data: matchedProfiles } = await profilesQuery;
+      const matchedSenderIds = matchedProfiles?.map(p => p.sender_id) || [];
+
+      if (matchedSenderIds.length > 0) {
+        query = query.in('sender_id', matchedSenderIds);
+      } else {
+        // Force empty if no profiles match intent filter
+        setSessions([]);
+        setHasMoreSessions(false);
+        setLoadingSessions(false);
+        return;
+      }
+    }
+
+    // Paginate database query
+    const startRange = pageNumber * SESSIONS_PAGE_SIZE;
+    const endRange = (pageNumber + 1) * SESSIONS_PAGE_SIZE - 1;
+
+    query = query
+      .order('last_message_at', { ascending: false })
+      .range(startRange, endRange);
+
+    const { data, error } = await query;
 
     if (!error && data) {
-      setSessions(data);
+      setHasMoreSessions(data.length === SESSIONS_PAGE_SIZE);
+
+      // On-demand fetch of customer profiles for these sessions
+      const senderIds = data.map(s => s.sender_id);
+      if (senderIds.length > 0) {
+        const { data: profilesData } = await supabase
+          .from('customer_profiles')
+          .select('page_id, sender_id, summary, intent_level, lead_score, metadata')
+          .eq('user_id', user.id)
+          .in('sender_id', senderIds);
+
+        if (profilesData) {
+          setProfiles(prev => {
+            const nextProfiles = { ...prev };
+            profilesData.forEach(p => {
+              nextProfiles[p.page_id + '_' + p.sender_id] = p;
+            });
+            return nextProfiles;
+          });
+        }
+      }
+
+      let updatedSessions = append ? [...sessions, ...data] : data;
+
+      // Remove potential duplicates
+      const seen = new Set<string>();
+      updatedSessions = updatedSessions.filter(s => {
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
+
+      setSessions(updatedSessions);
+      setSessionsPage(pageNumber);
     }
     setLoadingSessions(false);
   };
@@ -327,6 +446,36 @@ export default function InboxPage() {
     setLoadingSummary(false);
   };
 
+  const handleToggleAiAccess = async () => {
+    if (!activeSession) return;
+    const currentMeta = activeSession.metadata
+      ? (typeof activeSession.metadata === 'string' ? JSON.parse(activeSession.metadata) : activeSession.metadata)
+      : {};
+    const newMetadata = { ...currentMeta };
+    const currentEnabled = newMetadata.ai_context_enabled !== false;
+    newMetadata.ai_context_enabled = !currentEnabled;
+
+    // Optimistic Update
+    setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, metadata: newMetadata } : s));
+
+    try {
+      const { error } = await supabase
+        .from('chat_sessions')
+        .update({ metadata: newMetadata })
+        .eq('id', activeSession.id);
+
+      if (error) throw error;
+      toast.success(newMetadata.ai_context_enabled 
+        ? "AI assistant can now access this contact's details." 
+        : "AI assistant blocked from accessing this contact's details."
+      );
+    } catch (err: any) {
+      toast.error('Failed to update AI access: ' + err.message);
+      // Revert
+      setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, metadata: currentMeta } : s));
+    }
+  };
+
   const toggleBot = async () => {
     if (!activeSession) return;
     const newPausedState = !activeSession.bot_paused;
@@ -374,6 +523,14 @@ export default function InboxPage() {
     }
   };
 
+  const handleSessionsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const isAtBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 100;
+    if (isAtBottom && hasMoreSessions && !loadingSessions) {
+      fetchSessions(sessionsPage + 1, true);
+    }
+  };
+
   return (
     <div className="inbox-container" style={{ display: 'flex', height: isMobile ? 'calc(100vh - 100px)' : 'calc(100vh - 40px)', background: '#1A1D21', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
       {/* Sidebar */}
@@ -386,94 +543,193 @@ export default function InboxPage() {
           flexDirection: 'column' 
         }}
       >
-        <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Inbox</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <input
+              type="text"
+              placeholder="Search conversations..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                color: '#fff',
+                fontSize: '12px'
+              }}
+            />
+            <select
+              value={intentFilter}
+              onChange={e => setIntentFilter(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '11px',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="all">All Intents</option>
+              <option value="high">High Intent (Score &ge; 8)</option>
+              <option value="medium">Medium Intent (Score 4-7)</option>
+              <option value="low">Low Intent (Score 1-3)</option>
+            </select>
+          </div>
         </div>
         
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {loadingSessions ? (
+        <div onScroll={handleSessionsScroll} style={{ flex: 1, overflowY: 'auto' }}>
+          {loadingSessions && sessions.length === 0 ? (
             <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</div>
-          ) : sessions.length === 0 ? (
-            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>No conversations yet</div>
+          ) : filteredSessions.length === 0 ? (
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>No matching conversations</div>
           ) : (
-            sessions.map(session => (
-              <div 
-                key={session.id}
-                onClick={() => setActiveSessionId(session.id)}
-                style={{ 
-                  padding: '16px 20px', 
-                  borderBottom: '1px solid var(--border-color)', 
-                  cursor: 'pointer',
-                  background: activeSessionId === session.id ? 'var(--bg-secondary)' : 'transparent',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px'
-                }}
-              >
-                <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
-                  {session.sender_avatar ? (
-                    <img src={session.sender_avatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  ) : (
-                    <User size={20} color="white" />
-                  )}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                    <div style={{ fontWeight: '500', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {session.sender_name || 'Anonymous User'}
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 'normal', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <div>Page: {pages[session.page_id] || 'Unknown'}</div>
-                        <div 
-                          onClick={(e) => handleCopyId(e, session.sender_id)}
-                          style={{ 
-                            fontSize: '10px', 
-                            color: 'var(--accent-primary)', 
-                            cursor: 'pointer', 
-                            display: 'inline-flex', 
-                            alignItems: 'center', 
-                            gap: '4px',
-                            marginTop: '2px',
-                            width: 'fit-content'
-                          }}
-                          title="Click to copy Facebook User ID"
-                        >
-                          <Copy size={10} />
-                          ID: {session.sender_id}
+            <>
+              {filteredSessions.map(session => {
+                const prof = profiles[session.page_id + '_' + session.sender_id];
+                return (
+                  <div 
+                    key={session.id}
+                    onClick={() => setActiveSessionId(session.id)}
+                    style={{ 
+                      padding: '16px 20px', 
+                      borderBottom: '1px solid var(--border-color)', 
+                      cursor: 'pointer',
+                      background: activeSessionId === session.id ? 'var(--bg-secondary)' : 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px'
+                    }}
+                  >
+                    <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                      {session.sender_avatar ? (
+                        <img src={session.sender_avatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <User size={20} color="white" />
+                      )}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                        <div style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', maxWidth: '100%', verticalAlign: 'middle' }}>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>
+                              {session.sender_name || 'Anonymous User'}
+                            </span>
+                            {(() => {
+                              if (!prof) {
+                                return (
+                                  <span style={{
+                                    fontSize: '10px',
+                                    background: 'rgba(255, 255, 255, 0.08)',
+                                    color: 'var(--text-secondary)',
+                                    padding: '1px 5px',
+                                    borderRadius: '4px',
+                                    fontWeight: 'bold',
+                                    flexShrink: 0
+                                  }} title="Default score (pending AI profile)">
+                                    5/10
+                                  </span>
+                                );
+                              }
+                              const score = prof.lead_score ?? (
+                                prof.intent_level === 'high' || prof.intent_level === 'hot' ? 8 : 
+                                prof.intent_level === 'low' || prof.intent_level === 'cold' ? 2 : 5
+                              );
+                              const isHigh = score >= 8;
+                              const isLow = score <= 3;
+                              return (
+                                <span style={{
+                                  fontSize: '10px',
+                                  background: isHigh ? 'rgba(239, 68, 68, 0.2)' : isLow ? 'rgba(59, 130, 246, 0.2)' : 'rgba(234, 179, 8, 0.2)',
+                                  color: isHigh ? '#f87171' : isLow ? '#60a5fa' : '#facc15',
+                                  padding: '1px 5px',
+                                  borderRadius: '4px',
+                                  fontWeight: 'bold',
+                                  flexShrink: 0
+                                }}>
+                                  {score}/10
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 'normal', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <div>Page: {pages[session.page_id] || 'Unknown'}</div>
+                            <div 
+                              onClick={(e) => handleCopyId(e, session.sender_id)}
+                              style={{ 
+                                fontSize: '10px', 
+                                color: 'var(--accent-primary)', 
+                                cursor: 'pointer', 
+                                display: 'inline-flex', 
+                                alignItems: 'center', 
+                                gap: '4px',
+                                marginTop: '2px',
+                                width: 'fit-content'
+                              }}
+                              title="Click to copy Facebook User ID"
+                            >
+                              <Copy size={10} />
+                              ID: {session.sender_id}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', marginLeft: '8px' }}>
+                          {timeAgo(session.last_message_at)}
                         </div>
                       </div>
-                    </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', marginLeft: '8px' }}>
-                      {timeAgo(session.last_message_at)}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        {session.bot_paused ? (
+                          <span style={{ fontSize: '10px', background: 'var(--error)', color: 'white', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>PAUSED</span>
+                        ) : (
+                          <span style={{ fontSize: '10px', background: 'var(--accent-primary)', color: 'white', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>BOT</span>
+                        )}
+                        {prof && (
+                          <span style={{
+                            fontSize: '9px',
+                            background: prof.intent_level === 'high' ? 'rgba(239, 68, 68, 0.12)' : prof.intent_level === 'medium' ? 'rgba(234, 179, 8, 0.12)' : 'rgba(59, 130, 246, 0.12)',
+                            color: prof.intent_level === 'high' ? '#f87171' : prof.intent_level === 'medium' ? '#facc15' : '#60a5fa',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 'bold',
+                            textTransform: 'uppercase'
+                          }}>
+                            {prof.lead_score ? `Score: ${prof.lead_score}/10` : `Score: ${prof.intent_level === 'high' || prof.intent_level === 'hot' ? 8 : prof.intent_level === 'low' || prof.intent_level === 'cold' ? 2 : 5}/10`}
+                          </span>
+                        )}
+                        {session.unread_count > 0 && (
+                          <span style={{ fontSize: '10px', background: 'var(--text-secondary)', color: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '10px', fontWeight: 'bold' }}>
+                            {session.unread_count} new
+                          </span>
+                        )}
+                        {session.metadata?.has_trigger && (
+                          <span 
+                            title="Trigger Word Detected - Click to View" 
+                            style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', marginLeft: '4px', cursor: 'pointer' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveSessionId(session.id);
+                              setScrollToTrigger(true);
+                            }}
+                          >
+                          <AlertCircle size={14} />
+                        </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {session.bot_paused ? (
-                      <span style={{ fontSize: '10px', background: 'var(--error)', color: 'white', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>PAUSED</span>
-                    ) : (
-                      <span style={{ fontSize: '10px', background: 'var(--accent-primary)', color: 'white', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>BOT</span>
-                    )}
-                    {session.unread_count > 0 && (
-                      <span style={{ fontSize: '10px', background: 'var(--text-secondary)', color: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '10px', fontWeight: 'bold' }}>
-                        {session.unread_count} new
-                      </span>
-                    )}
-                    {session.metadata?.has_trigger && (
-                      <span 
-                        title="Trigger Word Detected - Click to View" 
-                        style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', marginLeft: '4px', cursor: 'pointer' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveSessionId(session.id);
-                          setScrollToTrigger(true);
-                        }}
-                      >
-                        <AlertCircle size={14} />
-                      </span>
-                    )}
-                  </div>
+                );
+              })}
+              {loadingSessions && (
+                <div style={{ padding: '15px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px' }}>
+                  Loading more...
                 </div>
-              </div>
-            ))
+              )}
+            </>
           )}
         </div>
       </div>
@@ -524,6 +780,33 @@ export default function InboxPage() {
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
                     <span>{activeSession.bot_paused ? 'Bot is paused' : 'Bot is active'}</span>
                     <span>•</span>
+                    {(() => {
+                      const activeProfile = profiles[activeSession.page_id + '_' + activeSession.sender_id];
+                      const score = activeProfile?.lead_score ?? (
+                        activeProfile?.intent_level === 'high' || activeProfile?.intent_level === 'hot' ? 8 : 
+                        activeProfile?.intent_level === 'low' || activeProfile?.intent_level === 'cold' ? 2 : 5
+                      );
+                      const isHigh = score >= 8;
+                      const isLow = score <= 3;
+                      const levelName = activeProfile?.intent_level ?? 'unknown';
+                      
+                      return (
+                        <>
+                          <span style={{
+                            background: !activeProfile ? 'rgba(255, 255, 255, 0.05)' : isHigh ? 'rgba(239, 68, 68, 0.15)' : isLow ? 'rgba(59, 130, 246, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                            color: !activeProfile ? 'var(--text-secondary)' : isHigh ? '#f87171' : isLow ? '#60a5fa' : '#facc15',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            fontWeight: 'bold',
+                            fontSize: '11px',
+                            textTransform: 'uppercase'
+                          }}>
+                            {(!activeProfile ? 'DEFAULT' : levelName) + ' INTENT'} ({score}/10)
+                          </span>
+                          <span>•</span>
+                        </>
+                      );
+                    })()}
                     <span>Page: {pages[activeSession.page_id] || 'Unknown'}</span>
                     <span>•</span>
                     <button 
@@ -792,16 +1075,77 @@ export default function InboxPage() {
               <h2>Customer Profile Summary</h2>
               <button className="btn-ghost btn-icon" onClick={() => setShowSummaryModal(false)}><X size={18}/></button>
             </div>
-            <div className="modal-body">
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {loadingSummary ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                   <Loader2 className="spin" size={24} style={{ margin: '0 auto 12px' }} />
                   <p>Fetching AI Profile...</p>
                 </div>
               ) : (
-                <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '8px', lineHeight: '1.6' }}>
-                  {renderMarkdown(customerSummary)}
-                </div>
+                <>
+                  <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '8px', lineHeight: '1.6' }}>
+                    {renderMarkdown(customerSummary)}
+                  </div>
+                  
+                  {(() => {
+                    const metadata = activeSession?.metadata
+                      ? (typeof activeSession.metadata === 'string' ? JSON.parse(activeSession.metadata) : activeSession.metadata)
+                      : {};
+                    const isAiEnabled = metadata.ai_context_enabled !== false;
+                    const otherMeta = Object.entries(metadata)
+                      .filter(([k]) => k !== 'ai_context_enabled');
+
+                    return (
+                      <div className="card" style={{ padding: '16px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '12px', margin: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                          <h3 style={{ fontSize: '13px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <BrainCircuit size={16} className="text-primary" /> Captured Flow Data
+                          </h3>
+                          <button
+                            onClick={handleToggleAiAccess}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: isAiEnabled ? 'rgba(34, 197, 94, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                              border: `1px solid ${isAiEnabled ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
+                              borderRadius: '20px',
+                              padding: '4px 10px',
+                              color: isAiEnabled ? '#4ade80' : '#f87171',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              transition: 'all 0.15s'
+                            }}
+                          >
+                            {isAiEnabled ? 'AI Fed' : 'AI Blocked'}
+                          </button>
+                        </div>
+                        
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4' }}>
+                          {isAiEnabled 
+                            ? "AI assistant can access captured parameters to contextually reply to the customer." 
+                            : "AI assistant is blocked from accessing these variables."}
+                        </p>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                          {otherMeta.length === 0 ? (
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', fontStyle: 'italic', textAlign: 'center', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                              No variables captured yet for this session.
+                            </div>
+                          ) : (
+                            otherMeta.map(([key, val]) => (
+                              <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.02)' }}>
+                                <span style={{ fontWeight: 600, color: 'var(--text-secondary)', fontSize: '11px' }}>{key}</span>
+                                <span style={{ color: '#fff', fontSize: '11px', wordBreak: 'break-all', marginLeft: '12px' }}>{String(val)}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </>
               )}
             </div>
           </div>

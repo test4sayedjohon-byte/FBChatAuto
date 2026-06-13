@@ -29,6 +29,7 @@ interface AIProviderRow {
   is_active_agent?: boolean;
   is_active_vision?: boolean;
   is_active_image?: boolean;
+  is_active_content?: boolean;
   is_global?: boolean;
   fallback_order?: number;
   fallback_chat_order?: number | null;
@@ -37,6 +38,7 @@ interface AIProviderRow {
   fallback_vision_order?: number | null;
   fallback_embedding_order?: number | null;
   fallback_image_order?: number | null;
+  fallback_content_order?: number | null;
   extra_headers: Record<string, string>;
   max_tokens: number | null;
   temperature: number | null;
@@ -50,7 +52,7 @@ interface AIProviderRow {
 async function getProviderChainForRole(
   supabase: SupabaseClient,
   userId: string,
-  role: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision' | 'comment_analysis' | 'image',
+  role: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision' | 'comment_analysis' | 'image' | 'content',
   db?: D1Database
 ): Promise<AIProviderConfig[]> {
   const activeField = role === 'comment_analysis'
@@ -96,7 +98,8 @@ async function getProviderChainForRole(
     embedding: 'assigned_embedding_provider_id',
     vision: 'assigned_vision_provider_id',
     comment_analysis: 'assigned_comment_analysis_provider_id',
-    image: 'assigned_image_provider_id'
+    image: 'assigned_image_provider_id',
+    content: 'assigned_content_provider_id'
   };
 
   const assignedCol = userAssignedFields[role];
@@ -598,12 +601,14 @@ function rowToConfig(row: AIProviderRow): AIProviderConfig {
     fallbackVisionOrder: row.fallback_vision_order ?? null,
     fallbackEmbeddingOrder: row.fallback_embedding_order ?? null,
     fallbackImageOrder: row.fallback_image_order ?? null,
+    fallbackContentOrder: row.fallback_content_order ?? null,
     is_active_chat: row.is_active_chat === true || (row.is_active_chat as any) === 1,
     is_active_embedding: row.is_active_embedding === true || (row.is_active_embedding as any) === 1,
     is_active_summarization: row.is_active_summarization === true || (row.is_active_summarization as any) === 1,
     is_active_agent: row.is_active_agent === true || (row.is_active_agent as any) === 1,
     is_active_vision: row.is_active_vision === true || (row.is_active_vision as any) === 1,
     is_active_image: row.is_active_image === true || (row.is_active_image as any) === 1,
+    is_active_content: row.is_active_content === true || (row.is_active_content as any) === 1,
   };
 }
 
@@ -658,5 +663,59 @@ export async function getActiveImageProvider(
   db?: D1Database
 ): Promise<AIProviderConfig | null> {
   const chain = await getImageProviderChain(supabase, userId, db);
+  return chain[0] || null;
+}
+
+/**
+ * Load the content provider chain.
+ */
+export async function getContentProviderChain(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig[]> {
+  // Check if content creation is allowed (defaults to true)
+  let allowContent = true;
+  let userRecord: any = null;
+  if (db) {
+    userRecord = await getUserRecord(db, supabase, userId);
+    if (userRecord && userRecord.allow_content !== undefined && userRecord.allow_content !== null) {
+      allowContent = userRecord.allow_content === 1 || userRecord.allow_content === true;
+    }
+  } else {
+    try {
+      const { data: res } = await supabase
+        .from('users')
+        .select('allow_content, settings')
+        .eq('id', userId)
+        .maybeSingle();
+      userRecord = res;
+      if (userRecord && userRecord.allow_content !== null && userRecord.allow_content !== undefined) {
+        allowContent = userRecord.allow_content;
+      }
+    } catch (_) {}
+  }
+
+  if (allowContent && userRecord && isFeatureDisabledByUser(userRecord, 'allow_content')) {
+    allowContent = false;
+  }
+
+  if (!allowContent) {
+    console.warn(`[AI] ⚠️ Content creation is disabled for user ${userId}. Returning empty chain.`);
+    return [];
+  }
+
+  return getProviderChainForRole(supabase, userId, 'content', db);
+}
+
+/**
+ * Load the active content provider.
+ */
+export async function getActiveContentProvider(
+  supabase: SupabaseClient,
+  userId: string,
+  db?: D1Database
+): Promise<AIProviderConfig | null> {
+  const chain = await getContentProviderChain(supabase, userId, db);
   return chain[0] || null;
 }

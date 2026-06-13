@@ -155,6 +155,171 @@ export async function buildSystemPrompt(
     console.error('[Prompt] Failed to load media assets for prompt:', err);
   }
 
+  // 1d. Fetch Session Metadata & Sender Name
+  let sessionMetadata: Record<string, any> | null = null;
+  let senderName: string | null = null;
+  try {
+    if (db) {
+      const d1Result = await db.prepare(`SELECT sender_name, metadata FROM chat_sessions WHERE page_id = ? AND sender_id = ?`).bind(pageId, senderId).first<{ sender_name: string | null, metadata: string | null }>();
+      if (d1Result) {
+        senderName = d1Result.sender_name;
+        if (d1Result.metadata) {
+          sessionMetadata = JSON.parse(d1Result.metadata);
+        }
+      }
+    } else {
+      const { data: session } = await supabase
+        .from('chat_sessions')
+        .select('sender_name, metadata')
+        .eq('page_id', pageId)
+        .eq('sender_id', senderId)
+        .maybeSingle();
+      if (session) {
+        senderName = session.sender_name;
+        if (session.metadata) {
+          sessionMetadata = typeof session.metadata === 'string' ? JSON.parse(session.metadata) : session.metadata;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Prompt] Failed to fetch session metadata or sender name:', err);
+  }
+
+  // 1e. Fetch active DM Flows, Chat Rules, and Comment Rules to feed the AI RAG/Knowledge
+  let automationsText = '';
+  try {
+    // 1. Fetch DM Flows
+    const { data: flows } = await supabase
+      .from('dm_flows')
+      .select('id, name, description, feed_to_ai')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .eq('feed_to_ai', true);
+
+    // 2. Fetch Chat Rules
+    const { data: rules } = await supabase
+      .from('chat_rules')
+      .select('id, name, keywords, dm_flow_id, feed_to_ai')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .eq('feed_to_ai', true)
+      .or(`page_connection_id.eq.${pageId},page_connection_id.is.null`);
+
+    // 3. Fetch Comment Rules (Auto-moderation)
+    const { data: comments } = await supabase
+      .from('comment_rules')
+      .select('id, trigger_type, keywords, feed_to_ai')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .eq('feed_to_ai', true)
+      .eq('page_connection_id', pageId);
+
+    const autoParts: string[] = [];
+
+    if (flows && flows.length > 0) {
+      autoParts.push('### Dynamic Visual Flows (DM Flows)');
+      for (const flow of flows) {
+        // Find if any keyword rule triggers this flow
+        const matchingRules = rules?.filter(r => r.dm_flow_id === flow.id);
+        const triggers = matchingRules && matchingRules.length > 0
+          ? matchingRules.flatMap(r => r.keywords).join(', ')
+          : '';
+        autoParts.push(`- **Flow: "${flow.name}"**${triggers ? ` (Triggered by sending: "${triggers}")` : ''}${flow.description ? ` - ${flow.description}` : ''}`);
+      }
+    }
+
+    const keywordOnlyRules = rules?.filter(r => !r.dm_flow_id) || [];
+    if (keywordOnlyRules.length > 0) {
+      autoParts.push('### Chat Keyword Rules');
+      for (const rule of keywordOnlyRules) {
+        autoParts.push(`- **Keyword Reply: "${rule.name}"** (Triggered by sending: "${rule.keywords.join(', ')}")`);
+      }
+    }
+
+    if (comments && comments.length > 0) {
+      autoParts.push('### Comment Moderation & Auto-Reply Rules');
+      for (const rule of comments) {
+        const triggers = rule.trigger_type === 'keywords' && rule.keywords
+          ? `keywords like "${rule.keywords.join(', ')}"`
+          : `trigger type "${rule.trigger_type}"`;
+        autoParts.push(`- **Auto-Moderation Rule**: Triggers on public comments with ${triggers}`);
+      }
+    }
+
+    if (autoParts.length > 0) {
+      automationsText = autoParts.join('\n');
+    }
+  } catch (err) {
+    console.warn('[Prompt] Failed to load automation knowledge:', err);
+  }
+
+  // 1f. Fetch user message count
+  let userMsgCount = 0;
+  try {
+    if (db) {
+      const result = await db.prepare(`
+        SELECT COUNT(*) as cnt 
+        FROM chat_messages 
+        WHERE session_id = (SELECT id FROM chat_sessions WHERE page_id = ? AND sender_id = ? LIMIT 1) 
+          AND role = 'user'
+      `).bind(pageId, senderId).first<{ cnt: number }>();
+      userMsgCount = result?.cnt || 0;
+    } else {
+      const { data: session } = await supabase
+        .from('chat_sessions')
+        .select('id')
+        .eq('page_id', pageId)
+        .eq('sender_id', senderId)
+        .maybeSingle();
+      if (session) {
+        const { count } = await supabase
+          .from('chat_messages')
+          .select('*', { count: 'exact', head: true })
+          .eq('session_id', session.id)
+          .eq('role', 'user');
+        userMsgCount = count || 0;
+      }
+    }
+  } catch (err) {
+    console.warn('[Prompt] Failed to fetch user message count:', err);
+  }
+
+  // 1g. Check if we already have the customer's phone number and email
+  let hasPhone = false;
+  let hasEmail = false;
+
+  if (sessionMetadata) {
+    if (sessionMetadata.phone || sessionMetadata.phone_number || sessionMetadata.mobile || sessionMetadata.whatsapp || sessionMetadata.number) {
+      hasPhone = true;
+    }
+    if (sessionMetadata.email || sessionMetadata.email_id || sessionMetadata.mail) {
+      hasEmail = true;
+    }
+    
+    // Fallback scan in sessionMetadata object values
+    const metaStr = JSON.stringify(sessionMetadata).toLowerCase();
+    const phoneRegex = /(?:\+?880|0)1[3-9]\d{8}\b|\+?[1-9]\d{9,14}\b|(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?[2-9]\d{2}[-.\s]?\d{4}\b/;
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+    if (!hasPhone && phoneRegex.test(metaStr)) {
+      hasPhone = true;
+    }
+    if (!hasEmail && emailRegex.test(metaStr)) {
+      hasEmail = true;
+    }
+  }
+
+  if (customerSummary) {
+    const summaryLower = customerSummary.toLowerCase();
+    const phoneRegex = /(?:\+?880|0)1[3-9]\d{8}\b|\+?[1-9]\d{9,14}\b|(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?[2-9]\d{2}[-.\s]?\d{4}\b/;
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+    if (phoneRegex.test(summaryLower) || /\b01[3-9]\d{8}\b/.test(summaryLower)) {
+      hasPhone = true;
+    }
+    if (emailRegex.test(summaryLower)) {
+      hasEmail = true;
+    }
+  }
+
   // 2. Build the base prompt
   const parts: string[] = [];
 
@@ -175,6 +340,11 @@ export async function buildSystemPrompt(
         customPrompt = customPrompt.replace(new RegExp(escapeRegExp(placeholderBracket), 'g'), val);
       }
     }
+    // Support sender name / customer name placeholders
+    if (senderName) {
+      customPrompt = customPrompt.replace(/\{\{(sender_name|customer_name)\}\}/gi, senderName);
+      customPrompt = customPrompt.replace(/\[(sender_name|customer_name)\]/gi, senderName);
+    }
     parts.push(customPrompt);
     parts.push('');
   } else {
@@ -192,11 +362,68 @@ export async function buildSystemPrompt(
     parts.push('');
   }
 
+  // Inject Customer Name/Info
+  if (senderName && senderName !== 'Anonymous User') {
+    parts.push('## Customer Info');
+    parts.push(`You are talking to: ${senderName}`);
+    parts.push('Address them by name naturally to make the reply feel personal.');
+    parts.push('');
+  }
+
+  // 2d. Inject Contact Information Gathering Instructions
+  // Never ask on the 1st user message.
+  // On the 2nd user message, there is a 50% chance (stateless randomized hash based on senderId).
+  // Starting from the 3rd user message, we always ask if missing.
+  const isSecondMessageEven = senderId ? (senderId.charCodeAt(senderId.length - 1) % 2 === 0) : true;
+  const shouldAskForContact = (userMsgCount >= 3) || (userMsgCount === 2 && isSecondMessageEven);
+
+  if (shouldAskForContact && pageConnection.enable_customer_profiling === true) {
+    if (!hasPhone) {
+      parts.push('## Contact Info Policy (High Priority)');
+      parts.push('- The customer\'s phone number or WhatsApp is not yet recorded in the database.');
+      parts.push('- Ask the customer naturally for their phone number or WhatsApp when appropriate to help them better.');
+      parts.push('- Do NOT be forceful; ask in a conversational, human-like manner.');
+      parts.push('');
+    } else if (!hasEmail) {
+      parts.push('## Contact Info Policy (High Priority)');
+      parts.push('- The customer\'s email address is not yet recorded in the database.');
+      parts.push('- Ask the customer naturally for their email address when appropriate.');
+      parts.push('- Do NOT be forceful; ask in a conversational, human-like manner.');
+      parts.push('');
+    }
+  }
+
   // 2b. Inject Customer Summary
   if (customerSummary) {
     parts.push('## Customer Profile (Internal Memory - FOR REFERENCE ONLY)');
     parts.push('The following summary is in English for internal records only. DO NOT reply in English just because this summary is in English. Always follow the Language Policy.');
     parts.push(customerSummary);
+    parts.push('');
+  }
+
+  // 2c. Inject Captured Information
+  const isAiContextEnabled = sessionMetadata && sessionMetadata.ai_context_enabled !== false;
+  if (isAiContextEnabled && sessionMetadata && Object.keys(sessionMetadata).length > 0) {
+    const hasCapturedInfo = Object.entries(sessionMetadata).some(([k, v]) => 
+      k !== 'ai_context_enabled' && v !== null && v !== undefined && v !== ''
+    );
+    if (hasCapturedInfo) {
+      parts.push('## Captured Information');
+      parts.push('The following details have been collected from the user during this conversation:');
+      for (const [k, v] of Object.entries(sessionMetadata)) {
+        if (k !== 'ai_context_enabled' && v !== null && v !== undefined && v !== '') {
+          parts.push(`- **${k.charAt(0).toUpperCase() + k.slice(1)}:** ${v}`);
+        }
+      }
+      parts.push('');
+    }
+  }
+
+  // 2e. Inject Automated Triggers and Flows
+  if (automationsText) {
+    parts.push('## Available Automation Triggers & Flows');
+    parts.push('The business has configured the following automated workflows. If the user asks for pricing, info, or anything matching these, you should tell them to send the trigger word to start the automatic flow, or refer them to it:');
+    parts.push(automationsText);
     parts.push('');
   }
 

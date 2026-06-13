@@ -79,7 +79,43 @@ export async function evaluateCommentRules(
     return r.post_id.split('_').pop() === postId.split('_').pop();
   });
   const globalRules = rules.filter(r => !r.post_id);
-  const sortedRules = [...postSpecificRules, ...globalRules];
+  let sortedRules = [...postSpecificRules, ...globalRules];
+
+  // 1.5 Fetch customer profile to evaluate intent targeting constraints
+  let customerProfile: any = null;
+  if (senderId && pageId) {
+    try {
+      const { data: profile } = await supabase
+        .from('customer_profiles')
+        .select('lead_score, intent_level')
+        .eq('page_id', pageId)
+        .eq('sender_id', senderId)
+        .maybeSingle();
+      customerProfile = profile;
+    } catch (err: any) {
+      console.warn(`[Rules Engine] Failed to load customer profile for targeting check: ${err.message}`);
+    }
+  }
+
+  // Filter sortedRules by customer profile constraints
+  sortedRules = sortedRules.filter(rule => {
+    if (rule.min_lead_score !== undefined && rule.min_lead_score !== null) {
+      const customerScore = customerProfile?.lead_score ?? 1; // Default to 1 if no profile
+      if (customerScore < rule.min_lead_score) {
+        console.log(`[Rules Engine] Excluding rule "${rule.id}" due to lead_score constraint: customer score ${customerScore} < min required ${rule.min_lead_score}`);
+        return false;
+      }
+    }
+
+    if (rule.intent_levels && Array.isArray(rule.intent_levels) && rule.intent_levels.length > 0) {
+      const customerIntent = customerProfile?.intent_level || 'unknown';
+      if (!rule.intent_levels.includes(customerIntent)) {
+        console.log(`[Rules Engine] Excluding rule "${rule.id}" due to intent_level constraint: customer intent "${customerIntent}" not in allowed list [${rule.intent_levels.join(', ')}]`);
+        return false;
+      }
+    }
+    return true;
+  });
 
   // 2. Load User Profile to check allow_comment_analysis and brand_voice_profile
   let allowCommentAnalysis = true;

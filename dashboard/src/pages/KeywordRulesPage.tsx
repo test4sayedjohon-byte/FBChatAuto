@@ -26,7 +26,8 @@ import {
   CheckCircle2,
   MessageSquare,
   Zap,
-  RefreshCw
+  RefreshCw,
+  BrainCircuit
 } from 'lucide-react';
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -47,8 +48,11 @@ interface ChatRule {
   media_id: string | null;
   priority: number;
   is_active: boolean;
+  feed_to_ai?: boolean;
   match_count: number;
   reply_mode?: 'random' | 'all' | null;
+  min_lead_score?: number | null;
+  intent_levels?: string[] | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -233,7 +237,10 @@ export default function KeywordRulesPage() {
   const [formMediaId, setFormMediaId] = useState('');
   const [formPriority, setFormPriority] = useState(0);
   const [formIsActive, setFormIsActive] = useState(true);
+  const [formFeedToAi, setFormFeedToAi] = useState(true);
   const [formReplyMode, setFormReplyMode] = useState<'random' | 'all'>('random');
+  const [formMinLeadScore, setFormMinLeadScore] = useState<number | ''>('');
+  const [formIntentLevels, setFormIntentLevels] = useState<string[]>([]);
 
   /* ─── Data Loading ───────────────────────────────────────────────────── */
 
@@ -276,7 +283,10 @@ export default function KeywordRulesPage() {
 
   async function refreshRules() {
     const { data, error } = await supabase
-      .from('chat_rules').select('*').order('priority', { ascending: false });
+      .from('chat_rules')
+      .select('*')
+      .or('is_canvas_trigger.eq.false,is_canvas_trigger.is.null')
+      .order('priority', { ascending: false });
     if (error) throw error;
     setRules(data || []);
   }
@@ -318,6 +328,19 @@ export default function KeywordRulesPage() {
       refreshRules();
     } catch (err: any) {
       toast.error('Failed to toggle rule: ' + err.message);
+    }
+  };
+
+  const handleToggleFeedToAi = async (rule: ChatRule) => {
+    const nextVal = rule.feed_to_ai !== false ? false : true;
+    try {
+      const { error } = await supabase.from('chat_rules')
+        .update({ feed_to_ai: nextVal }).eq('id', rule.id);
+      if (error) throw error;
+      toast.success(nextVal ? 'Rule added to AI assistant knowledge base.' : 'Rule hidden from AI assistant knowledge base.');
+      refreshRules();
+    } catch (err: any) {
+      toast.error('Failed to update AI knowledge: ' + err.message);
     }
   };
 
@@ -368,7 +391,10 @@ export default function KeywordRulesPage() {
     setFormMediaId(mediaAssets[0]?.id || '');
     setFormPriority(0);
     setFormIsActive(true);
+    setFormFeedToAi(true);
     setFormReplyMode('random');
+    setFormMinLeadScore('');
+    setFormIntentLevels([]);
     if (pages.length > 0) setFormPageId(pages[0].page_id);
   };
 
@@ -402,6 +428,9 @@ export default function KeywordRulesPage() {
     setFormMediaId(rule.media_id || mediaAssets[0]?.id || '');
     setFormPriority(rule.priority);
     setFormIsActive(rule.is_active);
+    setFormFeedToAi(rule.feed_to_ai !== false);
+    setFormMinLeadScore(rule.min_lead_score !== undefined && rule.min_lead_score !== null ? rule.min_lead_score : '');
+    setFormIntentLevels(rule.intent_levels || []);
     setModalOpen(true);
   };
 
@@ -443,6 +472,9 @@ export default function KeywordRulesPage() {
       media_id: formActionType === 'media' ? (formMediaId || null) : null,
       priority: formPriority,
       is_active: formIsActive,
+      feed_to_ai: formFeedToAi,
+      min_lead_score: formMinLeadScore === '' ? null : Number(formMinLeadScore),
+      intent_levels: formIntentLevels.length === 0 ? null : formIntentLevels,
       updated_at: new Date().toISOString(),
     };
 
@@ -666,6 +698,26 @@ export default function KeywordRulesPage() {
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                       {rule.match_count || 0} triggered
                     </span>
+                    <button
+                      onClick={() => handleToggleFeedToAi(rule)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        background: rule.feed_to_ai !== false ? 'rgba(59, 130, 246, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '3px 8px',
+                        color: rule.feed_to_ai !== false ? '#3b82f6' : '#ef4444',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer'
+                      }}
+                      title={rule.feed_to_ai !== false ? 'AI assistant reads this rule.' : 'AI assistant blocked from reading this rule.'}
+                    >
+                      <BrainCircuit size={10} />
+                      {rule.feed_to_ai !== false ? 'AI Fed' : 'Blocked'}
+                    </button>
                     {rule.priority > 0 && (
                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', padding: '2px 6px', borderRadius: '4px' }}>
                         P{rule.priority}
@@ -919,6 +971,71 @@ export default function KeywordRulesPage() {
                       <div>
                         <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Case Sensitive</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Off = "Price" matches "PRICE" too</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Intent Targeting (Optional) */}
+                  <div style={{
+                    background: 'rgba(255,255,255,0.01)',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    borderRadius: '10px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, color: 'var(--accent-primary)' }}>
+                      <BrainCircuit size={14} />
+                      AI Intent & Lead Targeting (Optional)
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '16px' }}>
+                      <div>
+                        <label style={S.label}>
+                          Min Lead Score
+                          <Tooltip text="Only trigger this rule if the customer's computed lead score is equal or greater than this value (1-10)." />
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                          <select 
+                            value={formMinLeadScore} 
+                            onChange={e => setFormMinLeadScore(e.target.value === '' ? '' : Number(e.target.value))} 
+                            style={{ ...S.select, paddingRight: '32px' }}
+                          >
+                            <option value="">Any Score (Disabled)</option>
+                            {[1,2,3,4,5,6,7,8,9,10].map(s => (
+                              <option key={s} value={s}>Score &ge; {s}</option>
+                            ))}
+                          </select>
+                          <ChevronDown size={13} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
+                        </div>
+                      </div>
+                      <div>
+                        <label style={S.label}>
+                          Target Intent Levels
+                          <Tooltip text="Only trigger this rule if the customer's intent level is checked below." />
+                        </label>
+                        <div style={{ display: 'flex', gap: '14px', marginTop: '6px' }}>
+                          {['low', 'medium', 'high'].map(lvl => {
+                            const isChecked = formIntentLevels.includes(lvl);
+                            return (
+                              <label key={lvl} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#fff', cursor: 'pointer', textTransform: 'capitalize' }}>
+                                <input 
+                                  type="checkbox" 
+                                  checked={isChecked} 
+                                  onChange={e => {
+                                    if (e.target.checked) {
+                                      setFormIntentLevels(prev => [...prev, lvl]);
+                                    } else {
+                                      setFormIntentLevels(prev => prev.filter(x => x !== lvl));
+                                    }
+                                  }}
+                                  style={{ accentColor: 'var(--accent-primary)' }}
+                                />
+                                {lvl}
+                              </label>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1230,6 +1347,16 @@ export default function KeywordRulesPage() {
                       <div>
                         <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Enable Immediately</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rule goes live on save</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <label className="switch">
+                        <input type="checkbox" checked={formFeedToAi} onChange={e => setFormFeedToAi(e.target.checked)} />
+                        <span className="slider round"></span>
+                      </label>
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Feed to AI Chatbot</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Expose trigger info to AI chatbot prompt</div>
                       </div>
                     </div>
                   </div>

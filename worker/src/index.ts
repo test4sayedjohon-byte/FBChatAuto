@@ -271,40 +271,66 @@ export default {
     
     // 2. Sweeper: Summarize leftover messages (wrapped to handle outages safely)
     try {
-      // We want sessions where last activity was > 2 hours ago, 
-      // but < 4 hours ago (so we don't sweep the whole database every time)
-      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-      const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+      const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       
-      // Find candidate sessions
+      // Find candidate sessions active in the last 24 hours but idle for at least 30 minutes
       const { data: sessions } = await supabase
         .from('chat_sessions')
         .select('id, page_id, sender_id, user_id, last_message_at')
-        .lt('last_message_at', twoHoursAgo)
-        .gt('last_message_at', fourHoursAgo);
+        .lt('last_message_at', thirtyMinAgo)
+        .gt('last_message_at', twentyFourHoursAgo)
+        .order('last_message_at', { ascending: false });
 
-      // NOTE: Do NOT 'return' here — that would skip steps 3-5 below!
       if (sessions && sessions.length > 0) {
-        // Limit to at most 3 sessions per cron run to avoid hitting Cloudflare's 50 subrequest limit
-        const sessionsToSweep = sessions.slice(0, 3);
+        // Limit to at most 5 sessions per cron run to avoid hitting Cloudflare subrequest limits
+        let processedCount = 0;
 
-        for (const session of sessionsToSweep) {
-          // get pageConnection
+        for (const session of sessions) {
+          if (processedCount >= 5) break;
+
           const pageConnection = await getPageConnectionFallback(env.DB, supabase, session.page_id);
           if (!pageConnection || !pageConnection.enable_customer_profiling) continue;
 
-          // check message count
-          const { count } = await supabase
+          // Check number of customer messages
+          const { count: userMsgCount } = await supabase
             .from('chat_messages')
             .select('*', { count: 'exact', head: true })
-            .eq('session_id', session.id);
+            .eq('session_id', session.id)
+            .eq('role', 'user');
 
-          // If perfectly summarized or 0, skip
-          if (!count || count % 10 === 0) continue; 
+          if (!userMsgCount) continue;
 
-          console.log(`[Cron] Summarizing leftover messages for session ${session.id}`);
-          // Summarize leftover
-          await triggerSlidingWindowSummarization(supabase, session.id, pageConnection, session.sender_id, true);
+          // If less than 5 messages, require 22 hours of inactivity
+          if (userMsgCount < 5) {
+            const twentyTwoHoursAgo = new Date(Date.now() - 22 * 60 * 60 * 1000);
+            if (new Date(session.last_message_at) > twentyTwoHoursAgo) {
+              continue; // Skip, not idle long enough
+            }
+          }
+
+          // Check if the profile summary is already up to date
+          const { data: profile } = await supabase
+            .from('customer_profiles')
+            .select('updated_at')
+            .eq('page_id', session.page_id)
+            .eq('sender_id', session.sender_id)
+            .maybeSingle();
+
+          if (profile && profile.updated_at && new Date(profile.updated_at) >= new Date(session.last_message_at)) {
+            continue; // Already summarized latest messages
+          }
+
+          console.log(`[Cron] Summarizing session ${session.id} (userMsgCount: ${userMsgCount}, idle)`);
+          await triggerSlidingWindowSummarization(
+            supabase,
+            session.id,
+            pageConnection,
+            session.sender_id,
+            true,
+            userMsgCount >= 5 ? 5 : 1
+          );
+          processedCount++;
         }
       }
     } catch (cronErr: any) {
@@ -334,6 +360,14 @@ export default {
       await runSchedulerJobs(supabase);
     } catch (schedulerErr: any) {
       console.error('[Cron] Post Scheduler job failed:', schedulerErr.message);
+    }
+
+    // 3.5. Campaign Broadcasts Scheduler: Send paced bulk messages
+    try {
+      const { runCronBroadcasts } = await import('./scheduler/broadcast-runner');
+      await runCronBroadcasts(supabase);
+    } catch (broadcastErr: any) {
+      console.error('[Cron] Campaign Broadcasts Scheduler failed:', broadcastErr.message);
     }
 
     // 4. Token Health: Check page tokens health

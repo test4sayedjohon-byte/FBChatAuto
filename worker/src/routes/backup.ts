@@ -125,7 +125,9 @@ backup.post('/restore-batch', async (c) => {
         assigned_agent_provider_id: null,
         assigned_vision_provider_id: null,
         assigned_image_provider_id: null,
-        assigned_fallback_image_provider_id: null
+        assigned_fallback_image_provider_id: null,
+        assigned_content_provider_id: null,
+        assigned_fallback_content_provider_id: null
       }));
 
       for (const userRow of rows) {
@@ -202,6 +204,8 @@ backup.post('/restore-finalize', async (c) => {
         assigned_vision_provider_id: userRow.assigned_vision_provider_id || null,
         assigned_image_provider_id: userRow.assigned_image_provider_id || null,
         assigned_fallback_image_provider_id: userRow.assigned_fallback_image_provider_id || null,
+        assigned_content_provider_id: userRow.assigned_content_provider_id || null,
+        assigned_fallback_content_provider_id: userRow.assigned_fallback_content_provider_id || null,
       };
 
       const { error } = await supabase

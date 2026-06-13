@@ -7,12 +7,16 @@ import { sendFacebookReply } from '../facebook';
 import { sendWhatsAppReply } from '../whatsapp';
 import { processDocument } from '../rag';
 import { handleAgentChat } from '../agent';
+import { generateBulkContent } from '../agent/bulk-generator';
 import { verifyAndDeductCredits } from '../credits';
 import { processAutopilotConfig } from '../comments/autopilot';
 import { runSchedulerJobs } from '../scheduler';
 import { sendCommentReply, likeComment, hideComment, deleteComment } from '../comments/meta-api';
+import broadcastsRouter from './broadcasts';
 
 const api = new Hono<AppEnv>();
+
+api.route('/broadcasts', broadcastsRouter);
 
 api.post('/chat/toggle-bot', async (c) => {
   try {
@@ -937,6 +941,237 @@ api.get('/post-metrics/:postId', async (c) => {
   } catch (error: any) {
     console.error('[Fetch Post Metrics Error]:', error);
     return c.json({ error: error.message }, 500);
+  }
+});
+
+// ─── Super Admin Content Prompts API ──────────────────────────────────────────
+
+api.get('/admin/content-prompts', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+    
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin, role').eq('id', user.id).single();
+    if (!profile?.is_super_admin && profile?.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    const { data: prompts, error } = await supabase
+      .from('system_content_prompts')
+      .select('*')
+      .order('sequence_order', { ascending: true });
+
+    if (error) throw error;
+    return c.json({ prompts });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.post('/admin/content-prompts', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+    
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin, role').eq('id', user.id).single();
+    if (!profile?.is_super_admin && profile?.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    const body = await c.req.json();
+    const { title, prompt_text, image_prompt_text, sequence_order, is_active } = body;
+
+    const { data: prompt, error } = await supabase
+      .from('system_content_prompts')
+      .insert({
+        title,
+        prompt_text,
+        image_prompt_text,
+        sequence_order: sequence_order || 0,
+        is_active: is_active !== undefined ? is_active : true
+      })
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return c.json({ success: true, prompt });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.put('/admin/content-prompts/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+    
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin, role').eq('id', user.id).single();
+    if (!profile?.is_super_admin && profile?.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    const body = await c.req.json();
+    const { title, prompt_text, image_prompt_text, sequence_order, is_active } = body;
+
+    const updates: any = {};
+    if (title !== undefined) updates.title = title;
+    if (prompt_text !== undefined) updates.prompt_text = prompt_text;
+    if (image_prompt_text !== undefined) updates.image_prompt_text = image_prompt_text;
+    if (sequence_order !== undefined) updates.sequence_order = sequence_order;
+    if (is_active !== undefined) updates.is_active = is_active;
+
+    const { data: prompt, error } = await supabase
+      .from('system_content_prompts')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return c.json({ success: true, prompt });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.delete('/admin/content-prompts/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+    
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin, role').eq('id', user.id).single();
+    if (!profile?.is_super_admin && profile?.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    const { error } = await supabase
+      .from('system_content_prompts')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    return c.json({ success: true });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+// ─── AI Bulk Content Generation Endpoint ──────────────────────────────────────
+
+api.post('/agent/generate-bulk', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const body = await c.req.json();
+    const { 
+      pageConnectionId, 
+      count, 
+      generateImages, 
+      startDate, 
+      frequency,
+      preset,
+      productIds,
+      mediaType,
+      imageModel,
+      aestheticTheme,
+      enableMiddleAi,
+      addFirstComment,
+      publishStatus,
+      themeText,
+      postsPerDay,
+      postTimes
+    } = body;
+    
+    if (!pageConnectionId || !count || !startDate || !frequency) {
+      return c.json({ error: 'Missing required parameters: pageConnectionId, count, startDate, frequency' }, 400);
+    }
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    const result = await generateBulkContent(
+      supabase,
+      user.id,
+      pageConnectionId,
+      parseInt(count),
+      !!generateImages,
+      startDate,
+      frequency,
+      c.env,
+      {
+        preset,
+        productIds,
+        mediaType,
+        imageModel,
+        aestheticTheme,
+        enableMiddleAi: !!enableMiddleAi,
+        addFirstComment: !!addFirstComment,
+        publishStatus,
+        themeText,
+        postsPerDay: postsPerDay ? parseInt(postsPerDay) : 1,
+        postTimes: Array.isArray(postTimes) ? postTimes : []
+      },
+      c.env.DB
+    );
+
+    return c.json(result);
+  } catch (error: any) {
+    console.error('[Generate Bulk Content Error]:', error);
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
+// ─── User Bulk Delete Endpoint ────────────────────────────────────────────────
+
+api.post('/agent/delete-bulk', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const { pageConnectionId, startTime, endTime, platform } = await c.req.json();
+    
+    if (!startTime || !endTime) {
+      return c.json({ error: 'Missing required time range parameters' }, 400);
+    }
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    let query = supabase
+      .from('scheduled_posts')
+      .delete()
+      .eq('user_id', user.id)
+      .gte('scheduled_time', new Date(startTime).toISOString())
+      .lte('scheduled_time', new Date(endTime).toISOString());
+
+    if (pageConnectionId) {
+      query = query.eq('page_connection_id', pageConnectionId);
+    }
+    if (platform) {
+      query = query.eq('platform', platform);
+    }
+
+    const { error } = await query;
+
+    if (error) throw error;
+    
+    return c.json({ success: true, message: `Successfully deleted posts in the selected range.` });
+  } catch (error: any) {
+    console.error('[Bulk Delete Error]:', error);
+    return c.json({ success: false, error: error.message }, 500);
   }
 });
 

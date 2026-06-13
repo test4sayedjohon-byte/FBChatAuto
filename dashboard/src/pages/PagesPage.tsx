@@ -51,6 +51,7 @@ interface PageConn {
   follow_up_delay_minutes?: number;
   follow_up_prompt?: string | null;
   follow_up_max_count?: number;
+  follow_up_min_score?: number;
 }
 
 export default function PagesPage() {
@@ -89,6 +90,7 @@ export default function PagesPage() {
   const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(60);
   const [followUpPrompt, setFollowUpPrompt] = useState('');
   const [followUpMaxCount, setFollowUpMaxCount] = useState(1);
+  const [followUpMinScore, setFollowUpMinScore] = useState(1);
 
   // Meta Auto-Discovery / Import scanner state
   const [activeTab, setActiveTab] = useState<'auto' | 'manual'>('auto');
@@ -564,6 +566,7 @@ export default function PagesPage() {
     setFollowUpDelayMinutes(p.follow_up_delay_minutes ?? 60);
     setFollowUpPrompt(p.follow_up_prompt || '');
     setFollowUpMaxCount(p.follow_up_max_count ?? 1);
+    setFollowUpMinScore(p.follow_up_min_score ?? 1);
     setShowSettingsModal(true);
   }
 
@@ -595,7 +598,8 @@ export default function PagesPage() {
       follow_up_enabled: followUpEnabled,
       follow_up_delay_minutes: followUpDelayMinutes,
       follow_up_prompt: followUpPrompt.trim() || null,
-      follow_up_max_count: followUpMaxCount
+      follow_up_max_count: followUpMaxCount,
+      follow_up_min_score: followUpMinScore
     }).eq('id', selectedPage.id);
 
     if (error) {
@@ -1371,6 +1375,23 @@ export default function PagesPage() {
                             <option value="3">3 Times</option>
                           </select>
                           <p className="form-hint" style={{fontSize: '0.75rem'}}>Maximum messages sent without reply.</p>
+                        </div>
+
+                        <div className="form-group" style={{flex: 1, minWidth: '150px', marginBottom: 0}}>
+                          <label className="form-label" style={{fontSize: '0.85rem'}}>Target Intent Score</label>
+                          <select 
+                            className="form-input" 
+                            value={followUpMinScore} 
+                            onChange={e=>setFollowUpMinScore(parseInt(e.target.value))}
+                            style={{background: 'var(--bg-primary)'}}
+                          >
+                            <option value="1">All Customers (Score &ge; 1)</option>
+                            <option value="3">Somewhat Warm (Score &ge; 3)</option>
+                            <option value="5">Warm Only (Score &ge; 5)</option>
+                            <option value="7">Hot Only (Score &ge; 7)</option>
+                            <option value="9">Extremely Hot Only (Score &ge; 9)</option>
+                          </select>
+                          <p className="form-hint" style={{fontSize: '0.75rem'}}>Only follow up with score threshold.</p>
                         </div>
                       </div>
 

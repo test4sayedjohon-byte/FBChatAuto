@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { X, ArrowUp, ArrowDown, ShieldAlert, Sparkles, MessageSquare, Binary, FileText, Eye, Image } from 'lucide-react';
+import { X, ArrowUp, ArrowDown, ShieldAlert, Sparkles, MessageSquare, Binary, FileText, Eye, Image, PenTool } from 'lucide-react';
 
 interface Provider {
   id: string;
@@ -17,12 +17,14 @@ interface Provider {
   is_active_agent: boolean;
   is_active_vision?: boolean;
   is_active_image: boolean;
+  is_active_content?: boolean;
   fallback_chat_order?: number | null;
   fallback_agent_order?: number | null;
   fallback_summarize_order?: number | null;
   fallback_vision_order?: number | null;
   fallback_embedding_order?: number | null;
   fallback_image_order?: number | null;
+  fallback_content_order?: number | null;
   max_tokens: number;
   temperature: number;
   context_window: number;
@@ -34,13 +36,13 @@ interface FailoverMatrixProps {
 }
 
 interface RoleConfig {
-  id: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision' | 'image';
+  id: 'chat' | 'agent' | 'summarization' | 'embedding' | 'vision' | 'image' | 'content';
   title: string;
   description: string;
   icon: any;
   color: string;
-  activeField: 'is_active_chat' | 'is_active_agent' | 'is_active_summarization' | 'is_active_embedding' | 'is_active_vision' | 'is_active_image';
-  fallbackOrderField: 'fallback_chat_order' | 'fallback_agent_order' | 'fallback_summarize_order' | 'fallback_embedding_order' | 'fallback_vision_order' | 'fallback_image_order';
+  activeField: 'is_active_chat' | 'is_active_agent' | 'is_active_summarization' | 'is_active_embedding' | 'is_active_vision' | 'is_active_image' | 'is_active_content';
+  fallbackOrderField: 'fallback_chat_order' | 'fallback_agent_order' | 'fallback_summarize_order' | 'fallback_embedding_order' | 'fallback_vision_order' | 'fallback_image_order' | 'fallback_content_order';
 }
 
 const ROLES: RoleConfig[] = [
@@ -61,6 +63,15 @@ const ROLES: RoleConfig[] = [
     color: '#ec4899',
     activeField: 'is_active_agent',
     fallbackOrderField: 'fallback_agent_order',
+  },
+  {
+    id: 'content',
+    title: 'Content Creation',
+    description: 'Generates text copy and scheduled messaging for posts, campaigns, and content calendars.',
+    icon: PenTool,
+    color: '#6366f1',
+    activeField: 'is_active_content',
+    fallbackOrderField: 'fallback_content_order',
   },
   {
     id: 'summarization',
@@ -219,23 +230,24 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
       const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
       if (targetIdx < 0 || targetIdx >= fallbacks.length) return;
 
-      const currentProvider = fallbacks[idx];
-      const swappedProvider = fallbacks[targetIdx];
+      // Swap the elements in the local array
+      const reordered = [...fallbacks];
+      const temp = reordered[idx];
+      reordered[idx] = reordered[targetIdx];
+      reordered[targetIdx] = temp;
 
-      const currentRank = currentProvider[role.fallbackOrderField];
-      const swappedRank = swappedProvider[role.fallbackOrderField];
+      // Update all ranks sequentially in the database to guarantee clean, non-duplicate numbering
+      for (let index = 0; index < reordered.length; index++) {
+        const { error } = await supabase
+          .from('ai_providers')
+          .update({ [role.fallbackOrderField]: index + 1 })
+          .eq('id', reordered[index].id);
 
-      // Update swapped
-      await supabase
-        .from('ai_providers')
-        .update({ [role.fallbackOrderField]: currentRank })
-        .eq('id', swappedProvider.id);
-
-      // Update current
-      await supabase
-        .from('ai_providers')
-        .update({ [role.fallbackOrderField]: swappedRank })
-        .eq('id', currentProvider.id);
+        if (error) {
+          console.error(`Failed to update fallback order for provider ${reordered[index].id}:`, error);
+          throw error;
+        }
+      }
 
       onRefresh();
     } catch (e) {
@@ -248,8 +260,8 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
-      gap: '20px',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+      gap: '16px',
       alignItems: 'start'
     }}>
       {ROLES.map(role => {
@@ -260,13 +272,13 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
 
         return (
           <div key={role.id} className="card" style={{
-            padding: '20px',
+            padding: '16px',
             border: `1px solid ${role.color}1c`,
             borderTop: `4px solid ${role.color}`,
             background: 'var(--bg-secondary)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '16px',
+            gap: '12px',
             boxShadow: 'var(--shadow-md)',
             position: 'relative'
           }}>
@@ -379,7 +391,14 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
                   No fallbacks active. Failures will cause system errors.
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  maxHeight: '180px',
+                  overflowY: 'auto',
+                  paddingRight: '4px'
+                }}>
                   {fallbacks.map((f, index) => (
                     <div key={f.id} style={{
                       display: 'flex',
@@ -390,22 +409,30 @@ export default function FailoverMatrix({ providers, onRefresh }: FailoverMatrixP
                       borderRadius: '8px',
                       border: '1px solid var(--border-light)'
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{
-                          fontSize: '11px',
-                          fontWeight: 'bold',
-                          color: role.color,
-                          background: `${role.color}15`,
-                          width: '18px',
-                          height: '18px',
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
-                          {index + 1}
-                        </span>
-                        <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>{f.display_name}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{
+                            fontSize: '11px',
+                            fontWeight: 'bold',
+                            color: role.color,
+                            background: `${role.color}15`,
+                            width: '18px',
+                            height: '18px',
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0
+                          }}>
+                            {index + 1}
+                          </span>
+                          <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.display_name}</span>
+                        </div>
+                        <div style={{ paddingLeft: '26px', display: 'flex', alignItems: 'center' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            Model: <code style={{ color: role.color, background: `${role.color}15`, padding: '1px 4px', borderRadius: '4px', fontSize: '10px' }}>{role.id === 'embedding' ? f.model_embedding : f.model_chat}</code>
+                          </span>
+                        </div>
                       </div>
                       
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from '../hooks/useToast';
 import { WORKER_URL } from '../lib/workerApi';
-import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save, Edit2, Brain, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Plus, Trash2, X, Sparkles, Send, ShieldAlert, CheckCircle2, Loader2, Save, Edit2, Brain, ToggleLeft, ToggleRight, BrainCircuit } from 'lucide-react';
 
 interface Rule {
   id: string;
@@ -17,6 +17,7 @@ interface Rule {
   reply_templates: string[] | null;
   dm_reply_templates?: string[] | null;
   is_active: boolean;
+  feed_to_ai?: boolean;
   page_connection_id: string;
   attachment_urls?: string[] | null;
   dm_attachment_urls?: string[] | null;
@@ -133,7 +134,10 @@ export default function AutoModerationPage() {
     try {
       setLoading(true);
       // Fetch rules
-      const { data: rulesData } = await supabase.from('comment_rules').select('*');
+      const { data: rulesData } = await supabase
+        .from('comment_rules')
+        .select('*')
+        .or('is_canvas_trigger.eq.false,is_canvas_trigger.is.null');
       // Fetch logs
       const { data: logsData } = await supabase.from('comment_logs').select('*').order('created_at', { ascending: false }).limit(20);
       // Fetch connected channels
@@ -287,6 +291,22 @@ export default function AutoModerationPage() {
       loadData();
     } catch (err: any) {
       toast.error('Failed to update rule: ' + err.message);
+    }
+  }
+
+  async function handleToggleFeedToAi(rule: Rule) {
+    const nextVal = rule.feed_to_ai !== false ? false : true;
+    try {
+      const { error } = await supabase
+        .from('comment_rules')
+        .update({ feed_to_ai: nextVal })
+        .eq('id', rule.id);
+
+      if (error) throw error;
+      toast.success(nextVal ? 'Rule added to AI assistant knowledge base.' : 'Rule hidden from AI assistant knowledge base.');
+      loadData();
+    } catch (err: any) {
+      toast.error('Failed to update AI knowledge: ' + err.message);
     }
   }
 
@@ -566,9 +586,25 @@ export default function AutoModerationPage() {
                       )}
                     </div>
                   </div>
-                  <div className="list-item-actions">
+                  <div className="list-item-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <button className={`btn btn-sm ${rule.is_active ? 'btn-secondary' : 'btn-success'}`} onClick={() => handleToggleRule(rule)}>
                       {rule.is_active ? 'Pause' : 'Activate'}
+                    </button>
+                    <button 
+                      className={`btn btn-sm ${rule.feed_to_ai !== false ? 'btn-secondary' : 'btn-ghost'}`} 
+                      onClick={() => handleToggleFeedToAi(rule)}
+                      style={{
+                        background: rule.feed_to_ai !== false ? 'rgba(59, 130, 246, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                        color: rule.feed_to_ai !== false ? '#3b82f6' : '#ef4444',
+                        border: 'none',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      title="Let AI Chatbot know about this moderation rule."
+                    >
+                      <BrainCircuit size={12} />
+                      {rule.feed_to_ai !== false ? 'AI Fed' : 'Blocked'}
                     </button>
                     <button className="btn-ghost btn-icon" onClick={() => navigate(`/moderation/edit/${rule.id}`)} title="Edit Rule">
                       <Edit2 size={14} color="var(--text-secondary)" />

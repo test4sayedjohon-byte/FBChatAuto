@@ -9,7 +9,6 @@ import {
   UserCheck,
   Ban,
   Eye,
-  Gift,
   Pause,
   Play,
 } from 'lucide-react';
@@ -26,7 +25,6 @@ interface UserCardProps {
   onToggleSuspension: (userId: string, currentStatus: boolean) => void;
   onTogglePause: (userId: string, currentStatus: boolean) => void;
   onImpersonate: (user: SuperAdminUser) => void;
-  onGiftQueries?: (user: SuperAdminUser, type: 'agent_queries' | 'messages') => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -116,7 +114,6 @@ const UserCard: React.FC<UserCardProps> = ({
   onToggleSuspension,
   onTogglePause,
   onImpersonate,
-  onGiftQueries,
 }) => {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -156,14 +153,6 @@ const UserCard: React.FC<UserCardProps> = ({
     setMenuOpen(false);
     onToggleSuspension(user.id, user.is_suspended);
   }, [onToggleSuspension, user.id, user.is_suspended]);
-  const handleGiftQueries = useCallback(() => {
-    setMenuOpen(false);
-    if (onGiftQueries) onGiftQueries(user, 'agent_queries');
-  }, [onGiftQueries, user]);
-  const handleGiftMessages = useCallback(() => {
-    setMenuOpen(false);
-    if (onGiftQueries) onGiftQueries(user, 'messages');
-  }, [onGiftQueries, user]);
 
   /* ---- Metrics ---- */
   const metrics: { icon: React.ReactNode; label: string; value: number }[] = [
@@ -492,65 +481,6 @@ const UserCard: React.FC<UserCardProps> = ({
                 </button>
               )}
 
-              <button
-                onClick={handleGiftQueries}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '8px 12px',
-                  background: 'transparent',
-                  border: 'none',
-                  borderRadius: 7,
-                  color: 'var(--text-secondary, #9ca3af)',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  transition: 'background 0.15s, color 0.15s',
-                  textAlign: 'left',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--bg-tertiary, #232729)';
-                  e.currentTarget.style.color = 'var(--text-primary, #f3f4f6)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent';
-                  e.currentTarget.style.color = 'var(--text-secondary, #9ca3af)';
-                }}
-              >
-                <Gift size={14} style={{ color: 'var(--accent-primary, #6366f1)' }} />
-                Gift AI Queries
-              </button>
-
-              <button
-                onClick={handleGiftMessages}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '8px 12px',
-                  background: 'transparent',
-                  border: 'none',
-                  borderRadius: 7,
-                  color: 'var(--text-secondary, #9ca3af)',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  transition: 'background 0.15s, color 0.15s',
-                  textAlign: 'left',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--bg-tertiary, #232729)';
-                  e.currentTarget.style.color = 'var(--text-primary, #f3f4f6)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent';
-                  e.currentTarget.style.color = 'var(--text-secondary, #9ca3af)';
-                }}
-              >
-                <Gift size={14} style={{ color: '#3b82f6' }} />
-                Gift Messages
-              </button>
 
               <button
                 onClick={handleToggleSuspend}

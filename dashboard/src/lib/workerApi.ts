@@ -71,3 +71,61 @@ export async function workerGet<T = any>(
 
   return response.json() as Promise<T>;
 }
+
+/**
+ * Makes an authenticated PUT request to the Worker API.
+ */
+export async function workerPut<T = any>(
+  path: string,
+  body: Record<string, any>
+): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session?.access_token) {
+    throw new Error('Not authenticated. Please sign in again.');
+  }
+
+  const response = await fetch(`${WORKER_URL}${path}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(errorData.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+/**
+ * Makes an authenticated DELETE request to the Worker API.
+ */
+export async function workerDelete<T = any>(
+  path: string
+): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session?.access_token) {
+    throw new Error('Not authenticated. Please sign in again.');
+  }
+
+  const response = await fetch(`${WORKER_URL}${path}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${session.access_token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(errorData.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+

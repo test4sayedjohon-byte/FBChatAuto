@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
-import { MessageSquare, Users, Globe, Power, Clock, ArrowRight, Bot, User as UserIcon, Activity, Plus, Zap } from 'lucide-react';
+import { MessageSquare, Users, Globe, Power, Clock, ArrowRight, Bot, User as UserIcon, Activity, Plus, Calendar, TrendingDown } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateBillingCycle } from '../lib/billing';
 
@@ -392,83 +392,111 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Credits Balance Card */}
-        <div className="card" style={{ padding: '24px', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Zap size={18} style={{ color: '#f59e0b' }} />
-              AI Credits Balance
-            </h3>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Remaining credits for AI responses, agent queries, and images.</p>
-          </div>
+        {/* Unified Credit / Tier Card */}
+        <div className="card" style={{ padding: 0, border: '1px solid var(--border-primary)', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', top: 0, right: 0, width: '200px', height: '200px', background: 'radial-gradient(circle, var(--accent-primary-glow) 0%, transparent 70%)', opacity: 0.3, pointerEvents: 'none' }}></div>
 
-          {loading ? (
-            <div style={{ padding: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading credits...</div>
-          ) : (
+          <div style={{ padding: '24px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
             <div>
-              {(() => {
-                const limit = profile?.monthly_credits_limit ?? 0;
-                const extra = profile?.extra_credits_balance ?? 0;
-                const used = profile?.credits_used_this_month ?? 0;
-                const total = limit === -1 ? -1 : (limit + extra);
-                const remaining = total === -1 ? -1 : Math.max(0, total - used);
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>AI TIER & CREDITS</span>
 
-                return (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '16px' }}>
-                      <span style={{ fontSize: '2.2rem', fontWeight: '900', color: 'var(--text-primary)', lineHeight: 1 }}>
-                        {total === -1 ? '∞' : remaining.toLocaleString()}
-                      </span>
-                      <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
-                        credits left
+                {(() => {
+                  if (loading) return null;
+                  const isExhausted = remainingCredits === 0;
+                  const isLow = !isExhausted && creditsPct <= 20;
+
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        padding: '4px 10px',
+                        borderRadius: '12px',
+                        background: isExhausted ? 'var(--error-bg)' : isLow ? 'var(--warning-bg)' : 'rgba(34,197,94,0.1)',
+                        color: isExhausted ? 'var(--error)' : isLow ? 'var(--warning)' : 'var(--success)'
+                      }}>
+                        {isExhausted ? 'EXHAUSTED' : isLow ? 'LOW BALANCE' : 'ACTIVE'}
                       </span>
                     </div>
+                  );
+                })()}
+              </div>
 
-                    {/* Progress Bar */}
-                    {total !== -1 && total > 0 && (
-                      <div style={{ marginBottom: '16px' }}>
-                        <div style={{ height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
-                          <div style={{
-                            height: '100%',
-                            width: `${Math.min(100, (used / total) * 100)}%`,
-                            background: used >= total ? 'var(--error)' : 'linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%)',
-                            borderRadius: '4px',
-                            transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)'
-                          }} />
-                        </div>
-                      </div>
-                    )}
+              {loading ? (
+                <div style={{ padding: '12px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Loading credits...</div>
+              ) : (
+                <div>
+                  {(() => {
+                    const limit = profile?.monthly_credits_limit ?? 0;
+                    const extra = profile?.extra_credits_balance ?? 0;
+                    const total = limit === -1 ? -1 : (limit + extra);
+                    const remaining = total === -1 ? -1 : Math.max(0, total - creditsUsed);
 
-                    {/* Usage Breakdown Details */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Credits used this month</span>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{used.toLocaleString()} credits</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Total allowed balance</span>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
-                          {limit === -1 ? 'Unlimited' : `${total.toLocaleString()} credits`}
-                          {extra > 0 && ` (${extra.toLocaleString()} extra)`}
-                        </span>
-                      </div>
-                      {billingCycle && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                          <span>Billing anchor period</span>
-                          <span style={{ color: 'var(--text-primary)', fontWeight: '600', textAlign: 'right' }}>
-                            {billingCycle.startDate.toLocaleDateString()} – {billingCycle.endDate.toLocaleDateString()}
-                            <div style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', marginTop: '2px', fontWeight: '500' }}>
-                              ({billingCycle.daysRemaining} days left)
-                            </div>
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                );
-              })()}
+                    return (
+                      <>
+                        <h2 style={{ fontSize: '2.8rem', fontWeight: 900, margin: 0, display: 'flex', alignItems: 'baseline', gap: '8px', lineHeight: 1 }}>
+                          {total === -1 ? '∞' : remaining.toLocaleString()}
+                          <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>credits left</span>
+                        </h2>
+
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '12px', lineHeight: 1.5 }}>
+                          Monthly allowance of {limit === -1 ? 'Unlimited' : limit.toLocaleString()} {extra > 0 && `+ ${extra.toLocaleString()} extras`}.
+                        </p>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
-          )}
+
+            {!loading && (
+              <div style={{ marginTop: '24px' }}>
+                {/* Usage Progress */}
+                {totalLimit !== -1 && totalLimit > 0 && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
+                      <span style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}><TrendingDown size={14} /> Consumption</span>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{creditsUsed.toLocaleString()} used</span>
+                    </div>
+                    <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${Math.min(100, (creditsUsed / totalLimit) * 100)}%`,
+                        background: creditsUsed >= totalLimit ? 'var(--error)' : 'linear-gradient(90deg, #6366f1 0%, #8b5cf6 100%)',
+                        borderRadius: '3px',
+                        transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)'
+                      }} />
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Calendar size={14} />
+                    {billingCycle ? `Resets ${billingCycle.endDate.toLocaleDateString()}` : 'Loading cycle...'}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => navigate('/credits')}
+                      className="btn btn-ghost"
+                      style={{ fontSize: '0.75rem', padding: '6px 12px', borderRadius: '6px' }}
+                    >
+                      Details
+                    </button>
+                    <button
+                      onClick={() => navigate('/store')}
+                      className="btn btn-primary"
+                      style={{ fontSize: '0.75rem', padding: '6px 16px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Plus size={12} /> Refill
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

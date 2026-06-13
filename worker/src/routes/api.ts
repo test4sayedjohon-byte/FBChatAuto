@@ -944,6 +944,67 @@ api.get('/post-metrics/:postId', async (c) => {
   }
 });
 
+// ─── Super Admin Global System Prompts API ────────────────────────────────────
+
+api.get('/admin/global-prompts', async (c) => {
+  try {
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin, role').eq('id', user.id).single();
+    if (!profile?.is_super_admin && profile?.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    const { data: prompts, error } = await supabase
+      .from('global_system_prompts')
+      .select('*')
+      .order('key', { ascending: true });
+
+    if (error) throw error;
+    return c.json({ prompts });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+api.put('/admin/global-prompts/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const user = c.get('authUser');
+    if (!user || !user.id) return c.json({ error: 'Unauthorized' }, 401);
+
+    const supabase = createSupabaseAdmin(c.env);
+
+    // Verify Super Admin
+    const { data: profile } = await supabase.from('users').select('is_super_admin, role').eq('id', user.id).single();
+    if (!profile?.is_super_admin && profile?.role !== 'super_admin') {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    const body = await c.req.json();
+    const { prompt_text } = body;
+
+    const updates: any = {};
+    if (prompt_text !== undefined) updates.prompt_text = prompt_text;
+
+    const { data: prompt, error } = await supabase
+      .from('global_system_prompts')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return c.json({ success: true, prompt });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
 // ─── Super Admin Content Prompts API ──────────────────────────────────────────
 
 api.get('/admin/content-prompts', async (c) => {

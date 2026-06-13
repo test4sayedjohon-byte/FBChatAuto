@@ -18,6 +18,7 @@ import SuperAdminUsersPage from './pages/SuperAdminUsersPage';
 import UserWorkspacePage from './pages/UserWorkspacePage';
 import SuperAdminPurchasesPage from './pages/SuperAdminPurchasesPage';
 import SystemContentPromptsPage from './pages/super-admin/SystemContentPromptsPage';
+import GlobalPromptsPage from './pages/super-admin/GlobalPromptsPage';
 import FacebookAppSettingsPage from './pages/FacebookAppSettingsPage';
 import UsagePage from './pages/UsagePage';
 import StorePage from './pages/StorePage';
@@ -145,6 +146,7 @@ export default function App() {
               <Route path="/super-users/:userId" element={<AdminRoute><UserWorkspacePage /></AdminRoute>} />
               <Route path="/super-purchases" element={<AdminRoute><SuperAdminPurchasesPage /></AdminRoute>} />
               <Route path="/super-prompts" element={<AdminRoute><SystemContentPromptsPage /></AdminRoute>} />
+              <Route path="/global-prompts" element={<AdminRoute><GlobalPromptsPage /></AdminRoute>} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

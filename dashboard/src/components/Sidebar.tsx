@@ -233,6 +233,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                   <Sparkles className="nav-icon" />
                   Content Prompts
                 </NavLink>
+                <NavLink to="/global-prompts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+                  <Sliders className="nav-icon" />
+                  Global Prompts
+                </NavLink>
               </>
             )}
             <NavLink to="/super-purchases" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>

@@ -79,6 +79,16 @@ export async function generateBulkContent(
       return { success: false, message: 'No active system content templates found. Please contact an administrator.' };
     }
 
+    // 3.5 Fetch global system prompts
+    const { data: globalPromptsArray } = await supabase
+      .from('global_system_prompts')
+      .select('*');
+
+    const globalPrompts = (globalPromptsArray || []).reduce((acc: any, curr: any) => {
+      acc[curr.key] = curr.prompt_text;
+      return acc;
+    }, {});
+
     // 4. Fetch user brand voice profile
     const { data: userProfile, error: profileErr } = await supabase
       .from('users')
@@ -226,7 +236,8 @@ export async function generateBulkContent(
       templates: templatesToGenerate,
       addFirstComment: !!options.addFirstComment,
       themeText: options.themeText,
-      selectedProducts
+      selectedProducts,
+      globalPrompts
     });
 
     // Log batch content generation to audit logs
@@ -285,7 +296,13 @@ export async function generateBulkContent(
             });
           }
 
-          const imgPrompt = `${enhancedPrompt}. ${template.image_prompt_text || ''}`.substring(0, 950);
+          let productIntegrationText = '';
+          if (currentProduct && globalPrompts['product_integration_prompt']) {
+             productIntegrationText = globalPrompts['product_integration_prompt'].replace('{{product_name}}', currentProduct.name);
+             productIntegrationText = ` ${productIntegrationText}`;
+          }
+
+          const imgPrompt = `${enhancedPrompt}. ${template.image_prompt_text || ''}${productIntegrationText}`.substring(0, 950);
           const imageRes = await fetch(`${activeImageProvider.baseUrl}/images/generations`, {
             method: 'POST',
             headers: {

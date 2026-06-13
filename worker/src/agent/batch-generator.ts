@@ -27,6 +27,7 @@ export async function generateBatchContent(
     addFirstComment: boolean;
     themeText?: string;
     selectedProducts?: any[];
+    globalPrompts?: Record<string, string>;
   }
 ): Promise<GeneratedPostPayload[]> {
   const { templates } = options;
@@ -73,10 +74,12 @@ async function generateSingleBatch(
     addFirstComment: boolean;
     themeText?: string;
     selectedProducts?: any[];
+    globalPrompts?: Record<string, string>;
   },
   previousCaption?: string
 ): Promise<GeneratedPostPayload[]> {
-  const systemPrompt = `You are a social media copywriter.
+  const basePrompt = options.globalPrompts?.['ideation_system_prompt'] || 'You are a social media copywriter.';
+  const systemPrompt = `${basePrompt}
 Brand Voice Profile:
 """
 ${options.brandVoice}
@@ -155,6 +158,7 @@ async function generateSinglePostFallback(
     addFirstComment: boolean;
     themeText?: string;
     selectedProducts?: any[];
+    globalPrompts?: Record<string, string>;
   },
   allPayloads: GeneratedPostPayload[]
 ): Promise<GeneratedPostPayload> {
@@ -170,7 +174,8 @@ async function generateSinglePostFallback(
     product: currentProduct
   });
 
-  const systemPrompt = `You are a social media copywriter.
+  const basePrompt = options.globalPrompts?.['ideation_system_prompt'] || 'You are a social media copywriter.';
+  const systemPrompt = `${basePrompt}
 Brand Voice Profile:
 """
 ${options.brandVoice}

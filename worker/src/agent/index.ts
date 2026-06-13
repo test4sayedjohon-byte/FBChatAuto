@@ -1336,7 +1336,14 @@ The Knowledge Base can have multiple documents, each covering a different topic.
             }
           }
 
-          const systemPrompt = `You are a social media copywriter.
+          const { data: globalPromptsArray } = await supabase.from('global_system_prompts').select('*');
+          const globalPrompts = (globalPromptsArray || []).reduce((acc: any, curr: any) => {
+            acc[curr.key] = curr.prompt_text;
+            return acc;
+          }, {});
+          const baseIdeationPrompt = globalPrompts['ideation_system_prompt'] || 'You are a social media copywriter.';
+
+          const systemPrompt = `${baseIdeationPrompt}
 Brand Voice Profile:
 """
 ${userProfile.brand_voice_profile || 'Friendly, professional, and clear.'}
@@ -2297,8 +2304,16 @@ export async function executeWeeklyPlanner(
       throw new Error('No AI provider configured.');
     }
 
+    // Fetch global system prompts
+    const { data: globalPromptsArray } = await supabase.from('global_system_prompts').select('*');
+    const globalPrompts = (globalPromptsArray || []).reduce((acc: any, curr: any) => {
+      acc[curr.key] = curr.prompt_text;
+      return acc;
+    }, {});
+    const baseIdeationPrompt = globalPrompts['ideation_system_prompt'] || 'You are a social media copywriter.';
+
     // 5. Generate 3 distinct post variations (caption + image prompt)
-    const ideasSystemPrompt = `You are a social media copywriter.
+    const ideasSystemPrompt = `${baseIdeationPrompt}
 Brand Voice Profile:
 """
 ${userProfile.brand_voice_profile || 'Friendly, professional, and clear.'}
@@ -2617,8 +2632,16 @@ export async function executeVariationsPlanner(
       throw new Error('No AI provider configured.');
     }
 
+    // Fetch global system prompts
+    const { data: globalPromptsArray } = await supabase.from('global_system_prompts').select('*');
+    const globalPrompts = (globalPromptsArray || []).reduce((acc: any, curr: any) => {
+      acc[curr.key] = curr.prompt_text;
+      return acc;
+    }, {});
+    const baseIdeationPrompt = globalPrompts['ideation_system_prompt'] || 'You are a social media copywriter.';
+
     // 5. Generate 3 distinct post variations based on the draft's message
-    const variationsSystemPrompt = `You are a social media copywriter.
+    const variationsSystemPrompt = `${baseIdeationPrompt}
 Brand Voice Profile:
 """
 ${userProfile.brand_voice_profile || 'Friendly, professional, and clear.'}

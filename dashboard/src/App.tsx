@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { UndoProvider } from './hooks/useUndo';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
 import ToastContainer from './components/ToastContainer';
@@ -106,6 +107,7 @@ export default function App() {
       <ToastContainer />
       <BrowserRouter>
         <AuthProvider>
+          <UndoProvider>
           <Routes>
             <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
             <Route path="/terms" element={<TermsPage />} />
@@ -148,6 +150,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+        </UndoProvider>
         </AuthProvider>
       </BrowserRouter>
     </ErrorBoundary>

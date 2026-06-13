@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import PostComposerModal from '../components/content/PostComposerModal';
 import { BulkActionsBar } from '../components/content/BulkActionsBar';
+import { useUndo } from '../hooks/useUndo';
 import CalendarInspector from '../components/content/CalendarInspector';
 import type { ScheduledPost, PageConn } from '../types/content';
 import { workerPost } from '../lib/workerApi';
@@ -24,6 +25,7 @@ const getStoragePathFromUrl = (url: string): string | null => {
 
 export default function ContentPlannerPage() {
   const { user } = useAuth();
+  const { triggerUndoable } = useUndo();
   const navigate = useNavigate();
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [channels, setChannels] = useState<PageConn[]>([]);
@@ -258,102 +260,114 @@ export default function ContentPlannerPage() {
   }
 
   async function handleBulkApprove() {
-    if (!confirm('Are you sure you want to approve all current draft scheduled posts?')) return;
-    try {
-      setLoading(true);
-      const { error } = await supabase
-        .from('scheduled_posts')
-        .update({ approval_status: 'approved' })
-        .eq('approval_status', 'draft');
-      if (error) throw error;
-      toast.success('Successfully approved all draft posts.');
-      loadData();
-    } catch (err: any) {
-      toast.error('Failed to approve posts: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
+    triggerUndoable('Approving all draft posts...', async () => {
+      try {
+        setLoading(true);
+        const { error } = await supabase
+          .from('scheduled_posts')
+          .update({ approval_status: 'approved' })
+          .eq('approval_status', 'draft');
+        if (error) throw error;
+        toast.success('Successfully approved all draft posts.');
+        loadData();
+      } catch (err: any) {
+        toast.error('Failed to approve posts: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    });
   }
 
   async function handleBulkApproveSelected() {
     if (selectedPostIds.length === 0) return;
-    try {
-      setBulkActionsLoading(true);
-      const { error } = await supabase
-        .from('scheduled_posts')
-        .update({ approval_status: 'approved' })
-        .in('id', selectedPostIds);
-      if (error) throw error;
-      toast.success(`Successfully approved ${selectedPostIds.length} posts.`);
-      setSelectedPostIds([]);
-      loadData();
-    } catch (err: any) {
-      toast.error('Failed to approve selected posts: ' + err.message);
-    } finally {
-      setBulkActionsLoading(false);
-    }
+    const postIdsToApprove = [...selectedPostIds];
+    setSelectedPostIds([]);
+
+    triggerUndoable(`Approving ${postIdsToApprove.length} posts...`, async () => {
+      try {
+        setBulkActionsLoading(true);
+        const { error } = await supabase
+          .from('scheduled_posts')
+          .update({ approval_status: 'approved' })
+          .in('id', postIdsToApprove);
+        if (error) throw error;
+        toast.success(`Successfully approved ${postIdsToApprove.length} posts.`);
+        loadData();
+      } catch (err: any) {
+        toast.error('Failed to approve selected posts: ' + err.message);
+      } finally {
+        setBulkActionsLoading(false);
+      }
+    });
   }
 
   async function handleBulkDraftSelected() {
     if (selectedPostIds.length === 0) return;
-    try {
-      setBulkActionsLoading(true);
-      const { error } = await supabase
-        .from('scheduled_posts')
-        .update({ approval_status: 'draft' })
-        .in('id', selectedPostIds);
-      if (error) throw error;
-      toast.success(`Successfully converted ${selectedPostIds.length} posts to drafts.`);
-      setSelectedPostIds([]);
-      loadData();
-    } catch (err: any) {
-      toast.error('Failed to convert selected posts: ' + err.message);
-    } finally {
-      setBulkActionsLoading(false);
-    }
+    const postIdsToDraft = [...selectedPostIds];
+    setSelectedPostIds([]);
+
+    triggerUndoable(`Converting ${postIdsToDraft.length} posts to drafts...`, async () => {
+      try {
+        setBulkActionsLoading(true);
+        const { error } = await supabase
+          .from('scheduled_posts')
+          .update({ approval_status: 'draft' })
+          .in('id', postIdsToDraft);
+        if (error) throw error;
+        toast.success(`Successfully converted ${postIdsToDraft.length} posts to drafts.`);
+        loadData();
+      } catch (err: any) {
+        toast.error('Failed to convert selected posts: ' + err.message);
+      } finally {
+        setBulkActionsLoading(false);
+      }
+    });
   }
 
   async function handleBulkDeleteSelected() {
     if (selectedPostIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete the ${selectedPostIds.length} selected posts?`)) return;
-    try {
-      setBulkActionsLoading(true);
-      
-      const { data: postsToDelete } = await supabase
-        .from('scheduled_posts')
-        .select('media_urls')
-        .in('id', selectedPostIds);
+    const postIdsToDelete = [...selectedPostIds];
+    setSelectedPostIds([]);
 
-      if (postsToDelete) {
-        const pathsToDelete: string[] = [];
-        postsToDelete.forEach(p => {
-          if (p.media_urls) {
-            p.media_urls.forEach((url: string) => {
-              const storagePath = getStoragePathFromUrl(url);
-              if (storagePath && url.includes('.supabase.')) {
-                pathsToDelete.push(storagePath);
-              }
-            });
+    triggerUndoable(`Deleting ${postIdsToDelete.length} posts...`, async () => {
+      try {
+        setBulkActionsLoading(true);
+
+        const { data: postsToDelete } = await supabase
+          .from('scheduled_posts')
+          .select('media_urls')
+          .in('id', postIdsToDelete);
+
+        if (postsToDelete) {
+          const pathsToDelete: string[] = [];
+          postsToDelete.forEach(p => {
+            if (p.media_urls) {
+              p.media_urls.forEach((url: string) => {
+                const storagePath = getStoragePathFromUrl(url);
+                if (storagePath && url.includes('.supabase.')) {
+                  pathsToDelete.push(storagePath);
+                }
+              });
+            }
+          });
+          if (pathsToDelete.length > 0) {
+            await supabase.storage.from('media_assets').remove(pathsToDelete);
           }
-        });
-        if (pathsToDelete.length > 0) {
-          await supabase.storage.from('media_assets').remove(pathsToDelete);
         }
-      }
 
-      const { error } = await supabase
-        .from('scheduled_posts')
-        .delete()
-        .in('id', selectedPostIds);
-      if (error) throw error;
-      toast.success(`Successfully deleted ${selectedPostIds.length} posts.`);
-      setSelectedPostIds([]);
-      loadData();
-    } catch (err: any) {
-      toast.error('Failed to delete selected posts: ' + err.message);
-    } finally {
-      setBulkActionsLoading(false);
-    }
+        const { error } = await supabase
+          .from('scheduled_posts')
+          .delete()
+          .in('id', postIdsToDelete);
+        if (error) throw error;
+        toast.success(`Successfully deleted ${postIdsToDelete.length} posts.`);
+        loadData();
+      } catch (err: any) {
+        toast.error('Failed to delete selected posts: ' + err.message);
+      } finally {
+        setBulkActionsLoading(false);
+      }
+    });
   }
 
   async function handleUndoLastAiBatch() {

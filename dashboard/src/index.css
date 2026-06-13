@@ -1521,3 +1521,72 @@ a:hover {
   background-color: #ffffff;
 }
 
+
+/* ─── Micro-Animations & Progress Loaders ──────────────────────────────── */
+
+.form-input:hover,
+.form-select:hover,
+.form-textarea:hover {
+  border-color: var(--border-secondary);
+  transform: translateY(-1px);
+}
+
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.tab-btn {
+  transition: transform var(--transition-normal), background var(--transition-normal);
+}
+.tab-btn:hover {
+  transform: translateY(-1px);
+  background: var(--bg-card-hover) !important;
+}
+.tab-btn:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.bulk-action-btn {
+  transition: transform var(--transition-normal), background var(--transition-normal);
+}
+.bulk-action-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+.bulk-action-btn:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.progress-loader {
+  display: block;
+  width: 100%;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.progress-loader::after {
+  content: '';
+  display: block;
+  position: absolute;
+  left: -50%;
+  width: 50%;
+  height: 100%;
+  background: var(--accent-gradient);
+  animation: progressLoaderSlide 1.5s infinite linear;
+}
+
+@keyframes progressLoaderSlide {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(400%); }
+}

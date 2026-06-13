@@ -1,3 +1,4 @@
+import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import Layout from './components/Layout';
@@ -9,7 +10,6 @@ import PrivacyPage from './pages/PrivacyPage';
 import DashboardPage from './pages/DashboardPage';
 import KnowledgePage from './pages/KnowledgePage';
 import DocumentsPage from './pages/DocumentsPage';
-import ProvidersPage from './pages/ProvidersPage';
 import PagesPage from './pages/PagesPage';
 import SandboxPage from './pages/SandboxPage';
 import InboxPage from './pages/InboxPage';
@@ -24,8 +24,6 @@ import StorePage from './pages/StorePage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import CreditsPage from './pages/CreditsPage';
 import ContentPlannerPage from './pages/ContentPlannerPage';
-import ContentCalendarPage from './pages/ContentCalendarPage';
-import AutoModerationPage from './pages/AutoModerationPage';
 import AutoModerationRuleEditPage from './pages/AutoModerationRuleEditPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
@@ -36,10 +34,11 @@ import ActivityMonitorPage from './pages/ActivityMonitorPage';
 import KeywordRulesPage from './pages/KeywordRulesPage';
 import ContactsPage from './pages/ContactsPage';
 import BroadcastsPage from './pages/BroadcastsPage';
-import CampaignPlannerPage from './pages/CampaignPlannerPage';
 
-
-import type { ReactNode } from 'react';
+const ProvidersPage = lazy(() => import('./pages/ProvidersPage'));
+const ContentCalendarPage = lazy(() => import('./pages/ContentCalendarPage'));
+const AutoModerationPage = lazy(() => import('./pages/AutoModerationPage'));
+const CampaignPlannerPage = lazy(() => import('./pages/CampaignPlannerPage'));
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, loading, profile } = useAuth();
@@ -106,6 +105,7 @@ export default function App() {
       <ToastContainer />
       <BrowserRouter>
         <AuthProvider>
+          <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: 'var(--text-secondary)' }}>Loading...</div>}>
           <Routes>
             <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
             <Route path="/terms" element={<TermsPage />} />
@@ -148,6 +148,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </Suspense>
         </AuthProvider>
       </BrowserRouter>
     </ErrorBoundary>

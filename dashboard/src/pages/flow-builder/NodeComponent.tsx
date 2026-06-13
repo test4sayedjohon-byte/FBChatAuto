@@ -20,6 +20,7 @@ interface NodeComponentProps {
   node: FlowNode;
   isSelected: boolean;
   linkingSource: LinkingSource | null;
+  isValidTarget?: boolean;
   otherFlows: Array<{ id: string; name: string }>;
   onMouseDown: (e: React.MouseEvent, nodeId: string) => void;
   onClick: (e: React.MouseEvent, nodeId: string) => void;
@@ -33,6 +34,7 @@ export default function NodeComponent({
   node,
   isSelected,
   linkingSource,
+  isValidTarget,
   otherFlows,
   onMouseDown,
   onClick,
@@ -100,7 +102,7 @@ export default function NodeComponent({
         border: isSelected
           ? `2px solid ${colors.border}`
           : isTargetCandidate
-          ? '2px dashed var(--accent-primary)'
+          ? (isValidTarget === true ? '2px dashed var(--success)' : isValidTarget === false ? '2px dashed var(--error)' : '2px dashed var(--accent-primary)')
           : '1px solid var(--border-primary)',
         borderRadius: 'var(--radius-md)',
         boxShadow: isSelected
@@ -191,10 +193,10 @@ export default function NodeComponent({
               width: '12px',
               height: '12px',
               borderRadius: '50%',
-              background: '#252830',
               border: `2.5px solid ${colors.border}`,
               zIndex: 35,
-              cursor: isTargetCandidate ? 'pointer' : 'default',
+              cursor: isTargetCandidate ? (isValidTarget === false ? 'not-allowed' : 'crosshair') : 'default',
+              background: isTargetCandidate && isValidTarget === false ? 'var(--error)' : isTargetCandidate && isValidTarget === true ? 'var(--success)' : '#252830',
             }}
           />
         )}

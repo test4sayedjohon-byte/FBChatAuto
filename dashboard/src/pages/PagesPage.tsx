@@ -74,7 +74,8 @@ export default function PagesPage() {
 
   // Platform selection state
   const [selectedPlatform, setSelectedPlatform] = useState<'facebook' | 'instagram' | 'whatsapp' | null>(null);
-  const [showSelectScreen, setShowSelectScreen] = useState(true);
+    const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [setupType, setSetupType] = useState<'auto' | 'facebook' | 'instagram' | 'whatsapp' | null>(null);
 
   // Bot Settings Modal State
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -93,8 +94,7 @@ export default function PagesPage() {
   const [followUpMinScore, setFollowUpMinScore] = useState(1);
 
   // Meta Auto-Discovery / Import scanner state
-  const [activeTab, setActiveTab] = useState<'auto' | 'manual'>('auto');
-  const [metaToken, setMetaToken] = useState('');
+    const [metaToken, setMetaToken] = useState('');
   const [scanning, setScanning] = useState(false);
   const [scanStep, setScanStep] = useState<'idle' | 'pages' | 'instagram' | 'whatsapp' | 'completed' | 'error'>('idle');
   const [scanError, setScanError] = useState('');
@@ -117,10 +117,10 @@ export default function PagesPage() {
 - If a question is outside your knowledge, suggest the customer contact the business directly.
 - NEVER reveal that you are an AI unless directly asked. Present yourself as a helpful representative.`;
 
-  async function handleScanMeta() {
+  async function handleScanMeta(): Promise<boolean> {
     if (!metaToken.trim()) {
       toast.error('Please enter a valid Meta Access Token.');
-      return;
+      return false;
     }
     setScanning(true);
     setScanError('');
@@ -150,7 +150,7 @@ export default function PagesPage() {
       setScanError(`Error scanning Facebook Pages: ${e.message}`);
       setScanStep('error');
       setScanning(false);
-      return;
+      return false;
     }
     
     // 2. Scan Instagram Business Accounts linked to Pages
@@ -226,6 +226,7 @@ export default function PagesPage() {
     
     setScanStep('completed');
     setScanning(false);
+    return true;
   }
 
   async function upsertPageConnection(payload: any) {
@@ -492,8 +493,8 @@ export default function PagesPage() {
     setWhatsappBusinessAccountId('');
     setIsWhatsappActive(true);
     setSelectedPlatform(null);
-    setShowSelectScreen(true);
-    setActiveTab('auto');
+            setWizardStep(1);
+    setSetupType(null);
     setMetaToken('');
     setScanning(false);
     setScanStep('idle');
@@ -525,8 +526,7 @@ export default function PagesPage() {
     } else {
       setSelectedPlatform('facebook');
     }
-    setShowSelectScreen(false);
-    setShowModal(true);
+        setShowModal(true);
   }
 
   async function del(id: string) {
@@ -834,36 +834,120 @@ export default function PagesPage() {
               </form>
             ) : (
               <div className="modal-body" style={{paddingTop: '8px'}}>
-                {/* Custom Tab Selector */}
-                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', marginBottom: '20px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('auto')}
-                    style={{
-                      flex: 1, padding: '12px', textAlign: 'center', border: 'none', background: 'none',
-                      borderBottom: activeTab === 'auto' ? '2px solid var(--accent-primary)' : 'none',
-                      color: activeTab === 'auto' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                      fontWeight: activeTab === 'auto' ? 600 : 400, cursor: 'pointer'
-                    }}
-                  >
-                    ⚡ Automatic Setup (Meta Scan)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('manual')}
-                    style={{
-                      flex: 1, padding: '12px', textAlign: 'center', border: 'none', background: 'none',
-                      borderBottom: activeTab === 'manual' ? '2px solid var(--accent-primary)' : 'none',
-                      color: activeTab === 'manual' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                      fontWeight: activeTab === 'manual' ? 600 : 400, cursor: 'pointer'
-                    }}
-                  >
-                    🛠️ Manual Configuration
-                  </button>
-                </div>
+                {!editMode && wizardStep === 1 && (
+                  <div className="animate-slideUp">
+                    <h3 style={{fontSize: '1rem', marginBottom: '16px'}}>Choose Setup Method</h3>
+                    <p style={{color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px'}}>
+                      AutometaBot uses a Bring Your Own App (BYOA) architecture for maximum privacy and control. Choose how you want to connect:
+                    </p>
+                    <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
+                      {/* Auto Setup Button */}
+                      <button
+                        type="button"
+                        onClick={() => setSetupType('auto')}
+                        style={{
+                          display:'flex', alignItems:'center', gap:'16px', padding:'16px',
+                          border: setupType === 'auto' ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                          borderRadius:'8px', background:'var(--bg-tertiary)',
+                          textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                        }}
+                      >
+                        <div style={{color:'var(--text-primary)', padding:'10px', borderRadius:'8px', display:'flex', fontSize: '1.5rem'}}>
+                          ⚡
+                        </div>
+                        <div>
+                          <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Automatic Setup</h4>
+                          <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Scan your Meta account to auto-discover channels.</p>
+                        </div>
+                      </button>
 
-                {activeTab === 'auto' ? (
-                  <div>
+                      {/* Facebook Selection Button */}
+                      <button
+                        type="button"
+                        onClick={() => setSetupType('facebook')}
+                        style={{
+                          display:'flex', alignItems:'center', gap:'16px', padding:'16px',
+                          border: setupType === 'facebook' ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                          borderRadius:'8px', background:'rgba(24,119,242,0.03)',
+                          textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                        }}
+                      >
+                        <div style={{color:'#1877F2', background:'rgba(24,119,242,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
+                          <FacebookIcon />
+                        </div>
+                        <div>
+                          <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Facebook Page</h4>
+                          <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect a Page manually (BYOA).</p>
+                        </div>
+                      </button>
+
+                      {/* Instagram Selection Button */}
+                      <button
+                        type="button"
+                        onClick={() => setSetupType('instagram')}
+                        style={{
+                          display:'flex', alignItems:'center', gap:'16px', padding:'16px',
+                          border: setupType === 'instagram' ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                          borderRadius:'8px', background:'rgba(225,48,108,0.03)',
+                          textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                        }}
+                      >
+                        <div style={{
+                          background:'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285AEB 90%)',
+                          color:'#FFFFFF', padding:'10px', borderRadius:'8px', display:'flex'
+                        }}>
+                          <InstagramIcon />
+                        </div>
+                        <div>
+                          <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Instagram Business</h4>
+                          <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect Instagram manually (BYOA).</p>
+                        </div>
+                      </button>
+
+                      {/* WhatsApp Selection Button */}
+                      <button
+                        type="button"
+                        onClick={() => setSetupType('whatsapp')}
+                        style={{
+                          display:'flex', alignItems:'center', gap:'16px', padding:'16px',
+                          border: setupType === 'whatsapp' ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                          borderRadius:'8px', background:'rgba(37,211,102,0.03)',
+                          textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
+                        }}
+                      >
+                        <div style={{color:'#25D366', background:'rgba(37,211,102,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
+                          <WhatsAppIcon />
+                        </div>
+                        <div>
+                          <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>WhatsApp Business</h4>
+                          <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect WhatsApp manually (BYOA).</p>
+                        </div>
+                      </button>
+                    </div>
+
+                    <div className="modal-footer" style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
+                      <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                          if (setupType) {
+                                                        if (setupType !== 'auto') {
+                              setSelectedPlatform(setupType);
+                            }
+                            setWizardStep(2);
+                          }
+                        }}
+                        disabled={!setupType}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!editMode && wizardStep === 2 && setupType === 'auto' && (
+                  <div className="animate-slideUp">
                     <div className="form-group">
                       <label className="form-label" style={{display:'flex', alignItems:'center', gap:'6px'}}>
                         <Key size={14} /> Meta System User Access Token / Admin Token
@@ -880,7 +964,13 @@ export default function PagesPage() {
                         <button 
                           type="button" 
                           className="btn btn-primary" 
-                          onClick={handleScanMeta}
+                          onClick={() => {
+                            handleScanMeta().then((success) => {
+                                if (success) {
+                                    setWizardStep(3);
+                                }
+                            });
+                          }}
                           disabled={scanning || !metaToken.trim()}
                           style={{whiteSpace: 'nowrap'}}
                         >
@@ -918,6 +1008,47 @@ export default function PagesPage() {
                       </div>
                     )}
 
+                    <div className="modal-footer" style={{display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
+                      <button type="button" className="btn btn-secondary" onClick={() => setWizardStep(1)}>Back</button>
+                      <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {!editMode && wizardStep === 2 && setupType !== 'auto' && (
+                  <div className="animate-slideUp">
+                    <h3 style={{fontSize: '1rem', marginBottom: '16px'}}>Bring Your Own App (BYOA) Setup Instructions</h3>
+
+                    <div style={{background: 'var(--bg-tertiary)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px'}}>
+                      <ol style={{paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                        <li>Go to the <a href="https://developers.facebook.com/" target="_blank" rel="noreferrer" style={{color: 'var(--accent-primary)'}}>Meta Developer Portal</a> and <strong>Create an App</strong> (Type: Business).</li>
+                        <li>In your Meta App Settings, find your <strong>App Secret</strong> and save it in the AutometaBot <a href="/settings/meta-app" target="_blank" style={{color: 'var(--accent-primary)'}}>Meta App Settings</a>.</li>
+                        <li>Set up your Webhook in Meta. Use this exact URL:
+                          <code style={{display: 'block', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: '4px', marginTop: '4px', wordBreak: 'break-all'}}>{`https://metachat.junoverseai.com/webhook/${user?.id || 'YOUR_USER_ID'}`}</code>
+                        </li>
+                        <li>Use your Custom Verify Token from the AutometaBot settings when configuring the webhook.</li>
+                        {setupType === 'facebook' && <li>Subscribe your Meta App webhook to the <code>messages</code>, <code>messaging_postbacks</code>, and <code>feed</code> fields.</li>}
+                        {setupType === 'instagram' && <li>Subscribe your Meta App webhook (under Instagram) to the <code>messages</code> and <code>comments</code> fields.</li>}
+                        {setupType === 'whatsapp' && <li>Subscribe your Meta App webhook (under WhatsApp) to the <code>messages</code> field.</li>}
+                        <li>Generate a Long-Lived Access Token. Make sure it has the required permissions.</li>
+                      </ol>
+                    </div>
+
+                    <div className="modal-footer" style={{display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
+                      <button type="button" className="btn btn-secondary" onClick={() => setWizardStep(1)}>Back</button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => setWizardStep(3)}
+                      >
+                        I have my credentials ➔ Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!editMode && wizardStep === 3 && setupType === 'auto' && (
+                  <div className="animate-slideUp">
                     {scanStep === 'completed' && (
                       <div>
                         {discoveredPages.length === 0 && discoveredInstagrams.length === 0 && discoveredWhatsApp.length === 0 ? (
@@ -1015,90 +1146,28 @@ export default function PagesPage() {
                       </div>
                     )}
 
-                    <div className="modal-footer" style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
-                      <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                      <button 
-                        type="button" 
-                        className="btn btn-primary" 
-                        onClick={handleImportSelected}
-                        disabled={saving || (selectedPages.length === 0 && selectedInstagrams.length === 0 && selectedWhatsApp.length === 0)}
-                      >
-                        {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Check size={14}/>}
-                        {saving ? 'Importing...' : `Import Selected (${selectedPages.length + selectedInstagrams.length + selectedWhatsApp.length})`}
-                      </button>
+                    <div className="modal-footer" style={{display: 'flex', justifyContent: 'space-between', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
+                      {!editMode && <button type="button" className="btn btn-secondary" onClick={() => setWizardStep(2)}>Back</button>}
+                      <div style={{display: 'flex', gap: '8px'}}>
+                        <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                        <button 
+                          type="button" 
+                          className="btn btn-primary"
+                          onClick={handleImportSelected}
+                          disabled={saving || (selectedPages.length === 0 && selectedInstagrams.length === 0 && selectedWhatsApp.length === 0)}
+                        >
+                          {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Check size={14}/>}
+                          {saving ? 'Importing...' : `Import Selected (${selectedPages.length + selectedInstagrams.length + selectedWhatsApp.length})`}
+                        </button>
+                      </div>
                     </div>
 
                   </div>
-                ) : (
-                  <div>
-                    {showSelectScreen ? (
-                      <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
-                        <p style={{color:'var(--text-secondary)', fontSize:'0.85rem', marginBottom:'8px'}}>
-                          Choose the type of connection to manually configure:
-                        </p>
-                        {/* Facebook Selection Button */}
-                        <button 
-                          type="button" 
-                          onClick={() => { setSelectedPlatform('facebook'); setShowSelectScreen(false); }}
-                          style={{
-                            display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
-                            border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(24,119,242,0.03)', 
-                            textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
-                          }}
-                        >
-                          <div style={{color:'#1877F2', background:'rgba(24,119,242,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
-                            <FacebookIcon />
-                          </div>
-                          <div>
-                            <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Facebook Page</h4>
-                            <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect a Page manually.</p>
-                          </div>
-                        </button>
+                )}
 
-                        {/* Instagram Selection Button */}
-                        <button 
-                          type="button" 
-                          onClick={() => { setSelectedPlatform('instagram'); setShowSelectScreen(false); }}
-                          style={{
-                            display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
-                            border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(225,48,108,0.03)', 
-                            textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
-                          }}
-                        >
-                          <div style={{
-                            background:'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285AEB 90%)', 
-                            color:'#FFFFFF', padding:'10px', borderRadius:'8px', display:'flex'
-                          }}>
-                            <InstagramIcon />
-                          </div>
-                          <div>
-                            <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>Instagram Business</h4>
-                            <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect Instagram manually.</p>
-                          </div>
-                        </button>
-
-                        {/* WhatsApp Selection Button */}
-                        <button 
-                          type="button" 
-                          onClick={() => { setSelectedPlatform('whatsapp'); setShowSelectScreen(false); }}
-                          style={{
-                            display:'flex', alignItems:'center', gap:'16px', padding:'16px', 
-                            border:'1px solid var(--border-color)', borderRadius:'8px', background:'rgba(37,211,102,0.03)', 
-                            textAlign:'left', cursor:'pointer', width: '100%', outline: 'none'
-                          }}
-                        >
-                          <div style={{color:'#25D366', background:'rgba(37,211,102,0.12)', padding:'10px', borderRadius:'8px', display:'flex'}}>
-                            <WhatsAppIcon />
-                          </div>
-                          <div>
-                            <h4 style={{margin:0, fontWeight:600, color:'var(--text-primary)', fontSize: '0.95rem'}}>WhatsApp Business</h4>
-                            <p style={{margin:'4px 0 0 0', fontSize:'0.75rem', color:'var(--text-secondary)'}}>Connect WhatsApp manually.</p>
-                          </div>
-                        </button>
-                      </div>
-                    ) : (
-                      <form onSubmit={handleSubmit}>
-                        <div>
+                {(editMode || (wizardStep === 3 && setupType !== 'auto')) && (
+                  <form onSubmit={handleSubmit} className="animate-slideUp">
+                        <div style={{padding: '16px 0'}}>
                           {selectedPlatform === 'whatsapp' && (
                             <>
                               <div className="form-group">
@@ -1170,20 +1239,17 @@ export default function PagesPage() {
                           </div>
                         </div>
                         <div className="modal-footer" style={{display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px'}}>
-                          <button type="button" className="btn btn-secondary" onClick={() => { setShowSelectScreen(true); setSelectedPlatform(null); }}>Back</button>
-                          <div style={{display: 'flex', gap: '8px'}}>
+                          {!editMode ? <button type="button" className="btn btn-secondary" onClick={() => setWizardStep(2)}>Back</button> : <div></div>}
+                          <div style={{display: 'flex', gap: '8px', marginLeft: editMode ? 'auto' : undefined}}>
                             <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
                             <button type="submit" className="btn btn-primary" disabled={saving}>
                               {saving ? <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> : <Save size={14}/>}
-                              Connect Channel
+                              {editMode ? 'Save Changes' : 'Connect Channel'}
                             </button>
                           </div>
                         </div>
-                      </form>
-                    )}
-                  </div>
+                  </form>
                 )}
-
               </div>
             )}
           </div>

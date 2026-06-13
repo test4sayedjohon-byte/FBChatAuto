@@ -176,7 +176,7 @@ export default function AutoModerationPage() {
     setSaving(true);
 
     try {
-      let finalKeywords = [...keywords];
+      const finalKeywords = [...keywords];
       if (keywordsInput.trim()) {
         const word = keywordsInput.trim();
         if (!finalKeywords.includes(word)) {

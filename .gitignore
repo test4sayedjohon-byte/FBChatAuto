@@ -3,6 +3,7 @@ dist/
 .wrangler/
 .dev.vars
 .env
+.jules_docs.md
 .env.local
 *.log
 Agent_Chats/

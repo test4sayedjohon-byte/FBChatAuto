@@ -25,6 +25,7 @@ import type {
   Flow, FlowNode, FlowEdge, ContextMenuState, LinkingSource, FlowNodeType,
 } from './types';
 import { getDefaultDataForType } from './nodeConfig';
+import { wouldCreateLoop, validateConnection } from './connectionValidator';
 import NodeComponent from './NodeComponent';
 import ContextMenu from './ContextMenu';
 import SettingsPanel from './SettingsPanel';
@@ -45,6 +46,7 @@ export default function FlowBuilderPage() {
   const [otherFlows, setOtherFlows] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
 
   // ── UI state ───────────────────────────────────────────────────────────
   const [addBlockOpen, setAddBlockOpen] = useState(false);
@@ -144,10 +146,10 @@ export default function FlowBuilderPage() {
   }, [flowId]);
 
   useEffect(() => {
-    const handle = () => { if (flowId) loadFlowData(); };
+    const handle = () => { if (flowId && !isDirty) loadFlowData(); };
     window.addEventListener('agent-data-updated', handle);
     return () => window.removeEventListener('agent-data-updated', handle);
-  }, [flowId]);
+  }, [flowId, isDirty]);
 
   async function loadFlowData() {
     try {
@@ -215,6 +217,7 @@ export default function FlowBuilderPage() {
     };
 
     setNodes(prev => [...prev, newNode]);
+    setIsDirty(true);
     setSelectedNodeId(newNode.id);
     setAddBlockOpen(false);
     toast.success(`${type.replace(/_/g, ' ')} block added.`);
@@ -250,6 +253,7 @@ export default function FlowBuilderPage() {
       setNodes(prev =>
         prev.map(n => (n.id === draggingNodeId ? { ...n, position: { x: newX, y: newY } } : n))
       );
+      setIsDirty(true);
     }
     if (isPanning) {
       setPanOffset({
@@ -280,8 +284,33 @@ export default function FlowBuilderPage() {
 
   function connectToNode(targetNodeId: string) {
     if (!linkingSource || !flowId) return;
+
+    const sourceNode = nodes.find(n => n.id === linkingSource.nodeId);
+    const targetNode = nodes.find(n => n.id === targetNodeId);
+
+    if (!sourceNode || !targetNode) {
+      setLinkingSource(null);
+      setLinkingCursor(null);
+      return;
+    }
+
     if (linkingSource.nodeId === targetNodeId) {
       toast.error('Cannot link a node to itself.');
+      setLinkingSource(null);
+      setLinkingCursor(null);
+      return;
+    }
+
+    if (wouldCreateLoop(edges, linkingSource.nodeId, targetNodeId)) {
+      toast.error('Connection would create an infinite loop.');
+      setLinkingSource(null);
+      setLinkingCursor(null);
+      return;
+    }
+
+    const validation = validateConnection(sourceNode, linkingSource.handleId, targetNode);
+    if (!validation.isValid) {
+      toast.error(validation.error || 'Invalid connection type.');
       setLinkingSource(null);
       setLinkingCursor(null);
       return;
@@ -302,6 +331,7 @@ export default function FlowBuilderPage() {
       else next.push(newEdge);
       return next;
     });
+    setIsDirty(true);
     toast.success('Blocks connected!');
     setLinkingSource(null);
     setLinkingCursor(null);
@@ -309,12 +339,14 @@ export default function FlowBuilderPage() {
 
   function deleteEdge(edgeId: string) {
     setEdges(prev => prev.filter(e => e.id !== edgeId));
+    setIsDirty(true);
   }
 
   // ─── Node ops ─────────────────────────────────────────────────────────
   function handleDeleteNode(nodeId: string) {
     setNodes(prev => prev.filter(n => n.id !== nodeId));
     setEdges(prev => prev.filter(e => e.source_node_id !== nodeId && e.target_node_id !== nodeId));
+    setIsDirty(true);
     if (selectedNodeId === nodeId) setSelectedNodeId(null);
     toast.success('Block removed.');
   }
@@ -404,6 +436,7 @@ export default function FlowBuilderPage() {
     });
 
     setNodes(newNodes);
+    setIsDirty(true);
     toast.success('Blocks aligned automatically!');
   }
 
@@ -418,6 +451,7 @@ export default function FlowBuilderPage() {
       data: { ...source.data },
     };
     setNodes(prev => [...prev, clone]);
+    setIsDirty(true);
     setSelectedNodeId(clone.id);
     toast.success('Block duplicated!');
   }
@@ -426,6 +460,7 @@ export default function FlowBuilderPage() {
     setNodes(prev =>
       prev.map(n => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n))
     );
+    setIsDirty(true);
   }
 
   // ─── Context menu ─────────────────────────────────────────────────────
@@ -462,15 +497,7 @@ export default function FlowBuilderPage() {
         throw new Error('Graph loop detected! Ensure at least one starting block with no incoming links.');
       }
 
-      // 2. Fetch obsolete nodes from DB
-      const { data: dbNodes } = await supabase.from('dm_flow_nodes').select('id').eq('flow_id', flowId);
-      const currentIds = new Set(nodes.map(n => n.id));
-      const obsoleteIds = (dbNodes ?? []).map(n => n.id).filter(id => !currentIds.has(id));
-      if (obsoleteIds.length > 0) {
-        await supabase.from('dm_flow_nodes').delete().in('id', obsoleteIds);
-      }
-
-      // 3. Upsert nodes
+      // 2. Upsert nodes first (safer than delete-and-replace)
       if (nodes.length > 0) {
         const { error } = await supabase.from('dm_flow_nodes').upsert(
           nodes.map(n => ({ id: n.id, flow_id: n.flow_id, type: n.type, data: n.data, position: n.position }))
@@ -478,10 +505,17 @@ export default function FlowBuilderPage() {
         if (error) throw error;
       }
 
-      // 4. Replace edges
-      await supabase.from('dm_flow_edges').delete().eq('flow_id', flowId);
+      // 3. Delete obsolete nodes
+      const { data: dbNodes } = await supabase.from('dm_flow_nodes').select('id').eq('flow_id', flowId);
+      const currentIds = new Set(nodes.map(n => n.id));
+      const obsoleteIds = (dbNodes ?? []).map(n => n.id).filter(id => !currentIds.has(id));
+      if (obsoleteIds.length > 0) {
+        await supabase.from('dm_flow_nodes').delete().in('id', obsoleteIds);
+      }
+
+      // 4. Sync edges (Upsert then delete obsolete)
       if (edges.length > 0) {
-        const { error } = await supabase.from('dm_flow_edges').insert(
+        const { error } = await supabase.from('dm_flow_edges').upsert(
           edges.map(e => ({
             id: e.id,
             flow_id: e.flow_id,
@@ -493,12 +527,20 @@ export default function FlowBuilderPage() {
         if (error) throw error;
       }
 
+      const { data: dbEdges } = await supabase.from('dm_flow_edges').select('id').eq('flow_id', flowId);
+      const currentEdgeIds = new Set(edges.map(e => e.id));
+      const obsoleteEdgeIds = (dbEdges ?? []).map(e => e.id).filter(id => !currentEdgeIds.has(id));
+      if (obsoleteEdgeIds.length > 0) {
+        await supabase.from('dm_flow_edges').delete().in('id', obsoleteEdgeIds);
+      }
+
       // 5. Sync Trigger nodes → chat_rules / comment_rules
       await syncTriggerNodes();
 
       // 6. Bump timestamp
       await supabase.from('dm_flows').update({ updated_at: new Date().toISOString() }).eq('id', flowId);
 
+      setIsDirty(false);
       toast.success('Flow saved successfully!');
     } catch (err: any) {
       toast.error('Failed to save flow: ' + err.message);
@@ -883,27 +925,40 @@ export default function FlowBuilderPage() {
               </svg>
 
               {/* Render nodes */}
-              {nodes.map(node => (
-                <NodeComponent
-                  key={node.id}
-                  node={node}
-                  isSelected={selectedNodeId === node.id}
-                  linkingSource={linkingSource}
-                  otherFlows={otherFlows}
-                  onMouseDown={handleNodeMouseDown}
-                  onClick={(e, nodeId) => {
-                    e.stopPropagation();
-                    if (linkingSource) connectToNode(nodeId);
-                    else setSelectedNodeId(nodeId);
-                  }}
-                  onContextMenu={handleContextMenu}
-                  onStartLinking={startLinking}
-                  onMouseUpNode={nodeId => {
-                    if (linkingSource) connectToNode(nodeId);
-                  }}
-                  onDelete={handleDeleteNode}
-                />
-              ))}
+              {nodes.map(node => {
+                let isValidTarget = undefined;
+                if (linkingSource && linkingSource.nodeId !== node.id) {
+                  const sourceNode = nodes.find(n => n.id === linkingSource.nodeId);
+                  if (sourceNode) {
+                    const validation = validateConnection(sourceNode, linkingSource.handleId, node);
+                    const wouldLoop = wouldCreateLoop(edges, linkingSource.nodeId, node.id);
+                    isValidTarget = validation.isValid && !wouldLoop;
+                  }
+                }
+
+                return (
+                  <NodeComponent
+                    key={node.id}
+                    node={node}
+                    isSelected={selectedNodeId === node.id}
+                    linkingSource={linkingSource}
+                    isValidTarget={isValidTarget}
+                    otherFlows={otherFlows}
+                    onMouseDown={handleNodeMouseDown}
+                    onClick={(e, nodeId) => {
+                      e.stopPropagation();
+                      if (linkingSource) connectToNode(nodeId);
+                      else setSelectedNodeId(nodeId);
+                    }}
+                    onContextMenu={handleContextMenu}
+                    onStartLinking={startLinking}
+                    onMouseUpNode={nodeId => {
+                      if (linkingSource) connectToNode(nodeId);
+                    }}
+                    onDelete={handleDeleteNode}
+                  />
+                );
+              })}
 
               {/* Canvas empty state */}
               {nodes.length === 0 && (

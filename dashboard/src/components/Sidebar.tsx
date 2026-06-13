@@ -177,6 +177,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
             <span className="sidebar-section-label" style={{ marginTop: '16px' }}>Automation</span>
 
+                        <NavLink to="/campaign-planner" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
+              <Sparkles className="nav-icon" />
+              AI Content Creator
+            </NavLink>
             <NavLink to="/calendar" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={onClose}>
               <Calendar className="nav-icon" />
               Content Calendar

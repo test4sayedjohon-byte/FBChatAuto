@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { workerGet, workerPost, workerPut, workerDelete } from '../../lib/workerApi';
 import { toast } from '../../hooks/useToast';
+import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
 import { 
-  Sparkles, Plus, Edit2, Trash2, Save, X, Eye, EyeOff, ListOrdered, FileText, ImageIcon, Loader2
+  Sparkles, Plus, Edit2, Trash2, Save, X, Eye, EyeOff, ListOrdered, FileText, ImageIcon, Loader2, UploadCloud
 } from 'lucide-react';
 
 interface ContentPrompt {
@@ -18,11 +20,16 @@ interface ContentPrompt {
 export default function SystemContentPromptsPage() {
   const [prompts, setPrompts] = useState<ContentPrompt[]>([]);
   const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
   
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Partial<ContentPrompt> | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Drag and drop state
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
 
   useEffect(() => {
     loadPrompts();
@@ -59,6 +66,85 @@ export default function SystemContentPromptsPage() {
   const handleCloseModal = () => {
     setEditingPrompt(null);
     setModalOpen(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    if (!user) return;
+
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+
+    await uploadFile(files[0]);
+  };
+
+  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!user || !e.target.files || e.target.files.length === 0) return;
+    await uploadFile(e.target.files[0]);
+  };
+
+  const uploadFile = async (file: File) => {
+    if (!user) return;
+
+    // Quick size validation (e.g. 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File too large. Maximum size is 10MB.');
+      return;
+    }
+
+    setUploadingMedia(true);
+    try {
+      const fileExt = file.name.split('.').pop() || '';
+      const baseName = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fileName = `${baseName}_${Math.random().toString(36).substring(2, 6)}.${fileExt}`;
+      const filePath = `${user.id}/media/${fileName}`;
+
+      const { error } = await supabase.storage
+        .from('media_assets')
+        .upload(filePath, file);
+
+      if (error) throw error;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('media_assets')
+        .getPublicUrl(filePath);
+
+      if (publicUrl) {
+        // Determine type to format correctly
+        const lowerExt = fileExt.toLowerCase();
+        let markdownString = `\n[${file.name}](${publicUrl})\n`;
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(lowerExt)) {
+          markdownString = `\n![${file.name}](${publicUrl})\n`;
+        }
+
+        // Append to prompt
+        setEditingPrompt(prev => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            prompt_text: (prev.prompt_text || '') + markdownString
+          };
+        });
+        toast.success('File uploaded and added to prompt!');
+      }
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      toast.error('Failed to upload file: ' + err.message);
+    } finally {
+      setUploadingMedia(false);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -285,6 +371,47 @@ export default function SystemContentPromptsPage() {
 
             <form onSubmit={handleSave} style={{ padding: '20px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                {/* Drag and Drop Zone */}
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  style={{
+                    border: `2px dashed ${isDragging ? 'var(--primary)' : 'var(--border-primary)'}`,
+                    borderRadius: 'var(--radius-md)',
+                    padding: '24px',
+                    textAlign: 'center',
+                    background: isDragging ? 'rgba(168, 85, 247, 0.05)' : 'var(--bg-primary)',
+                    transition: 'all 0.2s ease',
+                    position: 'relative'
+                  }}
+                >
+                  <input
+                    type="file"
+                    onChange={handleFileInput}
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0, cursor: 'pointer' }}
+                    disabled={uploadingMedia}
+                  />
+
+                  {uploadingMedia ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
+                      <Loader2 size={24} className="animate-spin" />
+                      <span style={{ fontSize: '0.85rem' }}>Uploading file...</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
+                      <UploadCloud size={24} style={{ color: isDragging ? 'var(--primary)' : 'var(--text-muted)' }} />
+                      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>
+                        {isDragging ? 'Drop file here' : 'Drag & drop a file, or click to browse'}
+                      </span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        Images, PDFs, or Text files. Will be inserted into the prompt below.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '6px' }}>
                     Template Title

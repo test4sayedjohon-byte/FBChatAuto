@@ -405,7 +405,7 @@ export default function PagesPage() {
     e.preventDefault();
     setSaving(true);
 
-    let payload: any = {
+    const payload: any = {
       page_name: pageName.trim() || null,
     };
 

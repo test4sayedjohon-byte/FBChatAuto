@@ -408,7 +408,7 @@ export default function UserWorkspacePage() {
       const totalMonthTokens = (messagesRes.data || []).reduce((acc: number, m: any) => acc + (m.token_count || 0), 0);
 
       // Enrich with folder page assignments
-      let assignmentMap: Record<string, string[]> = {};
+      const assignmentMap: Record<string, string[]> = {};
       const folderIds = (docsRes.data || []).map((d: any) => d.folder_id).filter(Boolean);
       if (folderIds.length > 0) {
         const { data: assignments } = await supabase.from('folder_page_assignments').select('folder_id, page_id').in('folder_id', folderIds);

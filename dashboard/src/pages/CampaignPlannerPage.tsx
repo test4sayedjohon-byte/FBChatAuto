@@ -6,8 +6,9 @@ import { toast } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { 
-  Sparkles, ArrowLeft, Loader2, Layers, Calendar, Tag, Image, ShieldAlert, Clock, Settings, FileText
+  Sparkles, ArrowLeft, Loader2, Layers, Calendar, Tag, Image, ShieldAlert, Clock, Settings, FileText, Trash2, Undo
 } from 'lucide-react';
+import type { ScheduledPost } from '../types/content';
 
 interface PageConn {
   id: string;
@@ -49,6 +50,10 @@ export default function CampaignPlannerPage() {
   const [addFirstComment, setAddFirstComment] = useState(false);
   const [publishStatus, setPublishStatus] = useState<'draft' | 'scheduled'>('draft');
 
+  const [recentAiPosts, setRecentAiPosts] = useState<ScheduledPost[]>([]);
+  const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(new Set());
+  const [loadingPosts, setLoadingPosts] = useState(false);
+
   // Load page connections & products
   useEffect(() => {
     async function loadInitialData() {
@@ -84,6 +89,7 @@ export default function CampaignPlannerPage() {
         
         if (prodsError) throw prodsError;
         if (prodsData) setProducts(prodsData);
+        loadRecentAiPosts();
       } catch (err: any) {
         console.error('Error loading page connections/products:', err.message);
       }
@@ -104,6 +110,132 @@ export default function CampaignPlannerPage() {
     const localEndISOTime = (new Date(endMs - tzOffset)).toISOString().slice(0, 16);
     setEndDate(localEndISOTime);
   }, [user]);
+
+  async function handleDeleteSelected() {
+    if (selectedPostIds.size === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedPostIds.size} selected posts?`)) return;
+
+    try {
+      setLoading(true);
+      const ids = Array.from(selectedPostIds);
+
+      const { data: postsToDelete } = await supabase
+        .from('scheduled_posts')
+        .select('media_urls')
+        .in('id', ids);
+
+      if (postsToDelete) {
+        const pathsToDelete: string[] = [];
+        postsToDelete.forEach(post => {
+          post.media_urls?.forEach((url: string) => {
+            const path = url.split('/media_assets/')[1]?.split('?')[0];
+            if (path) pathsToDelete.push(decodeURIComponent(path));
+          });
+        });
+        if (pathsToDelete.length > 0) {
+          await supabase.storage.from('media_assets').remove(pathsToDelete);
+        }
+      }
+
+      const { error } = await supabase
+        .from('scheduled_posts')
+        .delete()
+        .in('id', ids);
+
+      if (error) throw error;
+      toast.success(`Successfully deleted ${ids.length} posts.`);
+      setSelectedPostIds(new Set());
+      loadRecentAiPosts();
+    } catch (err: any) {
+      toast.error('Failed to delete selected posts: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleUndoLastBatch() {
+    try {
+      setLoading(true);
+      const { data: recent, error: fetchErr } = await supabase
+        .from('scheduled_posts')
+        .select('ai_generated_options')
+        .eq('media_source_type', 'ai_generated')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (fetchErr || !recent) {
+        toast.error('No undoable AI generation batch was found.');
+        return;
+      }
+
+      const batchId = (recent?.ai_generated_options as any)?.batch_id;
+      if (!batchId) {
+        toast.error('The last AI generation did not have a batch ID. Cannot undo automatically.');
+        return;
+      }
+
+      const { data: postsToDelete, count, error: countErr } = await supabase
+        .from('scheduled_posts')
+        .select('id, media_urls', { count: 'exact' })
+        .eq('media_source_type', 'ai_generated')
+        .filter('ai_generated_options->>batch_id', 'eq', batchId);
+
+      if (countErr) throw countErr;
+
+      if (!confirm(`Are you sure you want to undo the last AI generation batch? This will delete all ${count || 0} scheduled posts from that batch.`)) {
+        return;
+      }
+
+      if (postsToDelete && postsToDelete.length > 0) {
+        let pathsToDelete: string[] = [];
+        postsToDelete.forEach(post => {
+          post.media_urls?.forEach((url: string) => {
+            const path = url.split('/media_assets/')[1]?.split('?')[0];
+            if (path) pathsToDelete.push(decodeURIComponent(path));
+          });
+        });
+        if (pathsToDelete.length > 0) {
+          await supabase.storage.from('media_assets').remove(pathsToDelete);
+        }
+      }
+
+      const { error: delErr } = await supabase
+        .from('scheduled_posts')
+        .delete()
+        .eq('media_source_type', 'ai_generated')
+        .filter('ai_generated_options->>batch_id', 'eq', batchId);
+
+      if (delErr) throw delErr;
+
+      toast.success(`Successfully undid the last batch (${count} posts removed).`);
+      setSelectedPostIds(new Set());
+      loadRecentAiPosts();
+    } catch (err: any) {
+      toast.error('Failed to undo last batch: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadRecentAiPosts() {
+    try {
+      setLoadingPosts(true);
+      const { data, error } = await supabase
+        .from('scheduled_posts')
+        .select('*')
+        .eq('media_source_type', 'ai_generated')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      setRecentAiPosts(data || []);
+      setSelectedPostIds(new Set());
+    } catch (err: any) {
+      console.error('Error fetching recent AI posts:', err.message);
+    } finally {
+      setLoadingPosts(false);
+    }
+  }
 
   function getSpacingMs(freq: string, ppd: number): number {
     const dayMs = 24 * 60 * 60 * 1000;
@@ -406,16 +538,39 @@ export default function CampaignPlannerPage() {
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>Posting Frequency</label>
-                <select
-                  value={frequency}
-                  onChange={(e) => { setFrequency(e.target.value as any); setPostsPerDay(1); }}
-                  style={{ width: '100%', background: '#121212', border: '1px solid rgba(255,255,255,0.06)', color: '#fff', height: '38px', borderRadius: '8px', padding: '0 10px', outline: 'none' }}
-                >
-                  <option value="daily">Daily (Every 24h)</option>
-                  <option value="every_other_day">Every Other Day (Every 48h)</option>
-                  <option value="weekly">Weekly (Every 7 days)</option>
-                  <option value="monthly">Monthly (Every 30 days)</option>
-                </select>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {[
+                    { value: 'daily', label: 'Daily', desc: 'Every 24h' },
+                    { value: 'every_other_day', label: 'Every Other', desc: 'Every 48h' },
+                    { value: 'weekly', label: 'Weekly', desc: 'Every 7d' },
+                    { value: 'monthly', label: 'Monthly', desc: 'Every 30d' }
+                  ].map(f => (
+                    <button
+                      key={f.value}
+                      type="button"
+                      onClick={() => { setFrequency(f.value as any); setPostsPerDay(1); }}
+                      style={{
+                        flex: 1,
+                        padding: '10px',
+                        borderRadius: '8px',
+                        border: frequency === f.value ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                        background: frequency === f.value ? 'rgba(249,115,22,0.08)' : '#121212',
+                        color: frequency === f.value ? 'var(--accent-primary)' : '#fff',
+                        fontWeight: frequency === f.value ? 700 : 500,
+                        fontSize: '0.85rem',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '2px'
+                      }}
+                    >
+                      <span>{f.label}</span>
+                      <span style={{ fontSize: '0.65rem', opacity: 0.7, color: frequency === f.value ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{f.desc}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -424,7 +579,12 @@ export default function CampaignPlannerPage() {
                 <div>
                   <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>Posts Per Day</label>
                   <div style={{ display: 'flex', gap: '10px' }}>
-                    {[1, 2, 3, 4].map(n => (
+                    {[
+                      { n: 1, label: 'Once' },
+                      { n: 2, label: 'Twice' },
+                      { n: 3, label: 'Three Times' },
+                      { n: 4, label: 'Four Times' }
+                    ].map(({ n, label }) => (
                       <button
                         key={n}
                         type="button"
@@ -439,17 +599,22 @@ export default function CampaignPlannerPage() {
                           fontWeight: postsPerDay === n ? 700 : 500,
                           fontSize: '0.85rem',
                           cursor: 'pointer',
-                          transition: 'all 0.15s ease'
+                          transition: 'all 0.15s ease',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '2px'
                         }}
                       >
-                        {n === 1 ? '1×/day' : `${n}×/day`}
+                        <span>{label}</span>
+                        <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>Daily</span>
                       </button>
                     ))}
                   </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(255, 255, 255, 0.01)', padding: '16px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.04)' }}>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label style={{ display: 'flex', fontSize: '0.85rem', fontWeight: 600, color: '#fff', alignItems: 'center', gap: '6px' }}>
                     <Clock size={14} color="var(--accent-primary)" />
                     Configure Daily Posting Times
                   </label>
@@ -488,7 +653,27 @@ export default function CampaignPlannerPage() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>Start Date & Time</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '6px' }}>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Start Date & Time</label>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {['Today', 'Tomorrow'].map(lbl => (
+                      <button
+                        key={lbl}
+                        type="button"
+                        onClick={() => {
+                          const d = new Date();
+                          if (lbl === 'Tomorrow') d.setDate(d.getDate() + 1);
+                          d.setHours(9, 0, 0, 0);
+                          const tz = d.getTimezoneOffset() * 60000;
+                          setStartDate(new Date(d.getTime() - tz).toISOString().slice(0, 16));
+                        }}
+                        style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#fff', cursor: 'pointer' }}
+                      >
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <input
                   type="datetime-local"
                   value={startDate}
@@ -500,7 +685,28 @@ export default function CampaignPlannerPage() {
 
               {durationMode === 'date_range' ? (
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>End Date & Time</label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '6px' }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>End Date & Time</label>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      {['+1 Week', '+1 Month'].map(lbl => (
+                        <button
+                          key={lbl}
+                          type="button"
+                          onClick={() => {
+                            if (!startDate) return;
+                            const d = new Date(startDate);
+                            if (lbl === '+1 Week') d.setDate(d.getDate() + 7);
+                            if (lbl === '+1 Month') d.setMonth(d.getMonth() + 1);
+                            const tz = d.getTimezoneOffset() * 60000;
+                            setEndDate(new Date(d.getTime() - tz).toISOString().slice(0, 16));
+                          }}
+                          style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#fff', cursor: 'pointer' }}
+                        >
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <input
                     type="datetime-local"
                     value={endDate}
@@ -762,6 +968,133 @@ export default function CampaignPlannerPage() {
         </div>
 
       </form>
+
+      {/* Section 7: Recent Generations & Bulk Actions */}
+      <div style={{ marginTop: '40px', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileText size={16} color="var(--accent-primary)" />
+            Recent AI Generations
+          </h2>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            {selectedPostIds.size > 0 && (
+              <button
+                type="button"
+                onClick={handleDeleteSelected}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: 600
+                }}
+              >
+                <Trash2 size={14} /> Delete Selected ({selectedPostIds.size})
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleUndoLastBatch}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: 'rgba(96, 165, 250, 0.1)',
+                color: '#60a5fa',
+                border: '1px solid rgba(96, 165, 250, 0.2)',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: 600
+              }}
+            >
+              <Undo size={14} /> Undo Last Batch
+            </button>
+          </div>
+        </div>
+
+        {loadingPosts ? (
+          <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            <Loader2 className="animate-spin" size={24} style={{ margin: '0 auto 10px' }} />
+            Loading recent posts...
+          </div>
+        ) : recentAiPosts.length === 0 ? (
+          <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.08)' }}>
+            No recent AI generations found.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '0 12px', marginBottom: '4px' }}>
+              <input
+                type="checkbox"
+                checked={selectedPostIds.size === recentAiPosts.length && recentAiPosts.length > 0}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedPostIds(new Set(recentAiPosts.map(p => p.id)));
+                  } else {
+                    setSelectedPostIds(new Set());
+                  }
+                }}
+                style={{ accentColor: 'var(--accent-primary)', width: '16px', height: '16px', marginRight: '16px', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', flex: 1 }}>Message Preview</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: '150px' }}>Scheduled For</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: '100px', textAlign: 'right' }}>Status</span>
+            </div>
+
+            <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {recentAiPosts.map(post => (
+                <div key={post.id} style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  background: '#121212',
+                  border: '1px solid rgba(255,255,255,0.04)',
+                  padding: '12px',
+                  borderRadius: '8px',
+                  transition: 'all 0.2s',
+                  borderLeft: selectedPostIds.has(post.id) ? '3px solid var(--accent-primary)' : '3px solid transparent'
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedPostIds.has(post.id)}
+                    onChange={(e) => {
+                      const newSet = new Set(selectedPostIds);
+                      if (e.target.checked) newSet.add(post.id);
+                      else newSet.delete(post.id);
+                      setSelectedPostIds(newSet);
+                    }}
+                    style={{ accentColor: 'var(--accent-primary)', width: '16px', height: '16px', marginRight: '16px', cursor: 'pointer' }}
+                  />
+                  <div style={{ flex: 1, fontSize: '0.85rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: '16px' }}>
+                    {post.message || 'No text content'}
+                  </div>
+                  <div style={{ width: '150px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    {new Date(post.scheduled_time).toLocaleString()}
+                  </div>
+                  <div style={{ width: '100px', textAlign: 'right' }}>
+                    <span style={{
+                      fontSize: '0.7rem',
+                      padding: '2px 8px',
+                      borderRadius: '10px',
+                      background: post.status === 'published' ? 'rgba(34, 197, 94, 0.1)' : post.status === 'failed' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(255, 255, 255, 0.1)',
+                      color: post.status === 'published' ? '#4ade80' : post.status === 'failed' ? '#ef4444' : '#fff'
+                    }}>
+                      {post.status.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

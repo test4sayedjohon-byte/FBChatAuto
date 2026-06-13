@@ -6,7 +6,7 @@ import { toast } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { 
-  Sparkles, ArrowLeft, Loader2, Layers, Calendar, Tag, Image, ShieldAlert, Clock, Settings, FileText
+  Sparkles, ArrowLeft, Loader2, Layers, Calendar, Tag, Image, ShieldAlert, Clock, Settings,
 } from 'lucide-react';
 
 interface PageConn {
@@ -449,7 +449,7 @@ export default function CampaignPlannerPage() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(255, 255, 255, 0.01)', padding: '16px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.04)' }}>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Clock size={14} color="var(--accent-primary)" />
                     Configure Daily Posting Times
                   </label>

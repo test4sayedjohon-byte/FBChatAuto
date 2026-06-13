@@ -102,6 +102,7 @@ export default function ProvidersPage() {
       <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-light)', paddingBottom: '12px', marginBottom: '20px' }}>
         <button
           type="button"
+          className="tab-btn"
           onClick={() => setActiveTab('credentials')}
           style={{
             display: 'flex',
@@ -114,14 +115,14 @@ export default function ProvidersPage() {
             borderRadius: '8px',
             fontWeight: 600,
             fontSize: '14px',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
+            cursor: 'pointer'
           }}
         >
           <Key size={16} /> API Credentials
         </button>
         <button
           type="button"
+          className="tab-btn"
           onClick={() => setActiveTab('routing')}
           style={{
             display: 'flex',
@@ -134,8 +135,7 @@ export default function ProvidersPage() {
             borderRadius: '8px',
             fontWeight: 600,
             fontSize: '14px',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
+            cursor: 'pointer'
           }}
         >
           <Settings size={16} /> Failover & Routing Matrix

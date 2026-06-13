@@ -194,10 +194,11 @@ function SignInForm({ onForgotPassword }: { onForgotPassword: () => void }) {
         
         {errorMsg && <div className="form-error" style={{ marginBottom: "16px", textAlign: "center" }}>{errorMsg}</div>}
         
-        <Button type="submit" variant="secondary" style={{ width: "100%", marginTop: "8px" }} disabled={loading}>
+        <Button type="submit" variant="secondary" style={{ width: "100%", marginTop: "8px", position: "relative", overflow: "hidden" }} disabled={loading}>
           {loading && <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />}
           Sign In
         </Button>
+        {loading && <div className="progress-loader" />}
       </div>
     </form>
   );
@@ -254,10 +255,11 @@ function SignUpForm() {
         
         {errorMsg && <div className="form-error" style={{ marginBottom: "16px", textAlign: "center" }}>{errorMsg}</div>}
         
-        <Button type="submit" variant="secondary" style={{ width: "100%", marginTop: "8px" }} disabled={loading}>
+        <Button type="submit" variant="secondary" style={{ width: "100%", marginTop: "8px", position: "relative", overflow: "hidden" }} disabled={loading}>
           {loading && <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />}
           Sign Up
         </Button>
+        {loading && <div className="progress-loader" />}
       </div>
     </form>
   );
@@ -305,10 +307,11 @@ function ForgotPasswordForm({ onBackToSignIn }: { onBackToSignIn: () => void }) 
         {errorMsg && <div className="form-error" style={{ marginBottom: "16px", textAlign: "center" }}>{errorMsg}</div>}
         {successMsg && <div style={{ marginBottom: "16px", textAlign: "center", color: "var(--success)", fontSize: "0.9rem" }}>{successMsg}</div>}
         
-        <Button type="submit" variant="secondary" style={{ width: "100%", marginTop: "8px" }} disabled={loading}>
+        <Button type="submit" variant="secondary" style={{ width: "100%", marginTop: "8px", position: "relative", overflow: "hidden" }} disabled={loading}>
           {loading && <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />}
           Send Reset Link
         </Button>
+        {loading && <div className="progress-loader" />}
 
         <div style={{ textAlign: "center", marginTop: "20px" }}>
           <button 

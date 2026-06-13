@@ -904,7 +904,7 @@ export default function ContentCalendarPage() {
 
           <div style={{ position: 'relative' }}>
             <button 
-              className="btn btn-ghost" 
+              className="btn btn-ghost bulk-action-btn"
               onClick={() => setShowBulkActionsDropdown(!showBulkActionsDropdown)} 
               style={{ 
                 display: 'flex', 

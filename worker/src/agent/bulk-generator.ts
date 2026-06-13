@@ -24,6 +24,7 @@ export interface BulkGeneratorOptions {
   themeText?: string;
   postsPerDay?: number;
   postTimes?: string[];
+  delayMinutes?: number;
 }
 
 export async function generateBulkContent(
@@ -33,11 +34,11 @@ export async function generateBulkContent(
   count: number,
   generateImages: boolean,
   startDateStr: string,
-  frequency: 'daily' | 'every_other_day' | 'weekly' | 'monthly',
+  frequency: 'daily' | 'every_other_day' | 'weekly' | 'monthly' | 'sequential',
   env: AppEnv['Bindings'],
   options: BulkGeneratorOptions = {},
   db?: any
-): Promise<{ success: boolean; message: string; posts?: any[] }> {
+): Promise<{ success: boolean; message: string; posts?: any[]; batchId?: string }> {
   const mediaType = options.mediaType || (generateImages ? 'ai' : 'text');
   const isAiImage = mediaType === 'ai';
   const costPerPost = isAiImage ? 40 : 10;
@@ -194,11 +195,12 @@ export async function generateBulkContent(
     const baseDate = new Date(startDateStr);
     
     // Map frequency to ms offsets
-    const offsets = {
+    const offsets: Record<string, number> = {
       daily: 24 * 60 * 60 * 1000,
       every_other_day: 48 * 60 * 60 * 1000,
       weekly: 7 * 24 * 60 * 60 * 1000,
-      monthly: 30 * 24 * 60 * 60 * 1000
+      monthly: 30 * 24 * 60 * 60 * 1000,
+      sequential: (options.delayMinutes || 60) * 60 * 1000
     };
     let spacingMs = offsets[frequency] || offsets.daily;
     if (frequency === 'daily' && options.postsPerDay && options.postsPerDay > 1) {
@@ -386,7 +388,8 @@ export async function generateBulkContent(
     return {
       success: true,
       message: `Successfully generated ${generatedPosts.length} posts spaced ${frequency} apart.`,
-      posts: generatedPosts
+      posts: generatedPosts,
+      batchId
     };
 
   } catch (err: any) {
